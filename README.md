@@ -46,7 +46,10 @@ Celles-ci sont prises directement en jeu. Aucune retouche.
 - Textures HD **fidèles**
 - Performances : ce projet vise les 60 images/s sur tous support.
 
-Ce mod est fini à environ 40%. Il reste énormément de travail et de bugs a corriger.
+## Téléchargement
+
+Ce mod est fini à environ 40%. Il reste énormément de travail et de bugs à corriger.
+Une première bêta du mod va bientôt sortir.
 
 ## Développeurs
 
