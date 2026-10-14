@@ -9,6 +9,8 @@ moderne… sans remodeler quoi que ce soit : le travail des artistes d'origine e
 > niveaux, ni modèles, ni textures, ni sons. Tout est reconstruit sur l'ordinateur du joueur, à
 > partir de SA copie du jeu (ISO PS2), par le lanceur OpenGOAL.
 
+Tous les droits sur OpenGOAL sont réservés à leurs propriétaires respectifs
+
 ## Installer (joueurs)
 
 1. Installer le [lanceur OpenGOAL](https://opengoal.dev) (v2.4.10 ou plus récent) et faire
@@ -59,3 +61,5 @@ modifications du remake sont signalées dans le code par `PC-REMAKE`. Les versio
 produites par l'action GitHub **Cut Mod Release** (binaires Windows, Linux, macOS Intel).
 
 Le README d'origine d'OG-Mod-Base est dans [`docs/MOD-BASE-README.md`](docs/MOD-BASE-README.md).
+
+Ce projet est rendu possible grâce à Claude. Merci de votre compréhension.
