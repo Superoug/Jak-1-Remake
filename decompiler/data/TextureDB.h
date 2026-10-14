@@ -34,13 +34,21 @@ struct TextureDB {
   std::unordered_map<std::string, std::set<u32>> texture_ids_per_level;
   std::optional<fs::path> merge_texture_dir;
   std::optional<fs::path> replace_texture_dir;
+  // PC-REMAKE 14/10 : agrandissement fidele calcule a l'extraction (faithful_upscale.h)
+  bool faithful_hd = false;
+  // PC-REMAKE 14/10 : HD calculee aussi pour les MODELES (merc) et les buissons/herbe
+  // (shrub). Faux par defaut : le rendu valide les garde en textures PS2
+  // d'origine (avant la correction officielle #4405, ces remplacements ne
+  // s'appliquaient pas). Un vrai fichier de remplacement s'applique toujours.
+  bool faithful_hd_models = false;
 
   // special textures for animation.
   std::map<u32, tfrag3::IndexTexture> index_textures_by_combo_id;
 
   std::unordered_map<std::string, u32> animated_tex_output_to_anim_slot;
 
-  ResolvedTextureData resolve_texture(u32 id) const;
+  // allow_faithful = false : pas de HD calculee (fichier de remplacement ou original)
+  ResolvedTextureData resolve_texture(u32 id, bool allow_faithful = true) const;
 
   static constexpr int kPlaceholderWhiteTexturePage = INT16_MAX;
   static constexpr int kPlaceholderWhiteTextureId = 0;

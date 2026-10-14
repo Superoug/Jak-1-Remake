@@ -182,7 +182,10 @@
                     (cond
                       (continue-point-override (empty) continue-point-override)
                       ((!= *kernel-boot-message* 'play) "demo-start")
-                      (*debug-segment* "village1-hut")
+                      ;; PC-REMAKE 21/09 : `touch /tmp/pc_boot_title` = un boot debug
+                      ;; passe par l'ECRAN TITRE comme la version normale (bug du logo
+                      ;; blanc visible seulement dans ce chemin)
+                      ((and *debug-segment* (not (pc-filepath-exists? "/tmp/pc_boot_title"))) "village1-hut")
                       (else "title-start")))
      (set! (-> this auto-save-count) 0)
      (set! (-> *setting-control* default auto-save) #f)

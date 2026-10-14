@@ -81,11 +81,16 @@ class OpenGLRenderer {
   void dispatch_buckets_jak2(DmaFollower dma, ScopedProfilerNode& prof, bool sync_after_buckets);
   void dispatch_buckets_jak3(DmaFollower dma, ScopedProfilerNode& prof, bool sync_after_buckets);
 
+  // PC-REMAKE: dst_fbo/vp_* let the same pass be replayed into an offscreen
+  // buffer, which is how screenshots get the post effects (see render()).
   void do_pcrtc_effects(float alp,
                         int brightness_contrast_color,
                         int brightness_contrast_alpha,
                         SharedRenderState* render_state,
-                        ScopedProfilerNode& prof);
+                        ScopedProfilerNode& prof,
+                        unsigned int dst_fbo = 0,
+                        int vp_w = -1,
+                        int vp_h = -1);
   void blit_display(ScopedProfilerNode& prof);
   void init_bucket_renderers_jak1();
   void init_bucket_renderers_jak2();

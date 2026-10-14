@@ -40,6 +40,8 @@ class ProfilerNode {
   void add_tri(int count = 1) { m_stats.triangles += count; }
   float get_elapsed_time() const { return m_timer.getSeconds(); }
   const ProfilerStats& stats() const { return m_stats; }
+  // PC-REMAKE 14/10 : lecture de l'arbre pour la sonde [QA-PROF] (OpenGLRenderer.cpp)
+  const std::vector<ProfilerNode>& children() const { return m_children; }
 
  private:
   friend class Profiler;

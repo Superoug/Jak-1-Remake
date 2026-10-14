@@ -1,5 +1,6 @@
 #include "extract_level.h"
 
+#include <algorithm>
 #include <set>
 #include <thread>
 
@@ -20,6 +21,7 @@
 #include "decompiler/level_extractor/extract_shrub.h"
 #include "decompiler/level_extractor/extract_tfrag.h"
 #include "decompiler/level_extractor/extract_tie.h"
+#include "decompiler/level_extractor/level_editor.h"
 #include "decompiler/level_extractor/fr3_to_gltf.h"
 #include "goalc/build_actor/jak1/build_actor.h"
 
@@ -192,6 +194,9 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   lg::print("{}\n", bsp_header.print(settings));
    */
 
+  // PC-REMAKE 13/10 : editeur de niveaux — le niveau courant (modifications + export)
+  level_editor::begin_level(bsp_header.name, dgo_name);
+
   const std::set<std::string> tfrag_trees = {
       "drawable-tree-tfrag",        "drawable-tree-trans-tfrag",       "drawable-tree-tfrag-trans",
       "drawable-tree-dirt-tfrag",   "drawable-tree-tfrag-water",       "drawable-tree-ice-tfrag",
@@ -207,6 +212,53 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   }
 
   bool got_collide = false;
+
+  // PC-REMAKE: extract collision FIRST — jak1 stores it as a
+  // drawable-tree-collide-fragment inside the tree array, jak2+ in
+  // bsp_header.collide_hash — so shrub extraction below can seed a grass
+  // carpet on grass-material ground triangles.
+  std::vector<GrassSeedTri> grass_seed_tris;
+  if (config.extract_collision) {
+    for (auto& draw_tree : bsp_header.drawable_tree_array.trees) {
+      if (draw_tree->my_type() == "drawable-tree-collide-fragment") {
+        auto as_collide_frags =
+            dynamic_cast<level_tools::DrawableTreeCollideFragment*>(draw_tree.get());
+        ASSERT(as_collide_frags);
+        ASSERT(!got_collide);
+        got_collide = true;
+        extract_collide_frags(as_collide_frags, all_ties, config,
+                              fmt::format("{}-{}-collide", dgo_name, i++), level_data);
+      }
+    }
+  }
+  if (bsp_header.collide_hash.num_items) {
+    ASSERT(!got_collide);
+    got_collide = true;
+    extract_collide_frags(bsp_header.collide_hash, all_ties, config,
+                          fmt::format("{}-{}-collide", dgo_name, i++), db.dts, level_data);
+  }
+  {
+    const auto& cverts = level_data.collision.vertices;
+    for (size_t v = 0; v + 2 < cverts.size(); v += 3) {
+      // pat material lives in bits 6-11; grass = 7 in jak1's pat-material enum
+      if (((cverts[v].pat >> 6) & 0x3f) == 7) {
+        GrassSeedTri tri;
+        tri.a = math::Vector3f(cverts[v].x, cverts[v].y, cverts[v].z);
+        tri.b = math::Vector3f(cverts[v + 1].x, cverts[v + 1].y, cverts[v + 1].z);
+        tri.c = math::Vector3f(cverts[v + 2].x, cverts[v + 2].y, cverts[v + 2].z);
+        grass_seed_tris.push_back(tri);
+      }
+    }
+    if (!grass_seed_tris.empty()) {
+      lg::info("PC-REMAKE: {} grass-material collision triangles found for carpet seeding",
+               grass_seed_tris.size());
+    }
+  }
+
+  // PC-REMAKE: shrub extraction is deferred until after this loop (see below).
+  std::vector<std::pair<level_tools::shrub_types::DrawableTreeInstanceShrub*, std::string>>
+      deferred_shrubs;
+
   for (auto& draw_tree : bsp_header.drawable_tree_array.trees) {
     if (tfrag_trees.count(draw_tree->my_type())) {
       auto as_tfrag_tree = dynamic_cast<level_tools::DrawableTreeTfrag*>(draw_tree.get());
@@ -234,26 +286,26 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
       auto as_shrub_tree =
           dynamic_cast<level_tools::shrub_types::DrawableTreeInstanceShrub*>(draw_tree.get());
       ASSERT(as_shrub_tree);
-      extract_shrub(as_shrub_tree, fmt::format("{}-{}-shrub", dgo_name, i++),
-                    bsp_header.texture_remap_table, tex_db, {}, level_data, false, db.version());
-    } else if (draw_tree->my_type() == "drawable-tree-collide-fragment" &&
-               config.extract_collision) {
-      auto as_collide_frags =
-          dynamic_cast<level_tools::DrawableTreeCollideFragment*>(draw_tree.get());
-      ASSERT(as_collide_frags);
-      ASSERT(!got_collide);
-      got_collide = true;
-      extract_collide_frags(as_collide_frags, all_ties, config,
-                            fmt::format("{}-{}-collide", dgo_name, i++), level_data);
+      // PC-REMAKE: deferred below, AFTER tfrag extraction — the grass carpet
+      // samples the visual ground (tfrag texels) to avoid painted wear paths.
+      deferred_shrubs.emplace_back(as_shrub_tree, fmt::format("{}-{}-shrub", dgo_name, i++));
+    } else if (draw_tree->my_type() == "drawable-tree-collide-fragment") {
+      // PC-REMAKE: already extracted in the pre-pass above (grass carpet).
     } else {
       lg::print("  unsupported tree {}\n", draw_tree->my_type());
     }
   }
 
-  if (bsp_header.collide_hash.num_items) {
-    ASSERT(!got_collide);
-    extract_collide_frags(bsp_header.collide_hash, all_ties, config,
-                          fmt::format("{}-{}-collide", dgo_name, i++), db.dts, level_data);
+  // PC-REMAKE: jak1's collide_hash extraction moved BEFORE the tree loop (grass
+  // carpet seeding needs it). Shrubs run now, after tfrag, so the carpet can
+  // sample the visual ground and skip painted wear paths.
+  // PC-REMAKE: the name has to be set BEFORE the shrubs are extracted — the
+  // grass carpet tunes its density and tuft size per level and was reading an
+  // empty string here.
+  level_data.level_name = bsp_header.name;
+  for (auto& [shrub_tree, shrub_name] : deferred_shrubs) {
+    extract_shrub(shrub_tree, shrub_name, bsp_header.texture_remap_table, tex_db, {}, level_data,
+                  false, db.version(), grass_seed_tris);
   }
   if (bsp_header.hfrag) {
     extract_hfrag(bsp_header, tex_db, &level_data);
@@ -403,6 +455,9 @@ void extract_from_level(const ObjectFileDB& db,
 
   Serializer ser;
   level_data.serialize(ser);
+  // PC-REMAKE 13/10 : export pour l'editeur de niveaux (avant que les textures ne
+  // soient videes : le sol a besoin de leurs noms)
+  level_editor::write_level(level_data, tex_db);
   if (!config.rip_levels) {
     level_data.textures.clear();
     level_data.textures.shrink_to_fit();
@@ -454,12 +509,23 @@ void extract_all_levels(const ObjectFileDB& db,
     num_workers = 1;
   }
 
+  // PC-REMAKE : le village d'abord, seul — il genere le proto d'herbe que la plage
+  // reprend (extract_shrub.cpp, village_grass_file). Les autres en parallele ensuite.
+  std::vector<std::string> rest = dgo_names;
+  if (config.game_version == GameVersion::Jak1) {
+    auto village = std::find(rest.begin(), rest.end(), "VI1.DGO");
+    if (village != rest.end()) {
+      extract_from_level(db, tex_db, *village, config, output_path, entities_dir);
+      rest.erase(village);
+    }
+  }
+
   SimpleThreadGroup threads;
   threads.run(
       [&](int idx) {
-        extract_from_level(db, tex_db, dgo_names[idx], config, output_path, entities_dir);
+        extract_from_level(db, tex_db, rest[idx], config, output_path, entities_dir);
       },
-      dgo_names.size(), num_workers);
+      rest.size(), std::max(1, std::min(num_workers, (int)rest.size())));
   threads.join();
 }
 

@@ -5,6 +5,8 @@
 
 #include "opengl.h"
 
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -12,6 +14,7 @@
 
 #include "common/dma/dma_copy.h"
 #include "common/global_profiler/GlobalProfiler.h"
+#include <filesystem>
 #include "common/goal_constants.h"
 #include "common/log/log.h"
 #include "common/util/FileUtil.h"
@@ -587,6 +590,22 @@ void GLDisplay::process_sdl_events() {
  * Main function called to render graphics frames. This is called in a loop.
  */
 void GLDisplay::render() {
+  {
+    // PC-REMAKE 14/10 : sonde [QA-EVPROF] (comparaison dev/mod). `touch /tmp/qa_evprof`
+    // enregistre 180 images du profileur d'evenements puis ecrit profile_data/prof-*.json.
+    static int qa_ev_poll = 0, qa_ev_frames = -1;
+    if (qa_ev_frames < 0 && (qa_ev_poll++ % 60) == 0 && std::filesystem::exists("/tmp/qa_evprof")) {
+      prof().clear();
+      prof().set_enable(true);
+      qa_ev_frames = 0;
+    } else if (qa_ev_frames >= 0 && ++qa_ev_frames == 180) {
+      prof().dump_to_json();
+      std::error_code ec;
+      std::filesystem::remove("/tmp/qa_evprof", ec);
+      lg::info("[QA-EVPROF] profil ecrit");
+      qa_ev_frames = -1;
+    }
+  }
   // Before we process the current frames SDL events we for keyboard/mouse button inputs.
   //
   // This technically means that keyboard/mouse button inputs will be a frame behind but the
@@ -694,11 +713,49 @@ void GLDisplay::render() {
     SDL_GL_SwapWindow(m_window);
   }
 
+  // PC-REMAKE QA-PERF : fps réels (moyenne + 1% low) toutes les 300 frames —
+  // la base de mesure de la passe d'optimisation du 25/08. À retirer ensuite.
+  {
+    static auto s_qa_last = std::chrono::steady_clock::now();
+    static std::vector<double> s_qa_times;
+    auto qa_now = std::chrono::steady_clock::now();
+    double qa_ms = std::chrono::duration<double, std::milli>(qa_now - s_qa_last).count();
+    s_qa_last = qa_now;
+    if (qa_ms < 1000.0) {  // ignore chargements/pauses
+      s_qa_times.push_back(qa_ms);
+    }
+    if (s_qa_times.size() >= 300) {
+      std::sort(s_qa_times.begin(), s_qa_times.end());
+      double qa_avg = 0;
+      for (double t : s_qa_times) {
+        qa_avg += t;
+      }
+      qa_avg /= s_qa_times.size();
+      double qa_p99 = s_qa_times[(size_t)((double)s_qa_times.size() * 0.99)];
+      lg::info("[QA-PERF] fps moyen {:.1f} ({:.2f} ms) | 1% low {:.1f} fps ({:.2f} ms)",
+               1000.0 / qa_avg, qa_avg, 1000.0 / qa_p99, qa_p99);
+      s_qa_times.clear();
+    }
+  }
+
   // actually wait for vsync
   if (g_gfx_data->debug_gui.should_gl_finish()) {
     glFinish();
   }
 
+  // [QA] 12/10 : QA_NO_VSYNC=1 coupe la synchro verticale de CETTE instance (tests
+  // ecran en veille : Cocoa_GL_SwapWindow attend un rafraichissement qui ne vient
+  // plus et le jeu tombe a ~1 image/s ; les captures sont rendues hors ecran).
+  // Inerte sans la variable — le jeu normal n'est pas concernee.
+  {
+    static const bool qa_no_vsync = [] {
+      const char* e = getenv("QA_NO_VSYNC");
+      return e && e[0] == '1';
+    }();
+    if (qa_no_vsync) {
+      Gfx::g_global_settings.vsync = 0;
+    }
+  }
   // switch vsync modes, if requested
   if (Gfx::g_global_settings.vsync != Gfx::g_global_settings.old_vsync) {
     Gfx::g_global_settings.old_vsync = Gfx::g_global_settings.vsync;
@@ -764,6 +821,21 @@ u32 gl_sync_path() {
   }
   std::unique_lock<std::mutex> lock(g_gfx_data->sync_mutex);
   g_gfx_data->last_engine_time = g_gfx_data->engine_timer.getSeconds();
+  {
+    // PC-REMAKE 14/10 : sonde [QA-GOAL] = temps CPU de la logique du jeu (GOAL sous
+    // Rosetta) par image, hors attente du rendu — moyenne et pire sur 300 images.
+    static double acc = 0, worst = 0;
+    static int n = 0;
+    const double ms = g_gfx_data->last_engine_time * 1000.0;
+    acc += ms;
+    worst = std::max(worst, ms);
+    if (++n == 300) {
+      lg::info("[QA-GOAL] logique moyenne {:.2f} ms | pire {:.2f} ms", acc / n, worst);
+      acc = 0;
+      worst = 0;
+      n = 0;
+    }
+  }
   if (!g_gfx_data->has_data_to_render) {
     return 0;
   }

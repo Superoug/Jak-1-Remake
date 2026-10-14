@@ -1,6 +1,9 @@
 #include "Merc2.h"
 
+#include <cmath>
+
 #include "common/global_profiler/GlobalProfiler.h"
+#include "common/util/FileUtil.h"
 #include "common/util/fnv.h"
 #include "common/util/simd_util.h"
 
@@ -8,6 +11,8 @@
 #include "game/graphics/opengl_renderer/background/background_common.h"
 
 #include "third-party/imgui/imgui.h"
+
+void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
 
 /* Merc 2 renderer:
  The merc2 renderer is the main "foreground" renderer, which draws characters, collectables,
@@ -48,8 +53,24 @@
 
 std::mutex g_merc_data_mutex;
 
+// PC-REMAKE 21/09 (defini plus bas, utilise dans handle_setup_dma)
+static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
+                                           const math::Vector4f* perspective,
+                                           float* out9);
+
+Merc2* Merc2::s_shadow_instance = nullptr;
+
+void Merc2::shadow_hook(void* shader_lib) {
+  if (s_shadow_instance) {
+    s_shadow_instance->render_shadow_casters(shader_lib);
+  }
+}
+
 Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
     : m_anim_slot_array(anim_slot_array) {
+  // PC-REMAKE: let the sun shadow map pull characters and props in
+  s_shadow_instance = this;
+  g_sun_shadow_merc_hook = &Merc2::shadow_hook;
   ASSERT(fnv64("the quick brown fox jumps over the lazy dog") == 0x7404cea13ff89bb0);
 
   // Set up main vertex array. This will point to the data stored in the .FR3 level file, and will
@@ -99,7 +120,7 @@ Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
 
   init_shader_common(shaders[ShaderId::MERC2], &m_merc_uniforms, true);
   init_shader_common(shaders[ShaderId::EMERC], &m_emerc_uniforms, false);
-  m_emerc_uniforms.fade = glGetUniformLocation(shaders[ShaderId::EMERC].id(), "fade");
+  m_emerc_uniforms.fade = pc_uniform_loc(shaders[ShaderId::EMERC].id(), "fade");
 }
 
 Merc2::~Merc2() {
@@ -732,25 +753,27 @@ void Merc2::init_shader_common(Shader& shader, Uniforms* uniforms, bool include_
   auto id = shader.id();
   shader.activate();
   if (include_lights) {
-    uniforms->light_direction[0] = glGetUniformLocation(id, "light_dir0_fade");
-    uniforms->light_direction[1] = glGetUniformLocation(id, "light_dir1_fade_en");
-    uniforms->light_direction[2] = glGetUniformLocation(id, "light_dir2");
-    uniforms->light_color[0] = glGetUniformLocation(id, "light_col0");
-    uniforms->light_color[1] = glGetUniformLocation(id, "light_col1");
-    uniforms->light_color[2] = glGetUniformLocation(id, "light_col2");
-    uniforms->light_ambient = glGetUniformLocation(id, "light_ambient");
+    uniforms->light_direction[0] = pc_uniform_loc(id, "light_dir0_fade");
+    uniforms->light_direction[1] = pc_uniform_loc(id, "light_dir1_fade_en");
+    uniforms->light_direction[2] = pc_uniform_loc(id, "light_dir2");
+    uniforms->light_color[0] = pc_uniform_loc(id, "light_col0");
+    uniforms->light_color[1] = pc_uniform_loc(id, "light_col1");
+    uniforms->light_color[2] = pc_uniform_loc(id, "light_col2");
+    uniforms->light_ambient = pc_uniform_loc(id, "light_ambient");
   }
 
-  uniforms->hvdf_offset = glGetUniformLocation(id, "hvdf_offset");
+  uniforms->hvdf_offset = pc_uniform_loc(id, "hvdf_offset");
 
-  uniforms->fog = glGetUniformLocation(id, "fog_constants");
-  uniforms->decal = glGetUniformLocation(id, "decal_enable");
+  uniforms->fog = pc_uniform_loc(id, "fog_constants");
+  uniforms->decal = pc_uniform_loc(id, "decal_enable");
 
-  uniforms->fog_color = glGetUniformLocation(id, "fog_color");
-  uniforms->perspective_matrix = glGetUniformLocation(id, "perspective_matrix");
-  uniforms->ignore_alpha = glGetUniformLocation(id, "ignore_alpha");
+  uniforms->fog_color = pc_uniform_loc(id, "fog_color");
+  uniforms->perspective_matrix = pc_uniform_loc(id, "perspective_matrix");
+  // PC-REMAKE: character sun shadows
+  uniforms->sun_light_from_cam = pc_uniform_loc(id, "sun_light_from_cam");
+  uniforms->ignore_alpha = pc_uniform_loc(id, "ignore_alpha");
 
-  uniforms->gfx_hack_no_tex = glGetUniformLocation(id, "gfx_hack_no_tex");
+  uniforms->gfx_hack_no_tex = pc_uniform_loc(id, "gfx_hack_no_tex");
 }
 
 void Merc2::switch_to_merc2(SharedRenderState* render_state) {
@@ -902,16 +925,92 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
   // 8 qw's of low memory data
   memcpy(&m_low_memory, first.data + 16, sizeof(LowMemory));
 
+  // PC-REMAKE: matrix taking merc VIEW-space vertices to sun-shadow clip space
+  float sun_mat[16];
+  bool sun_ok = render_state->has_pc_data &&
+                compute_sun_light_from_camera(render_state->camera_matrix, render_state->camera_pos,
+                                              m_low_memory.perspective, sun_mat);
+
+  m_shadow_light_valid = sun_ok;
+  if (sun_ok) {
+    for (int i = 0; i < 16; i++) {
+      m_shadow_light_from_cam[i] = sun_mat[i];
+    }
+  }
+
+  // PC-REMAKE 21/09 : normales monde pour le G-buffer
+  float nrm_mat[9];
+  bool nrm_ok = render_state->has_pc_data &&
+                compute_world_normal_from_merc(render_state->camera_matrix, m_low_memory.perspective,
+                                               nrm_mat);
+  if (!nrm_ok) {
+    for (int i = 0; i < 9; i++) {
+      nrm_mat[i] = (i % 4 == 0) ? 1.f : 0.f;
+    }
+  }
+  m_world_normal_valid = nrm_ok;
+
   switch_to_merc2(render_state);
   set_uniform(m_merc_uniforms.hvdf_offset, m_low_memory.hvdf_offset);
   set_uniform(m_merc_uniforms.fog, m_low_memory.fog);
   glUniformMatrix4fv(m_merc_uniforms.perspective_matrix, 1, GL_FALSE,
                      &m_low_memory.perspective[0].x());
+  glUniformMatrix3fv(
+      pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "world_nrm_from_merc"), 1,
+      GL_FALSE, nrm_mat);
+  glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "write_normals"),
+              nrm_ok ? 1.f : 0.f);
+  // PC-REMAKE 22/09 : eclairage par pixel des personnages (merc2.frag) ;
+  // `touch /tmp/qa_gouraud` pour revoir le Gouraud d'origine (A/B a chaud)
+  {
+    static int ppl_poll = 0;
+    static float ppl = 1.f;
+    if ((ppl_poll++ & 31) == 0) {
+      ppl = fs::exists("/tmp/qa_gouraud") ? 0.f : 1.f;
+    }
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "per_pixel_light"),
+                ppl);
+  }
+  {
+    auto id = render_state->shaders[ShaderId::MERC2].id();
+    if (sun_ok) {
+      glUniformMatrix4fv(m_merc_uniforms.sun_light_from_cam, 1, GL_FALSE, sun_mat);
+      g_sun_shadow.bind_for_receive(id);
+    } else {
+      // 21/09 : sampler toujours pose sur l'unite 14 (voir bind_disabled)
+      g_sun_shadow.bind_disabled(id);
+    }
+  }
   switch_to_emerc(render_state);
   set_uniform(m_emerc_uniforms.hvdf_offset, m_low_memory.hvdf_offset);
   set_uniform(m_emerc_uniforms.fog, m_low_memory.fog);
   glUniformMatrix4fv(m_emerc_uniforms.perspective_matrix, 1, GL_FALSE,
                      &m_low_memory.perspective[0].x());
+  {
+    // PC-REMAKE: sun glint on reflective (metal) materials. The sun direction
+    // is rotated into this shader's space with the camera basis, and the
+    // strength follows the shadow setting so the whole sun rig stays coherent.
+    auto id = render_state->shaders[ShaderId::EMERC].id();
+    float sx = g_sun_shadow_params[0], sy = g_sun_shadow_params[1], sz = g_sun_shadow_params[2];
+    float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (len > 1e-4f && render_state->has_pc_data) {
+      // the light travels along g_sun_shadow_params; we want the direction TO
+      // the sun, hence the negation
+      float wx = -sx / len, wy = -sy / len, wz = -sz / len;
+      const auto& C = render_state->camera_matrix;
+      float vx = -(C[0][0] * wx + C[1][0] * wy + C[2][0] * wz);
+      float vy = -(C[0][1] * wx + C[1][1] * wy + C[2][1] * wz);
+      float vz = -(C[0][2] * wx + C[1][2] * wy + C[2][2] * wz);
+      glUniform4f(pc_uniform_loc(id, "sun_dir_view"), vx, vy, vz, 1.f);
+    } else {
+      glUniform4f(pc_uniform_loc(id, "sun_dir_view"), 0.f, 1.f, 0.f, 0.f);
+    }
+    // 18/08 : le glint suit la FORCE du soleil (w des ombres), pas seulement sa
+    // direction — sinon les objets reflechissants gardaient leur reflet de
+    // plein soleil en PLEINE NUIT (bug releve par l'enquete du 18/08).
+    glUniform1f(pc_uniform_loc(id, "glint_strength"),
+                0.85f * std::min(1.f, g_sun_shadow_params[3] / 0.5f));
+  }
 
   // 1 qw with another 4 vifcodes.
   u32 vifcode_final_data[4];
@@ -1183,6 +1282,13 @@ void Merc2::flush_draw_buckets(SharedRenderState* render_state,
                                ScopedProfilerNode& prof,
                                MercDebugStats* stats) {
   stats->num_draw_flush++;
+  // PC-REMAKE: the caster list is NOT cleared here — this runs several times
+  // per frame and the last call often has nothing left in it, which wiped the
+  // list. The shadow pass clears it once it has replayed it. The cap is only a
+  // safety valve for when the shadow map is off and nobody drains the list.
+  if (m_shadow_casters.size() > 8192) {
+    m_shadow_casters.clear();
+  }
   for (u32 li = 0; li < m_next_free_level_bucket; li++) {
     const auto& lev_bucket = m_level_draw_buckets[li];
     const auto* lev = lev_bucket.level;
@@ -1198,19 +1304,156 @@ void Merc2::flush_draw_buckets(SharedRenderState* render_state,
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     switch_to_merc2(render_state);
+    // PC-REMAKE 21/09 : la passe de base ecrit la normale monde dans le G-buffer ;
+    // la passe envmap (EMERC, additive) ne doit pas y toucher
+    if (m_world_normal_valid) {
+      pc_normal_target(true);
+    }
     do_draws(lev_bucket.draws.data(), lev, lev_bucket.next_free_draw, m_merc_uniforms, prof, false,
              render_state);
+    pc_normal_target(false);
     if (lev_bucket.next_free_envmap_draw) {
       switch_to_emerc(render_state);
       do_draws(lev_bucket.envmap_draws.data(), lev, lev_bucket.next_free_envmap_draw,
                m_emerc_uniforms, prof, true, render_state);
     }
+
+    // Record what to replay into the shadow map. Models with modified vertices
+    // live in their own buffer that is recycled every frame, so they are left
+    // out rather than risk replaying stale geometry.
+    auto collect = [&](const Draw* arr, u32 n) {
+      for (u32 di = 0; di < n; di++) {
+        const auto& d = arr[di];
+        if (d.flags & MOD_VTX) {
+          continue;
+        }
+        m_shadow_casters.push_back({lev->merc_vertices, lev->merc_indices, d.first_index,
+                                    d.index_count, d.first_bone, d.no_strip});
+      }
+    };
+    collect(lev_bucket.draws.data(), lev_bucket.next_free_draw);
+    collect(lev_bucket.envmap_draws.data(), lev_bucket.next_free_envmap_draw);
   }
 
   m_next_free_light = 0;
   m_next_free_bone_vector = 0;
   m_next_free_level_bucket = 0;
   m_next_mod_vtx_buffer = 0;
+}
+
+// PC-REMAKE: draw last frame's characters and props into the sun shadow map.
+// This is what makes Jak, the villagers and the crates cast a shadow on the
+// ground instead of floating on it. Runs once per frame, right after the map is
+// cleared and before any scenery is drawn, so a single framebuffer switch is
+// involved (switching per model cost 15x the frame time when the palm crowns
+// were first done that way).
+void Merc2::render_shadow_casters(void* shader_lib) {
+  if (m_shadow_casters.empty() || !m_shadow_light_valid) {
+    m_shadow_casters.clear();
+    return;
+  }
+  auto* shaders = static_cast<ShaderLibrary*>(shader_lib);
+  auto& shader = (*shaders)[ShaderId::MERC_SHADOW];
+  shader.activate();
+  glUniformMatrix4fv(pc_uniform_loc(shader.id(), "sun_light_from_cam"), 1, GL_FALSE,
+                     m_shadow_light_from_cam);
+  glUniformBlockBinding(shader.id(), glGetUniformBlockIndex(shader.id(), "ub_bones"), 1);
+
+  // Skinned geometry needs a heavier depth bias than the scenery: a character
+  // is made of many thin, curved surfaces almost parallel to the light, which
+  // is exactly the case that self-shadows into acne. Restored afterwards so the
+  // scenery keeps its own (tighter) offset.
+  glPolygonOffset(2.f, 4.f);
+  // This hook runs INSIDE another renderer's frame, between its VAO setup and
+  // its draws. Leaving merc's VAO bound here made the caller bind its index
+  // buffer into OUR VAO and then draw with OUR attribute layout — garbage
+  // indices, empty shadow map, every cast shadow in the game gone. Save and
+  // restore the whole binding.
+  GLint saved_vao = 0;
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &saved_vao);
+  glBindVertexArray(m_vao);
+  unsigned int bound_vtx = 0;
+  for (const auto& c : m_shadow_casters) {
+    if (c.vertices != bound_vtx) {
+      glBindBuffer(GL_ARRAY_BUFFER, c.vertices);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, c.indices);
+      setup_merc_vao();
+      bound_vtx = c.vertices;
+    }
+    glBindBufferRange(GL_UNIFORM_BUFFER, 1, m_bones_buffer,
+                      sizeof(math::Vector4f) * c.first_bone, 128 * sizeof(ShaderMercMat));
+    glDrawElements(c.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, c.index_count, GL_UNSIGNED_INT,
+                   (void*)(sizeof(u32) * c.first_index));
+    qa_glerr_check("merc2 draw #1 (ligne 1383)");  // [QA-GLERR] 14/10
+  }
+  m_shadow_casters.clear();
+  glBindVertexArray(saved_vao);
+}
+
+// PC-REMAKE 21/09 : matrice (3x3) qui envoie une NORMALE de l'espace merc (celui
+// des os, « vue » pre-perspective) vers le monde, pour le G-buffer de normales.
+// Positions : monde = campos + (-A^-1 * P) * v (cf. compute_sun_light_from_camera)
+// -> pour une normale, l'inverse-transposee de la partie lineaire de ce produit.
+static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
+                                           const math::Vector4f* perspective,
+                                           float* out9) {
+  float A[16], P[16], Ainv[16], M[16];
+  for (int c = 0; c < 4; c++) {
+    for (int r = 0; r < 4; r++) {
+      A[c * 4 + r] = camera_matrix[c][r];
+      P[c * 4 + r] = perspective[c][r];
+    }
+  }
+  if (!pc_remake_mat_inverse(A, Ainv)) {
+    return false;
+  }
+  for (int i = 0; i < 16; i++) {
+    Ainv[i] = -Ainv[i];
+  }
+  // M = Ainv * P (column-major)
+  for (int c = 0; c < 4; c++) {
+    for (int r = 0; r < 4; r++) {
+      float acc = 0.f;
+      for (int k = 0; k < 4; k++) {
+        acc += Ainv[k * 4 + r] * P[c * 4 + k];
+      }
+      M[c * 4 + r] = acc;
+    }
+  }
+  // L = partie 3x3 (colonnes 0..2, lignes 0..2), inverse puis transposee
+  float L[9];
+  for (int c = 0; c < 3; c++) {
+    for (int r = 0; r < 3; r++) {
+      L[c * 3 + r] = M[c * 4 + r];
+    }
+  }
+  // inverse 3x3 (column-major : L[c*3+r])
+  auto e = [&](int r, int c) { return L[c * 3 + r]; };
+  float det = e(0, 0) * (e(1, 1) * e(2, 2) - e(1, 2) * e(2, 1)) -
+              e(0, 1) * (e(1, 0) * e(2, 2) - e(1, 2) * e(2, 0)) +
+              e(0, 2) * (e(1, 0) * e(2, 1) - e(1, 1) * e(2, 0));
+  if (std::fabs(det) < 1e-20f) {
+    return false;
+  }
+  float inv[9];  // inv[c*3+r] column-major
+  float id = 1.f / det;
+  // cofactors -> inverse = adj/det ; on veut inverse-TRANSPOSEE : out(r,c) = inv(c,r)
+  inv[0 * 3 + 0] = (e(1, 1) * e(2, 2) - e(1, 2) * e(2, 1)) * id;
+  inv[1 * 3 + 0] = (e(0, 2) * e(2, 1) - e(0, 1) * e(2, 2)) * id;
+  inv[2 * 3 + 0] = (e(0, 1) * e(1, 2) - e(0, 2) * e(1, 1)) * id;
+  inv[0 * 3 + 1] = (e(1, 2) * e(2, 0) - e(1, 0) * e(2, 2)) * id;
+  inv[1 * 3 + 1] = (e(0, 0) * e(2, 2) - e(0, 2) * e(2, 0)) * id;
+  inv[2 * 3 + 1] = (e(0, 2) * e(1, 0) - e(0, 0) * e(1, 2)) * id;
+  inv[0 * 3 + 2] = (e(1, 0) * e(2, 1) - e(1, 1) * e(2, 0)) * id;
+  inv[1 * 3 + 2] = (e(0, 1) * e(2, 0) - e(0, 0) * e(2, 1)) * id;
+  inv[2 * 3 + 2] = (e(0, 0) * e(1, 1) - e(0, 1) * e(1, 0)) * id;
+  // transposee : out[c*3+r] = inv[r*3+c]
+  for (int c = 0; c < 3; c++) {
+    for (int r = 0; r < 3; r++) {
+      out9[c * 3 + r] = inv[r * 3 + c];
+    }
+  }
+  return true;
 }
 
 void Merc2::do_draws(const Draw* draw_array,
@@ -1332,6 +1575,7 @@ void Merc2::do_draws(const Draw* draw_array,
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
       glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
+      qa_glerr_check("merc2 draw #2 (ligne 1573)");  // [QA-GLERR] 14/10
       // draw a
       setup_opengl_from_draw_mode(draw.mode, GL_TEXTURE0, use_mipmaps_for_filtering);
       math::Vector4f l1_dir_f_off(l1_dir.x(), l1_dir.y(), l1_dir.z(), -1);
@@ -1339,6 +1583,7 @@ void Merc2::do_draws(const Draw* draw_array,
       glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
       glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
+      qa_glerr_check("merc2 draw #3 (ligne 1580)");  // [QA-GLERR] 14/10
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     } else {
@@ -1349,6 +1594,7 @@ void Merc2::do_draws(const Draw* draw_array,
                         sizeof(math::Vector4f) * draw.first_bone, 128 * sizeof(ShaderMercMat));
       glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
+      qa_glerr_check("merc2 draw #4 (ligne 1590)");  // [QA-GLERR] 14/10
     }
   }
 

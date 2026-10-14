@@ -8,6 +8,8 @@
 #include "fmt/format.h"
 #include "third-party/imgui/imgui.h"
 
+void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
+
 namespace {
 
 /*!
@@ -224,23 +226,23 @@ void Sprite3::render_2d_group0(DmaFollower& dma,
                                ScopedProfilerNode& prof) {
   // opengl sprite frame setup
   auto shid = render_state->shaders[ShaderId::SPRITE3].id();
-  glUniform4fv(glGetUniformLocation(shid, "hvdf_offset"), 1, m_3d_matrix_data.hvdf_offset.data());
-  glUniform1f(glGetUniformLocation(shid, "pfog0"), m_frame_data.pfog0);
-  glUniform1f(glGetUniformLocation(shid, "min_scale"), m_frame_data.min_scale);
-  glUniform1f(glGetUniformLocation(shid, "max_scale"), m_frame_data.max_scale);
-  glUniform1f(glGetUniformLocation(shid, "fog_min"), m_frame_data.fog_min);
-  glUniform1f(glGetUniformLocation(shid, "fog_max"), m_frame_data.fog_max);
-  // glUniform1f(glGetUniformLocation(shid, "bonus"), m_frame_data.bonus);
-  // glUniform4fv(glGetUniformLocation(shid, "hmge_scale"), 1, m_frame_data.hmge_scale.data());
-  glUniform1f(glGetUniformLocation(shid, "deg_to_rad"), m_frame_data.deg_to_rad);
-  glUniform1f(glGetUniformLocation(shid, "inv_area"), m_frame_data.inv_area);
-  glUniformMatrix4fv(glGetUniformLocation(shid, "camera"), 1, GL_FALSE,
+  glUniform4fv(pc_uniform_loc(shid, "hvdf_offset"), 1, m_3d_matrix_data.hvdf_offset.data());
+  glUniform1f(pc_uniform_loc(shid, "pfog0"), m_frame_data.pfog0);
+  glUniform1f(pc_uniform_loc(shid, "min_scale"), m_frame_data.min_scale);
+  glUniform1f(pc_uniform_loc(shid, "max_scale"), m_frame_data.max_scale);
+  glUniform1f(pc_uniform_loc(shid, "fog_min"), m_frame_data.fog_min);
+  glUniform1f(pc_uniform_loc(shid, "fog_max"), m_frame_data.fog_max);
+  // glUniform1f(pc_uniform_loc(shid, "bonus"), m_frame_data.bonus);
+  // glUniform4fv(pc_uniform_loc(shid, "hmge_scale"), 1, m_frame_data.hmge_scale.data());
+  glUniform1f(pc_uniform_loc(shid, "deg_to_rad"), m_frame_data.deg_to_rad);
+  glUniform1f(pc_uniform_loc(shid, "inv_area"), m_frame_data.inv_area);
+  glUniformMatrix4fv(pc_uniform_loc(shid, "camera"), 1, GL_FALSE,
                      m_3d_matrix_data.camera.data());
-  glUniform4fv(glGetUniformLocation(shid, "xy_array"), 8, m_frame_data.xy_array[0].data());
-  glUniform4fv(glGetUniformLocation(shid, "xyz_array"), 4, m_frame_data.xyz_array[0].data());
-  glUniform4fv(glGetUniformLocation(shid, "st_array"), 4, m_frame_data.st_array[0].data());
-  glUniform4fv(glGetUniformLocation(shid, "basis_x"), 1, m_frame_data.basis_x.data());
-  glUniform4fv(glGetUniformLocation(shid, "basis_y"), 1, m_frame_data.basis_y.data());
+  glUniform4fv(pc_uniform_loc(shid, "xy_array"), 8, m_frame_data.xy_array[0].data());
+  glUniform4fv(pc_uniform_loc(shid, "xyz_array"), 4, m_frame_data.xyz_array[0].data());
+  glUniform4fv(pc_uniform_loc(shid, "st_array"), 4, m_frame_data.st_array[0].data());
+  glUniform4fv(pc_uniform_loc(shid, "basis_x"), 1, m_frame_data.basis_x.data());
+  glUniform4fv(pc_uniform_loc(shid, "basis_y"), 1, m_frame_data.basis_y.data());
 
   u16 last_prog = -1;
 
@@ -336,12 +338,12 @@ void Sprite3::render_2d_group1(DmaFollower& dma,
 
   // opengl sprite frame setup
   glUniform4fv(
-      glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "hud_hvdf_offset"), 1,
+      pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "hud_hvdf_offset"), 1,
       m_hud_matrix_data.hvdf_offset.data());
-  glUniform4fv(glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "hud_hvdf_user"),
+  glUniform4fv(pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "hud_hvdf_user"),
                75, m_hud_matrix_data.user_hvdf[0].data());
   glUniformMatrix4fv(
-      glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "hud_matrix"), 1,
+      pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "hud_matrix"), 1,
       GL_FALSE, m_hud_matrix_data.matrix.data());
 
   // loop through chunks.
@@ -482,6 +484,9 @@ void Sprite3::render_jak2(DmaFollower& dma,
   }
 }
 
+// PC-REMAKE 12/10 : defini dans OpenGLRenderer.cpp
+void pc_bloom_snapshot(GLuint src_fbo, int w, int h);
+
 void Sprite3::render_jak1(DmaFollower& dma,
                           SharedRenderState* render_state,
                           ScopedProfilerNode& prof) {
@@ -531,6 +536,12 @@ void Sprite3::render_jak1(DmaFollower& dma,
 
   // shadow draw
   render_fake_shadow(dma);
+
+  // PC-REMAKE 12/10 : source du BLOOM LARGE — la scene avec ses particules (lueurs,
+  // spirales, etincelles), juste AVANT les sprites du HUD (rien de l'interface ne
+  // rayonne). Voir pc_bloom_run (OpenGLRenderer.cpp).
+  pc_bloom_snapshot(render_state->render_fb, render_state->render_fb_w,
+                    render_state->render_fb_h);
 
   // 2d draw (HUD)
   {
@@ -625,17 +636,31 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
 
     auto settings = setup_opengl_from_draw_mode(mode, GL_TEXTURE0, false);
 
-    glUniform1f(glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_min"),
+    // PC-REMAKE (18/08) : régulateur des particules ADDITIVES — les fontaines
+    // d'éco / lueurs vanilla saturent en boule blanche sous notre pipeline
+    // (la pile d'énergie éblouissait, l'objet devenait indistinct).
+    // 0.5 sur les modes additifs uniquement ; les autres sprites inchangés.
+    {
+      auto ab = mode.get_alpha_blend();
+      bool additive = ab == DrawMode::AlphaBlend::SRC_0_FIX_DST ||
+                      ab == DrawMode::AlphaBlend::SRC_0_SRC_DST;
+      glUniform1f(
+          pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "additive_scale"),
+          additive ? 0.5f : 1.0f);
+    }
+
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_min"),
                 double_draw ? settings.aref_first : 0.016);
-    glUniform1f(glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_max"),
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_max"),
                 10.f);
-    glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "tex_T0"), 0);
+    glUniform1i(pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "tex_T0"), 0);
 
     prof.add_draw_call();
     prof.add_tri(2 * (bucket->ids.size() / 5));
 
     glDrawElements(GL_TRIANGLE_STRIP, bucket->ids.size(), GL_UNSIGNED_INT,
                    (void*)(bucket->offset_in_idx_buffer * sizeof(u32)));
+    qa_glerr_check("sprite3 draw #1 (ligne 659)");  // [QA-GLERR] 14/10
 
     if (double_draw) {
       switch (settings.kind) {
@@ -645,14 +670,15 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
           prof.add_draw_call();
           prof.add_tri(2 * (bucket->ids.size() / 5));
           glUniform1f(
-              glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_min"),
+              pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_min"),
               -10.f);
           glUniform1f(
-              glGetUniformLocation(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_max"),
+              pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_max"),
               settings.aref_second);
           glDepthMask(GL_FALSE);
           glDrawElements(GL_TRIANGLE_STRIP, bucket->ids.size(), GL_UNSIGNED_INT,
                          (void*)(bucket->offset_in_idx_buffer * sizeof(u32)));
+          qa_glerr_check("sprite3 draw #2 (ligne 676)");  // [QA-GLERR] 14/10
           break;
         default:
           ASSERT(false);

@@ -9,6 +9,10 @@
 ;; definition for symbol *wind-work*, type wind-work
 (define *wind-work* (new 'global 'wind-work))
 
+;; PC-REMAKE : multiplicateur du vent global — les palmiers et l'herbe TIE du
+;; jeu d'origine ondulent, mais trop faiblement pour se voir. Réglable au REPL.
+(define *remake-wind-mult* 2.5)
+
 ;; definition for function update-wind
 ;; INFO: Return type mismatch int vs none.
 (defun update-wind ((arg0 wind-work) (arg1 (array uint8)))
@@ -26,8 +30,8 @@
                   ))
          (f2-4 (* 0.0625 (the float (-> arg1 (mod (the-as int v1-5) (-> arg1 length))))))
          (f0-5 (* (+ (* (- (* 0.0625 (the float (-> arg1 (mod (the-as int (+ v1-5 1)) (-> arg1 length))))) f2-4) f1-6) f2-4) f0-4)))
-    (set! (-> *wind-work* wind-force s4-0) (* (-> *display* time-adjust-ratio) f0-5)) ;; changed for high fps
-    (vector-float*! (-> *wind-work* wind-array s4-0) (-> arg0 wind-normal) (* (-> *display* time-adjust-ratio) f0-5)) ;; changed for high fps
+    (set! (-> *wind-work* wind-force s4-0) (* *remake-wind-mult* (-> *display* time-adjust-ratio) f0-5)) ;; changed for high fps + PC-REMAKE boost
+    (vector-float*! (-> *wind-work* wind-array s4-0) (-> arg0 wind-normal) (* *remake-wind-mult* (-> *display* time-adjust-ratio) f0-5)) ;; changed for high fps + PC-REMAKE boost
     )
   0
   (none))

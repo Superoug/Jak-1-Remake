@@ -236,7 +236,28 @@ void OceanTexture::handle_ocean_texture_jak1(DmaFollower& dma,
   }
 
   // give to gpu!
-  render_state->texture_pool->move_existing_to_vram(m_tex0_gpu, OCEAN_TEX_TBP_JAK1);
+  // PC-REMAKE : l'instance du rendu PROCHE ne publie plus sa variante à 8160 —
+  // les tuiles proches échantillonnent ainsi la MÊME texture que le large
+  // (celle publiée par l'instance mid plus tôt dans l'image). Depuis le rayon
+  // ~220 m, les deux variantes se côtoyaient à l'écran et leur écart de
+  // contenu dessinait la frontière (captures 17/08 soir).
+  if (m_move_to_vram) {
+    render_state->texture_pool->move_existing_to_vram(m_tex0_gpu, OCEAN_TEX_TBP_JAK1);
+  }
+}
+
+void OceanTexture::skip_ocean_texture_jak1(DmaFollower& dma) {
+  // meme suite de paquets que handle_ocean_texture_jak1 : etat GS, base VIF,
+  // constantes, envmap, 1er groupe de sommets, 1er appel, NUM_FRAG_LOOPS x
+  // (sommets + appel), 2 derniers envois, dernier appel REST, appel DONE
+  const int n = 10 + 2 * NUM_FRAG_LOOPS;
+  for (int i = 0; i < n - 1; i++) {
+    dma.read_and_advance();
+  }
+  auto last = dma.read_and_advance();
+  ASSERT(last.size_bytes == 0);
+  ASSERT(last.vifcode0().kind == VifCode::Kind::MSCALF);
+  ASSERT(last.vifcode0().immediate == TexVu1Prog::DONE);
 }
 
 void OceanTexture::handle_ocean_texture_jak2(DmaFollower& dma,

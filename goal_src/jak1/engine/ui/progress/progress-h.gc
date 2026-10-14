@@ -133,6 +133,7 @@
      (save-and-load-game)
      (memcard-saving-and-loading)
      (memcard-data-exists-save-and-load)
+     (remake-options) ;; PC-REMAKE 21/09 : menu Remake (Réglages → Graphismes)
      ;; the last one!
      (max))
    (defenum game-option-type

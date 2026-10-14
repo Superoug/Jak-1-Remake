@@ -13,6 +13,10 @@ class CommonOceanRenderer {
   void init_for_mid();
   void kick_from_mid(const u8* data);
   void flush_mid(SharedRenderState* render_state, ScopedProfilerNode& prof);
+  // PC-REMAKE EAU TRANSPARENTE (25/08) : variante différée, appelée au bucket
+  // ocean-near (après Jak) — surface blendée, GEQUAL, sans écriture de
+  // profondeur ; le dépôt d'alpha du reflet et l'envmap restent d'origine.
+  void flush_mid_transparent(SharedRenderState* render_state, ScopedProfilerNode& prof);
 
  private:
   void handle_near_vertex_gif_data_fan(const u8* data, u32 offset, u32 loop);

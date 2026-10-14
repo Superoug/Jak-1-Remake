@@ -304,6 +304,13 @@
             :name (text-id ps2-options)
             :scale #t
             :param3 (game-option-menu gfx-ps2-options))
+       ;; PC-REMAKE 21/09 : sous-menu des réglages du remake
+       (new 'static
+            'game-option
+            :option-type (game-option-type menu)
+            :name (text-id remake-options)
+            :scale #t
+            :param3 (game-option-menu remake-options))
        (new 'static 'game-option :option-type (game-option-type button) :name (text-id back) :scale #t)))
 
 (define *sound-options-pc*
@@ -704,6 +711,97 @@
             :option-disabled-func
             (lambda ()
               (-> *pc-settings* speedrunner-mode?)))
+       (new 'static 'game-option :option-type (game-option-type button) :name (text-id back) :scale #t)))
+
+;; PC-REMAKE 21/09 : réglages du remake (menu ajouté le 24/08).
+;; Les curseurs pointent sur les champs remake-* de *pc-settings* (voir
+;; time-of-day.gc) ; les valeurs sont sauvées dans pc-settings.gc.
+(define *remake-options-pc*
+  (new 'static
+       'boxed-array
+       :type
+       game-option
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-night)
+            :scale #t
+            :param1 0.0
+            :param2 150.0
+            :slider-step-size 5.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-lamp-power)
+            :scale #t
+            :param1 0.0
+            :param2 400.0
+            :slider-step-size 10.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-lamp-range)
+            :scale #t
+            :param1 50.0
+            :param2 400.0
+            :slider-step-size 10.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-sun)
+            :scale #t
+            :param1 0.0
+            :param2 150.0
+            :slider-step-size 5.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-occlusion)
+            :scale #t
+            :param1 0.0
+            :param2 100.0
+            :slider-step-size 5.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-shadows)
+            :scale #t
+            :param1 0.0
+            :param2 100.0
+            :slider-step-size 5.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-godrays)
+            :scale #t
+            :param1 0.0
+            :param2 100.0
+            :slider-step-size 5.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-bloom)
+            :scale #t
+            :param1 0.0
+            :param2 100.0
+            :slider-step-size 5.0)
+       (new 'static 'game-option :option-type (game-option-type on-off) :name (text-id remake-sun-visible) :scale #t)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-detail)
+            :scale #t
+            :param1 0.0
+            :param2 300.0
+            :slider-step-size 10.0)
+       (new 'static
+            'game-option
+            :option-type (game-option-type slider)
+            :name (text-id remake-grade)
+            :scale #t
+            :param1 0.0
+            :param2 150.0
+            :slider-step-size 5.0)
        (new 'static 'game-option :option-type (game-option-type button) :name (text-id back) :scale #t)))
 
 ;; TODO - aspect ratios are hard-coded
@@ -2112,6 +2210,7 @@
   (set! (-> *options-remap* (progress-screen mouse-binds)) *temp-options*)
   (set! (-> *options-remap* (progress-screen misc-options)) *misc-options*)
   (set! (-> *options-remap* (progress-screen gfx-ps2-options)) *gfx-ps2-options*)
+  (set! (-> *options-remap* (progress-screen remake-options)) *remake-options-pc*)
   (set! (-> *options-remap* (progress-screen resolution)) *temp-options*)
   (set! (-> *options-remap* (progress-screen aspect-ratio)) *aspect-ratio-options*)
   (set! (-> *options-remap* (progress-screen quit-title)) *yes-no-options*)
@@ -2183,6 +2282,19 @@
   (set! (-> *gfx-ps2-options* 2 value-to-modify) (&-> *pc-settings* ps2-parts?))
   (set! (-> *gfx-ps2-options* 3 value-to-modify) (&-> *pc-settings* force-envmap?))
   (set! (-> *gfx-ps2-options* 4 value-to-modify) (&-> *pc-settings* ps2-actor-vis?))
+  ;; PC-REMAKE 21/09 : curseurs du menu Remake -> *pc-settings* (source de vérité,
+  ;; recopiée chaque image dans *remake-gfx* par (update *pc-settings*))
+  (set! (-> *remake-options-pc* 0 value-to-modify) (&-> *pc-settings* remake-night))
+  (set! (-> *remake-options-pc* 1 value-to-modify) (&-> *pc-settings* remake-lamp-power))
+  (set! (-> *remake-options-pc* 2 value-to-modify) (&-> *pc-settings* remake-lamp-range))
+  (set! (-> *remake-options-pc* 3 value-to-modify) (&-> *pc-settings* remake-sun))
+  (set! (-> *remake-options-pc* 4 value-to-modify) (&-> *pc-settings* remake-occlusion))
+  (set! (-> *remake-options-pc* 5 value-to-modify) (&-> *pc-settings* remake-shadows))
+  (set! (-> *remake-options-pc* 6 value-to-modify) (&-> *pc-settings* remake-godrays))
+  (set! (-> *remake-options-pc* 7 value-to-modify) (&-> *pc-settings* remake-bloom))
+  (set! (-> *remake-options-pc* 8 value-to-modify) (&-> *pc-settings* remake-sun-visible?))
+  (set! (-> *remake-options-pc* 9 value-to-modify) (&-> *pc-settings* remake-detail))
+  (set! (-> *remake-options-pc* 10 value-to-modify) (&-> *pc-settings* remake-grade))
   (set! (-> *sound-options-pc* 0 value-to-modify) (&-> *pc-settings* memcard-volume-sfx))
   (set! (-> *sound-options-pc* 1 value-to-modify) (&-> *pc-settings* memcard-volume-music))
   (set! (-> *sound-options-pc* 2 value-to-modify) (&-> *pc-settings* memcard-volume-dialog))
@@ -3527,6 +3639,7 @@
              (hide-progress-icons)
              (draw-options self 115 25 0.65))
             (((progress-screen gfx-ps2-options)) (hide-progress-icons) (draw-options self 115 25 0.67))
+            (((progress-screen remake-options)) (hide-progress-icons) (draw-options self 115 25 0.58))
             (((progress-screen game-settings)) (hide-progress-icons) (draw-options self 115 25 0.70))
             (((progress-screen memcard-removed) (progress-screen memcard-auto-save-error))
              (draw-notice-screen self)

@@ -39,8 +39,44 @@ class Shrub : public BucketRenderer {
     u32 vert_count;
     const std::vector<tfrag3::ShrubDraw>* draws = nullptr;
     const std::vector<tfrag3::TieWindInstance>* instance_info = nullptr;
+    // PC-REMAKE: per-draw "is vegetation" flags (by texture name) — ambient
+    // wind sway only applies to these (ropes/pebbles are shrubs too!)
+    std::vector<u8> veg_flags;
+    // PC-REMAKE 13/10 : 1 = objet RIGIDE (planches, banc, corde, rocher) — sa vraie
+    // normale de facette va dans le G-buffer ; 0 = vegetation et galets, eclaires
+    // comme le sol qui les porte (normale verticale)
+    std::vector<u8> facet_flags;
+    // 13/10 : 1 = vegetation (herbe, feuilles) — ses pixels sont marques dans le
+    // stencil (bit 0x80) pour que les chemins de sable (tfrag DIRT) ne la
+    // recouvrent plus
+    std::vector<u8> veg_mark;
+    // projecteur violet (spec /tmp/palm_debug) : couverture SHRUB — l'angle
+    // mort qui avait fait rater galets ET herbes lors des identifications
+    const std::vector<tfrag3::Texture>* tex_names = nullptr;
+    unsigned int palm_debug_seq_built = 0;
+    std::vector<char> draw_palm_debug;
     const tfrag3::PackedTimeOfDay* colors = nullptr;
     const u32* index_data = nullptr;
+    // PC-REMAKE 14/10 : TRI DE VISIBILITE PAR CASES. Le format shrub n'a aucune
+    // structure de visibilite (« todo » d'origine) : chaque image dessinait TOUTE
+    // l'herbe du niveau, derriere la camera comprise (26 000 touffes semees =
+    // 2,8 ms de GPU a la plage). Au chargement, les bandes de chaque draw sont
+    // regroupees par case de 32 m et l'index buffer est reordonne draw par draw,
+    // case par case ; a l'image, seules les cases dans le champ sont dessinees.
+    // Image identique (une case hors champ n'a aucun pixel a l'ecran).
+    struct Cell {
+      math::Vector4f bsphere;  // monde, rayon = demi-diagonale + marge vent/poussee
+    };
+    struct Segment {
+      u32 first_index = 0;  // dans reordered_indices
+      u32 count = 0;
+      u32 cell = 0;
+    };
+    std::vector<Cell> cells;
+    std::vector<std::vector<Segment>> draw_segments;  // par draw, tries par case
+    std::vector<std::pair<u32, u32>> draw_full_range;  // bloc complet du draw
+    std::vector<u32> reordered_indices;
+    std::vector<u8> cell_visible;
     std::vector<bool> proto_vis_mask;
     std::unordered_map<std::string, std::vector<u32>> proto_name_to_idx;
 
@@ -58,6 +94,9 @@ class Shrub : public BucketRenderer {
 
   struct {
     GLuint decal;
+    GLuint grass_push;  // PC-REMAKE: player position + strength for grass bending
+    GLuint grass_wind;  // PC-REMAKE: ambient sway (time + amplitude)
+    GLuint shrub_facet;  // PC-REMAKE 13/10 : normale de facette (1) ou verticale (0)
   } m_uniforms;
 
   std::vector<Tree> m_trees;
@@ -69,6 +108,16 @@ class Shrub : public BucketRenderer {
 
   static constexpr int TIME_OF_DAY_COLOR_COUNT = 8192;
   bool m_has_level = false;
+
+  static void build_cells(Tree& out, const tfrag3::ShrubTree& tree);
+  // 14/10 : /tmp/qa_no_shrub_cull = tri par cases coupe (A/B)
+  bool m_cull_enabled = true;
+  int m_cull_poll = 0;
+  struct {
+    u64 frames = 0;
+    u64 segs_total = 0;
+    u64 segs_drawn = 0;
+  } m_cull_stats;
 
   struct Cache {
     std::vector<std::pair<int, int>> draw_idx_temp;

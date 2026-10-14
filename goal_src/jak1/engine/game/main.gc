@@ -239,8 +239,93 @@
 
 (define *first-boot* #t) ;; PAL
 
+;; PC-REMAKE : compteur de présence stable dans village1 (frames) — pilote la
+;; résidence par défaut de la plage. Vit ici (et pas dans time-of-day.gc) car
+;; l'ordre de compilation exige de connaître le système de niveaux.
+(define *remake-village-frames* 0)
+;; dernier niveau TIERS vu dans les souhaits (détection de nouveauté : un tiers
+;; fraîchement réclamé par une frontière reçoit 15 s de grâce, puis la plage
+;; reprend la place si on est resté au village — 17/08 : depuis
+;; les hauteurs de Samos, un tiers résiduel de sauvegarde bloquait la plage à vie)
+(define *remake-prev-third* #f)
+;; vrai quand NOTRE forçage de visibilité plage est actif (pour le retirer
+;; proprement en sortant de la zone Samos — jamais le laisser collant)
+(define *remake-beach-vis-forced* #f)
+;; ocean.gc compile après main.gc : re-déclaration locale, résolue à l'exécution
+(define-extern *ocean-map* ocean-map)
+
 (defun main-cheats ()
   "Handle cheat codes and timeout"
+  ;; PC-REMAKE : la plage résidente PAR DÉFAUT depuis le village de Sable
+  ;; (niveau de la plage toujours chargé, sans faire planter le
+  ;; jeu). Règles de sûreté, dans l'ordre :
+  ;;  1. un niveau TIERS voulu par une frontière (misty, training, canyon…)
+  ;;     remet le compteur à zéro et suspend tout — sa priorité est absolue,
+  ;;     le chargement de bordure vanilla n'est jamais gêné ;
+  ;;  2. il faut 15 s de présence STABLE dans village1 (900 frames) avant que
+  ;;     la plage ne reprenne le second emplacement ;
+  ;;  3. l'affichage et la visibilité forcée sont ré-affirmés ensuite chaque
+  ;;     frame (idempotent) tant que le duo village+plage est en place.
+  ;; GARDE ANTI-DÉMO (17/08, crashs SIGBUS du mode attract) : l'idiome du
+  ;; moteur lui-même — ce hook ne tourne JAMAIS pendant la démo automatique de
+  ;; l'écran titre, dont les transitions rendaient les structures de niveau
+  ;; dangereuses à interroger per-frame.
+  (when (= *kernel-boot-message* 'play)
+    (let* ((w0 (-> *load-state* want 0 name))
+           (w1 (-> *load-state* want 1 name))
+           (third (cond
+                    ((and w0 (not (= w0 'village1)) (not (= w0 'beach))) w0)
+                    ((and w1 (not (= w1 'village1)) (not (= w1 'beach))) w1)
+                    (else #f))))
+      ;; un niveau TIERS fraîchement réclamé (frontière) reçoit 15 s de grâce ;
+      ;; un tiers RÉSIDUEL (sauvegarde) sera évincé après 15 s de village — sans
+      ;; ça, depuis chez Samos la plage ne se chargeait jamais
+      (when (and third (not (= third *remake-prev-third*)))
+        (set! *remake-village-frames* 0))
+      (set! *remake-prev-third* third)
+      ;; 18/08 : la plage résidente n'est requise QUE vers
+      ;; la hutte de Samos en hauteur (après le premier pont suspendu) — le
+      ;; point de vue d'où l'on domine la baie. Ailleurs dans le village, on
+      ;; laisse les deux emplacements aux frontières (jungle, canyon, misty…).
+      ;; Zone : boîte de ±65 m autour de la hutte (-132.7, 213.5) + y > 30 m.
+      (if (and *target*
+               (= (-> (level-get-target-inside *level*) name) 'village1)
+               (< (fabs (- (-> *target* control trans x) (meters -132.7))) (meters 65.0))
+               (< (fabs (- (-> *target* control trans z) (meters 213.5))) (meters 65.0))
+               (> (-> *target* control trans y) (meters 30.0)))
+          (set! *remake-village-frames* (min 10000 (+ *remake-village-frames* 1)))
+          (set! *remake-village-frames* 0))
+      ;; 5 s (300 frames) : quasi immédiat, assez pour ne pas
+      ;; se battre avec les chargements de frontière
+      ;; CORRECTION 18/08 (la jungle ne se chargeait plus) : un tiers voulu n'est PLUS JAMAIS évincé — avant,
+      ;; après la grâce, le crochet volait l'emplacement d'un niveau en pleine
+      ;; charge (jungle, canyon de feu…). La plage ne s'installe que quand
+      ;; AUCUN autre niveau n'est réclamé.
+      (cond
+        ((and (>= *remake-village-frames* 300) (not third))
+         (if (not (or (= w0 'beach) (= w1 'beach)))
+             (load-state-want-levels 'village1 'beach))
+         (load-state-want-display-level 'beach 'display)
+         (load-state-want-force-vis 'beach #t)
+         (set! *remake-beach-vis-forced* #t))
+        ;; SYMÉTRIE TOTALE (18/08, 3e itération — même redémarrage, toujours
+        ;; cassé) : la visibilité forcée de la plage n'est légitime QUE dans
+        ;; la zone Samos. PARTOUT ailleurs — quel que soit le niveau, téléport
+        ;; ou redémarrage compris — on la retire à chaque image. L'état collant
+        ;; vit dans la SAUVEGARDE (load-state persisté) et revenait à chaque
+        ;; restauration ; ce retrait permanent le tue où qu'il réapparaisse.
+        (else
+         ;; 18/08 : NE PAS appeler load-state-want-force-vis ici — quand la
+         ;; plage n'est pas chargee, le moteur imprime une erreur A CHAQUE
+         ;; IMAGE, ce qui noyait le canal de debogage (« Runtime is not
+         ;; responding »). Le retrait silencieux se fait dans update! de
+         ;; load-state (level.gc), qui manipule le champ directement.
+         (set! *remake-beach-vis-forced* #f)))))
+  ;; PC-REMAKE : scintillement de l'eau — DÉSARMEMENT par défaut chaque frame
+  ;; (sentinelle -1e6 = ne pas toucher au niveau de la mer). C'est draw-ocean
+  ;; (ocean.gc), sous le garde du moteur, qui ré-arme quand un océan est actif.
+  ;; (Lire *ocean-map* ICI crashait en transition de niveau — SIGBUS du 17/08.)
+  (pc-set-water-glitter! -1000000.0 0.0 0.0)
   ;; look for codes when L3 is pushed
   (when (and (cpad-hold? 0 l3)
              (or *cheat-mode* (= *kernel-boot-message* 'play)) ;; not in demo

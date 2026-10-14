@@ -20,6 +20,10 @@ u64 add_texture(TexturePool& pool, const tfrag3::Texture& tex, bool is_common) {
   float aniso = 0.0f;
   glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &aniso);
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, aniso);
+  // PC-REMAKE 25/08 : biais de mip LEGER. Le -1.2 essaye plus tot aggravait le
+  // moire du lointain (il force un mip trop net) ; -0.35 garde un peu de
+  // croquant sans reveiller l'aliasing.
+  glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.8f);
   if (tex.load_to_pool) {
     TextureInput in;
     in.debug_page_name = tex.debug_tpage_name;

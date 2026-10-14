@@ -8,7 +8,10 @@
 class Shader {
  public:
   static constexpr char shader_folder[] = "game/graphics/opengl_renderer/shaders/";
-  Shader(const std::string& shader_name, GameVersion version);
+  // 14/10 : frag_define (optionnel) = « #define <frag_define> » insere apres #version
+  Shader(const std::string& shader_name,
+         GameVersion version,
+         const std::string& frag_define = "");
   Shader() = default;
   void activate() const;
   bool okay() const { return m_is_okay; }
@@ -69,6 +72,8 @@ enum class ShaderId {
   SLOW_TIME = 42,
   OCEAN_ENVMAP = 43,
   OCEAN_ENVMAP_HAZE = 44,
+  SHADOW_DEPTH = 45,  // PC-REMAKE: sun shadow map depth-only pass
+  MERC_SHADOW = 46,   // PC-REMAKE: skinned characters/props casting into it
   MAX_SHADERS
 };
 

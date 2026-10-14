@@ -118,10 +118,20 @@ class TFragment : public BucketRenderer {
     GLuint vertex_buffer = -1;
     GLuint index_buffer = -1;
     GLuint single_draw_index_buffer = -1;
+    u32 index_count = 0;  // PC-REMAKE: full index buffer size (shadow casters)
     GLuint time_of_day_texture = -1;
     GLuint vao = -1;
     u32 vert_count = 0;
     const std::vector<tfrag3::StripDraw>* draws = nullptr;
+    // projecteur violet : draws correspondant à la spec de /tmp/palm_debug,
+    // reclassés à chaud quand la spec change (g_palm_debug_seq)
+    std::vector<char> draw_palm_debug;
+    // PC-REMAKE émissives : boost d'auto-illumination par draw (0 = normal),
+    // bâti une fois par arbre depuis le registre des textures qui brillent
+    std::vector<float> draw_emissive;
+    std::vector<float> draw_detail;  // 21/09 : detail intrinseque des sols (0/1)
+    const std::vector<tfrag3::Texture>* tex_names = nullptr;
+    u32 palm_debug_seq_built = 0;
     const tfrag3::PackedTimeOfDay* colors = nullptr;
     const tfrag3::BVH* vis = nullptr;
     const u32* index_data = nullptr;

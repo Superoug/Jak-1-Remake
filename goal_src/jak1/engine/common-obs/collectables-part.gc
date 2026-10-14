@@ -1758,9 +1758,10 @@
    (sp-item 231 :flags (bit1 launch-asap))))
 
 (defpart 228
+  ;; PC-REMAKE 18/08 : moins de flares empiles autour de la pile
   :init-specs
   ((:texture (flare effects))
-   (:num 0.5)
+   (:num 0.28)
    (:scale-x (meters 0.5) (meters 0.5))
    (:rot-x 4)
    (:rot-z (degrees 0) (degrees 360))
@@ -1804,6 +1805,7 @@
    (:next-launcher 232)))
 
 (defpart 230
+  ;; PC-REMAKE 18/08 : halo de la pile adouci (alpha 64 -> 24) — elle brille, mais moins
   :init-specs
   ((:texture (starflash effects))
    (:num 1.0)
@@ -1813,13 +1815,14 @@
    (:r 192.0)
    (:g 192.0)
    (:b 0.0 128.0)
-   (:a 64.0)
+   (:a 24.0)
    (:rotvel-z (degrees -0.4))
    (:timer (seconds -0.005))
    (:flags (bit2 bit3 bit14))
    (:func 'sparticle-track-root-prim)))
 
 (defpart 231
+  ;; PC-REMAKE 18/08 : second halo de la pile adouci (alpha 64 -> 24)
   :init-specs
   ((:texture (starflash effects))
    (:num 1.0)
@@ -1829,7 +1832,7 @@
    (:r 128.0)
    (:g 128.0)
    (:b 128.0)
-   (:a 64.0)
+   (:a 24.0)
    (:rotvel-z (degrees 0.3))
    (:timer (seconds -0.005))
    (:flags (bit2 bit3 bit14))

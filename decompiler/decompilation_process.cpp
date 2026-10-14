@@ -291,6 +291,8 @@ int run_decompilation_process(decompiler::Config config,
   if (fs::exists(replacements_path)) {
     tex_db.replace_textures(replacements_path);
   }
+  tex_db.faithful_hd = config.pc_faithful_hd_textures;
+  tex_db.faithful_hd_models = config.pc_faithful_hd_models;
 
   if (config.process_game_count) {
     auto result = db.process_game_count_file();

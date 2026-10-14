@@ -1,15 +1,700 @@
 #include "Loader.h"
 
+#include <map>
 #include <ranges>
+#include <set>
 
 #include "common/global_profiler/GlobalProfiler.h"
+#include "common/log/log.h"
 #include "common/util/FileUtil.h"
 #include "common/util/Timer.h"
 #include "common/util/compress.h"
 
+#include "game/graphics/opengl_renderer/background/background_common.h"
 #include "game/graphics/opengl_renderer/loader/LoaderStages.h"
 
 #include "third-party/imgui/imgui.h"
+
+namespace {
+
+// PC-REMAKE: decide whether a surface is metal, so the engine's reflection
+// pass can be switched on for it. Two independent signals:
+//   * the artists' texture name (iron / steel / rim / bolt / blade ...)
+//   * the pixels themselves — metal reads as near-grey with strong contrast,
+//     which separates brushed steel from painted wood without any naming.
+bool texture_is_metal(const tfrag3::Texture& tex) {
+  // "never" is checked FIRST: a mixed texture like crate-woodandrim is mostly
+  // wood, and making the whole sheet shiny would look worse than leaving it.
+  static const char* kNeverWords[] = {"wood", "cloth", "skin",  "fur",  "leaf",
+                                      "grass", "sand", "dirt",  "hair", "eye",
+                                      "straw", "thatch", "rope", "sky",  "cloud"};
+  for (auto* w : kNeverWords) {
+    if (tex.debug_name.find(w) != std::string::npos) {
+      return false;
+    }
+  }
+  static const char* kMetalWords[] = {
+      "metal", "iron",  "steel", "bolt",  "rim",   "edging", "chrome", "blade",
+      "gear",  "valve", "pipe",  "grate", "plate", "hinge",  "buckle", "silver",
+      "machine", "cannon", "screw", "nail", "lens", "shiny", "armor", "weld"};
+  for (auto* w : kMetalWords) {
+    if (tex.debug_name.find(w) != std::string::npos) {
+      return true;
+    }
+  }
+
+  // pixel analysis fallback
+  if (tex.data.empty()) {
+    return false;
+  }
+  double sat_sum = 0, lum_sum = 0, lum_sq = 0;
+  int n = 0;
+  const int step = std::max<int>(1, (int)tex.data.size() / 1024);
+  for (size_t i = 0; i < tex.data.size(); i += step) {
+    u32 t = tex.data[i];
+    double r = (t & 0xff) / 255.0;
+    double g = ((t >> 8) & 0xff) / 255.0;
+    double b = ((t >> 16) & 0xff) / 255.0;
+    double a = ((t >> 24) & 0xff) / 255.0;
+    if (a < 0.3) {
+      continue;  // ignore cut-out pixels
+    }
+    double mx = std::max(r, std::max(g, b));
+    double mn = std::min(r, std::min(g, b));
+    double sat = mx > 1e-4 ? (mx - mn) / mx : 0.0;
+    double lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    sat_sum += sat;
+    lum_sum += lum;
+    lum_sq += lum * lum;
+    n++;
+  }
+  if (n < 16) {
+    return false;
+  }
+  double sat = sat_sum / n;
+  double lum = lum_sum / n;
+  // Thresholds measured on the game's own sheets: real metal sits around
+  // sat 0.10-0.18 / lum 0.44-0.78. Luminance variance turned out useless as a
+  // signal (genuine metals measure 0.001-0.015), so it is not used.
+  return sat < 0.30 && lum > 0.30;
+}
+
+}  // namespace
+
+// PC-REMAKE: the little path lamps dotted along the village — at hut doors, on
+// the small bridges — are not game objects at all. They are baked into the
+// static TIE scenery, so nothing in GOAL can switch them on. They are found
+// here instead, by their texture (vil-lamp / jng-lamp ...), and each cluster of
+// lamp-textured geometry is registered as a light at its own position.
+void pc_remake_add_static_lamp(long long id, float x, float y, float z, float radius, float r,
+                               float g, float b, float intensity, int priority);
+
+void register_scenery_lamps(tfrag3::Level& lev) {
+  auto is_lamp_texture = [&](int tex_id) {
+    if (tex_id < 0 || tex_id >= (int)lev.textures.size()) {
+      return false;
+    }
+    const auto& n = lev.textures[tex_id].debug_name;
+    // "-wood" is the post the lamp sits on, not the lit shade
+    return n.find("lamp") != std::string::npos && n.find("wood") == std::string::npos;
+  };
+
+  struct Cluster {
+    double x = 0, y = 0, z = 0;
+    int n = 0;
+  };
+  std::vector<Cluster> clusters;
+  constexpr float kMergeDist = 4096.f * 3.f;  // 3 m: one lamp fixture
+  auto add_point = [&](float x, float y, float z) {
+    for (auto& c : clusters) {
+      float dx = (float)(c.x / c.n) - x, dy = (float)(c.y / c.n) - y, dz = (float)(c.z / c.n) - z;
+      if (dx * dx + dy * dy + dz * dz < kMergeDist * kMergeDist) {
+        c.x += x;
+        c.y += y;
+        c.z += z;
+        c.n++;
+        return;
+      }
+    }
+    clusters.push_back({x, y, z, 1});
+  };
+
+  for (auto& tree_cat : lev.tie_trees) {
+    for (auto& tree : tree_cat) {
+      for (const auto& draw : tree.static_draws) {
+        if (!is_lamp_texture(draw.tree_tex_id)) {
+          continue;
+        }
+        auto take = [&](u32 idx) {
+          if (idx < tree.unpacked.vertices.size()) {
+            const auto& v = tree.unpacked.vertices[idx];
+            add_point(v.x, v.y, v.z);
+          }
+        };
+        // this draw's own vertices only — indices are stored as runs plus a
+        // list of loose ones
+        for (const auto& run : draw.runs) {
+          for (u32 k = 0; k < run.length; k++) {
+            take(run.vertex0 + k);
+          }
+        }
+        for (u32 idx : draw.plain_indices) {
+          take(idx);
+        }
+      }
+    }
+  }
+
+  int lit = 0;
+  for (const auto& c : clusters) {
+    if (c.n < 6) {
+      continue;  // a stray triangle, not a lamp
+    }
+    float x = (float)(c.x / c.n), y = (float)(c.y / c.n), z = (float)(c.z / c.n);
+    // id from the position: stable across reloads, unique per fixture
+    long long id = ((long long)(x * 0.25f) * 73856093ll) ^ ((long long)(y * 0.25f) * 19349663ll) ^
+                   ((long long)(z * 0.25f) * 83492791ll);
+    pc_remake_add_static_lamp(id, x, y, z, 4096.f * 11.f, 1.00f, 0.52f, 0.16f, 0.85f, 2);
+    lit++;
+  }
+  if (lit) {
+    lg::info("[PC-REMAKE] {} lampes de décor allumées", lit);
+  }
+}
+
+// PC-REMAKE: the far-view jungle temple rings are flat billboards in the
+// medres-jungle model (textures jng-ttop-lod-ring-*). Replace each billboard
+// quad with a real torus fitted to the quad (same center, same diameter), bone
+// weights / tint copied from the quad, UVs sampling the SAME ring texture as an
+// annulus so the painted notches wrap around the tube. objectif :
+// des anneaux en 3D.
+void remake_medres_rings(tfrag3::Level& lev) {
+  auto& mercs = lev.merc_data;
+  int done = 0;
+  for (auto& model : mercs.models) {
+    if (model.name.rfind("medres-", 0) != 0) {
+      continue;
+    }
+    for (auto& eff : model.effects) {
+      for (auto& draw : eff.all_draws) {
+        if (draw.tree_tex_id < 0 || draw.tree_tex_id >= (int)lev.textures.size()) {
+          continue;
+        }
+        const auto& tex_name = lev.textures.at(draw.tree_tex_id).debug_name;
+        if (tex_name.find("jng-ttop-lod-ring") == std::string::npos) {
+          continue;
+        }
+        // collect the billboard's vertices
+        std::vector<u32> vidx;
+        for (u32 ii = 0; ii < draw.index_count; ii++) {
+          u32 vi = mercs.indices.at(draw.first_index + ii);
+          if (vi == UINT32_MAX) {
+            continue;
+          }
+          if (std::find(vidx.begin(), vidx.end(), vi) == vidx.end()) {
+            vidx.push_back(vi);
+          }
+        }
+        if (vidx.size() < 3) {
+          continue;
+        }
+        const tfrag3::MercVertex ref = mercs.vertices.at(vidx[0]);
+        math::Vector3f mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+        math::Vector2f st_mn(1e30f, 1e30f), st_mx(-1e30f, -1e30f);
+        for (u32 vi : vidx) {
+          const auto& v = mercs.vertices.at(vi);
+          for (int c = 0; c < 3; c++) {
+            mn[c] = std::min(mn[c], v.pos[c]);
+            mx[c] = std::max(mx[c], v.pos[c]);
+          }
+          for (int c = 0; c < 2; c++) {
+            st_mn[c] = std::min(st_mn[c], v.st[c]);
+            st_mx[c] = std::max(st_mx[c], v.st[c]);
+          }
+        }
+        const math::Vector3f center = (mn + mx) * 0.5f;
+        const math::Vector3f ext = (mx - mn) * 0.5f;
+        // ring radius = biggest half-extent of the quad; the ring lies flat (XZ)
+        const float R = std::max(std::max(ext.x(), ext.y()), ext.z());
+        if (R <= 0.f) {
+          continue;
+        }
+        const float r_tube = R * 0.13f;
+        const math::Vector2f uc = (st_mn + st_mx) * 0.5f;
+        const math::Vector2f ur = (st_mx - st_mn) * 0.5f;
+        // texture annulus measured on the redrawn 256² rings
+        const float rho_in = 0.55f, rho_out = 0.93f;
+
+        // ring plane: the big rings read best flat (XZ, validated);
+        // ring-01 (the small one) must lie in its billboard's own plane — the
+        // two largest bbox axes span the quad, the smallest is its normal.
+        int e1 = 0, e2 = 2, en = 1;  // default: XZ plane, normal Y
+        if (tex_name.find("ring-01") != std::string::npos) {
+          int order[3] = {0, 1, 2};
+          std::sort(order, order + 3, [&](int a, int b) { return ext[a] > ext[b]; });
+          e1 = order[0];
+          e2 = order[1];
+          en = order[2];
+        }
+
+        const int M = 22, m = 6;
+        const u32 base_vtx = (u32)mercs.vertices.size();
+        for (int i = 0; i < M; i++) {
+          const float th = 2.f * (float)M_PI * i / M;
+          const float ct = std::cos(th), stn = std::sin(th);
+          for (int j = 0; j < m; j++) {
+            const float ph = 2.f * (float)M_PI * j / m;
+            const float cp = std::cos(ph), sp = std::sin(ph);
+            tfrag3::MercVertex v = ref;  // copies weights / mats / rgba / pads
+            const float rad = R - r_tube + r_tube * cp;  // outer at ph=0
+            v.pos[e1] = center[e1] + ct * rad;
+            v.pos[en] = center[en] + sp * r_tube;
+            v.pos[e2] = center[e2] + stn * rad;
+            v.normal[e1] = ct * cp;
+            v.normal[en] = sp;
+            v.normal[e2] = stn * cp;
+            // sample the ring texture as an annulus; tube angle -> radial band
+            const float rho = rho_in + (rho_out - rho_in) * (cp * 0.5f + 0.5f);
+            v.st[0] = uc.x() + ct * rho * ur.x();
+            v.st[1] = uc.y() + stn * rho * ur.y();
+            mercs.vertices.push_back(v);
+          }
+        }
+        const u32 first_index = (u32)mercs.indices.size();
+        for (int i = 0; i < M; i++) {
+          const int i2 = (i + 1) % M;
+          for (int j = 0; j < m; j++) {
+            const int j2 = (j + 1) % m;
+            const u32 a = base_vtx + i * m + j;
+            const u32 b = base_vtx + i2 * m + j;
+            const u32 c = base_vtx + i * m + j2;
+            const u32 d = base_vtx + i2 * m + j2;
+            mercs.indices.push_back(a);
+            mercs.indices.push_back(b);
+            mercs.indices.push_back(c);
+            mercs.indices.push_back(c);
+            mercs.indices.push_back(b);
+            mercs.indices.push_back(d);
+          }
+        }
+        draw.first_index = first_index;
+        draw.index_count = (u32)M * m * 6;
+        draw.num_triangles = (u32)M * m * 2;
+        draw.no_strip = true;
+        done++;
+        lg::info("PC-REMAKE medres ring -> torus: {} '{}' R={:.1f}", model.name, tex_name, R);
+      }
+    }
+  }
+  if (done) {
+    lg::info("PC-REMAKE medres rings: {} billboards replaced by tori", done);
+  }
+}
+
+// PC-REMAKE: les palmiers penchés (et feuillages suspendus) sont FONDUS dans le
+// terrain TFRAG — aucune instance, aucun interrupteur vent. On marque leurs
+// sommets de FEUILLES (par texture : le tronc a la sienne, il reste immobile)
+// en décalant s de +100 ; tfrag3.vert détecte s>50, retire l'offset et fait
+// onduler (palmier penché en plein champ de vision).
+void tag_tfrag_foliage(tfrag3::Level& lev) {
+  // palm-leaf ET leafyground-hang sont désormais TRANSPLANTÉES dans le circuit
+  // vent TIE (voir transplant_leaning_palms) — plus rien à taguer ici, la
+  // fonction est gardée pour de futurs feuillages
+  static const char* kLeafTex[] = {"jamais-rien-ne-matche-ceci"};
+  int tagged = 0;
+  for (auto& geom_trees : lev.tfrag_trees) {
+    for (auto& tree : geom_trees) {
+      std::vector<char> done(tree.unpacked.vertices.size(), 0);
+      for (auto& draw : tree.draws) {
+        if (draw.tree_tex_id < 0 || draw.tree_tex_id >= (int)lev.textures.size()) {
+          continue;
+        }
+        const auto& tex_name = lev.textures.at(draw.tree_tex_id).debug_name;
+        bool is_leaf = false;
+        for (auto* kw : kLeafTex) {
+          if (tex_name.find(kw) != std::string::npos) {
+            is_leaf = true;
+            break;
+          }
+        }
+        if (!is_leaf) {
+          continue;
+        }
+        auto tag_vertex = [&](u32 vi) {
+          if (vi == UINT32_MAX || vi >= tree.unpacked.vertices.size() || done[vi]) {
+            return;
+          }
+          done[vi] = 1;
+          tree.unpacked.vertices[vi].s += 100.f;
+          tagged++;
+        };
+        for (auto& run : draw.runs) {
+          for (u32 j = 0; j < run.length; j++) {
+            tag_vertex(run.vertex0 + j);
+          }
+        }
+        for (u32 vi : draw.plain_indices) {
+          tag_vertex(vi);
+        }
+      }
+
+      // PC-REMAKE : reconstruire le « squelette » de chaque couronne (la même
+      // information que possèdent les palmiers TIE) — regrouper les feuilles
+      // par couronne, puis graver dans rgba (libre en TFRAG) la position de
+      // chaque sommet dans SA couronne : r = distance à l'axe, g = angle,
+      // b = hauteur, a = identifiant de couronne (phase de houle).
+      {
+        struct Crown {
+          double x = 0, y = 0, z = 0;
+          int n = 0;
+          float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, z0 = 1e30f, z1 = -1e30f;
+        };
+        std::vector<Crown> crowns;
+        std::vector<int> vert_crown(tree.unpacked.vertices.size(), -1);
+        constexpr float kMerge = 4096.f * 7.f;  // 7 m : une couronne
+        for (u32 vi = 0; vi < tree.unpacked.vertices.size(); vi++) {
+          if (!done[vi]) {
+            continue;
+          }
+          const auto& v = tree.unpacked.vertices[vi];
+          int best = -1;
+          for (size_t c = 0; c < crowns.size(); c++) {
+            float dx = (float)(crowns[c].x / crowns[c].n) - v.x;
+            float dz = (float)(crowns[c].z / crowns[c].n) - v.z;
+            if (dx * dx + dz * dz < kMerge * kMerge) {
+              best = (int)c;
+              break;
+            }
+          }
+          if (best < 0) {
+            crowns.push_back({});
+            best = (int)crowns.size() - 1;
+          }
+          auto& c = crowns[best];
+          c.x += v.x;
+          c.y += v.y;
+          c.z += v.z;
+          c.n++;
+          c.x0 = std::min(c.x0, v.x);
+          c.x1 = std::max(c.x1, v.x);
+          c.y0 = std::min(c.y0, v.y);
+          c.y1 = std::max(c.y1, v.y);
+          c.z0 = std::min(c.z0, v.z);
+          c.z1 = std::max(c.z1, v.z);
+          vert_crown[vi] = best;
+        }
+        for (u32 vi = 0; vi < tree.unpacked.vertices.size(); vi++) {
+          int ci = vert_crown[vi];
+          if (ci < 0) {
+            continue;
+          }
+          auto& c = crowns[ci];
+          auto& v = tree.unpacked.vertices[vi];
+          const float cx = (float)(c.x / c.n);
+          const float cz = (float)(c.z / c.n);
+          const float r = std::max(std::max(c.x1 - c.x0, c.z1 - c.z0) * 0.5f, 1.f);
+          const float dx = v.x - cx;
+          const float dz = v.z - cz;
+          const float fr = std::min(std::sqrt(dx * dx + dz * dz) / r, 1.f);
+          const float az = (std::atan2(dz, dx) + (float)M_PI) / (2.f * (float)M_PI);
+          const float hn = std::min(std::max((v.y - c.y0) / std::max(c.y1 - c.y0, 1.f), 0.f), 1.f);
+          v.r = (u8)(fr * 255.f);
+          v.g = (u8)(az * 255.f);
+          v.b = (u8)(hn * 255.f);
+          v.a = (u8)((ci * 37) & 0xff);  // phase de houle propre à la couronne
+        }
+      }
+    }
+  }
+  if (tagged) {
+    lg::info("PC-REMAKE tfrag foliage: {} sommets de feuilles marqués pour le vent", tagged);
+  } else {
+    // diagnostic : lister les textures réellement portées par les draws TFRAG
+    std::set<std::string> seen;
+    for (auto& geom_trees : lev.tfrag_trees) {
+      for (auto& tree : geom_trees) {
+        for (auto& draw : tree.draws) {
+          if (draw.tree_tex_id >= 0 && draw.tree_tex_id < (int)lev.textures.size()) {
+            seen.insert(lev.textures.at(draw.tree_tex_id).debug_name);
+          }
+        }
+      }
+    }
+    std::string all;
+    int n = 0;
+    for (auto& s : seen) {
+      all += s + " ";
+      if (++n >= 60) {
+        break;
+      }
+    }
+    lg::info("PC-REMAKE tfrag foliage: 0 marqué. Textures tfrag: {}", all);
+  }
+}
+
+// PC-REMAKE — LA CHIRURGIE DES PALMIERS PENCHÉS (16/08) :
+// leurs feuilles (draws TFRAG mono-texture palm-leaf) sont EXCISÉES du terrain
+// et RÉINJECTÉES comme instances de vent TIE, une par couronne — elles héritent
+// alors de TOUT le pipeline validé (battement ×1,5, détachement du tronc — le
+// tronc, resté dans le terrain, est immobile par nature).
+void transplant_leaning_palms(tfrag3::Level& lev) {
+  if (lev.tie_trees[0].empty()) {
+    return;  // pas d'arbre TIE où greffer
+  }
+  int crowns_made = 0;
+  for (auto& geom_trees : lev.tfrag_trees) {
+    for (auto& tree : geom_trees) {
+      // 1) collecter et VIDER les draws de feuilles de palmier
+      struct LeafVert {
+        float x, y, z, s, t;
+        u16 color_index;
+      };
+      struct SrcDraw {
+        DrawMode mode;
+        s32 tex;
+        std::vector<u32> vidx;
+      };
+      std::vector<SrcDraw> excised;
+      for (auto& draw : tree.draws) {
+        if (draw.tree_tex_id < 0 || draw.tree_tex_id >= (int)lev.textures.size()) {
+          continue;
+        }
+        const auto& tn = lev.textures.at(draw.tree_tex_id).debug_name;
+        // RÉVÉLATION du 17/08 (identification mesurée devant
+        // l'arbre) : les couronnes des grands penchés sont peintes avec
+        // « leafyground-hang », PAS « palm-leaf » — deux jours à chercher le
+        // mauvais nom de texture.
+        if (tn.find("palm-leaf") == std::string::npos &&
+            tn.find("leafyground-hang") == std::string::npos) {
+          continue;
+        }
+        SrcDraw sd;
+        sd.mode = draw.mode;
+        sd.tex = draw.tree_tex_id;
+        for (auto& run : draw.runs) {
+          for (u32 j = 0; j < run.length; j++) {
+            sd.vidx.push_back(run.vertex0 + j);
+          }
+          sd.vidx.push_back(UINT32_MAX);  // fin de ruban
+        }
+        for (u32 vi : draw.plain_indices) {
+          sd.vidx.push_back(vi);
+        }
+        excised.push_back(std::move(sd));
+        // excision : le draw entier disparaît du terrain
+        draw.runs.clear();
+        draw.plain_indices.clear();
+        draw.num_triangles = 0;
+      }
+      if (excised.empty()) {
+        continue;
+      }
+
+      // 2) clusteriser les sommets par couronne (xz, fusion 7 m)
+      auto& tie = lev.tie_trees[0][0];
+      struct Crown {
+        double sx = 0, sy = 0, sz = 0;
+        int n = 0;
+      };
+      std::vector<Crown> crowns;
+      auto crown_of = [&](float x, float z) -> int {
+        constexpr float kMerge = 4096.f * 7.f;
+        for (size_t c = 0; c < crowns.size(); c++) {
+          float dx = (float)(crowns[c].sx / crowns[c].n) - x;
+          float dz = (float)(crowns[c].sz / crowns[c].n) - z;
+          if (dx * dx + dz * dz < kMerge * kMerge) {
+            return (int)c;
+          }
+        }
+        crowns.push_back({});
+        return (int)crowns.size() - 1;
+      };
+      // premier passage : assigner chaque sommet source à une couronne
+      std::map<std::pair<int, u32>, int> vert_crown;  // (draw, vert) -> couronne
+      for (size_t di = 0; di < excised.size(); di++) {
+        for (u32 vi : excised[di].vidx) {
+          if (vi == UINT32_MAX || vi >= tree.unpacked.vertices.size()) {
+            continue;
+          }
+          const auto& v = tree.unpacked.vertices[vi];
+          int ci = crown_of(v.x, v.z);
+          auto& c = crowns[ci];
+          c.sx += v.x;
+          c.sy += v.y;
+          c.sz += v.z;
+          c.n++;
+          vert_crown[{(int)di, vi}] = ci;
+        }
+      }
+      if (crowns.empty()) {
+        continue;
+      }
+
+      // 3) palette : recopier les QUADS de couleurs utilisés vers la palette TIE
+      std::map<u32, u32> quad_remap;  // quad tfrag -> quad tie
+      auto remap_color = [&](u16 old_color) -> u16 {
+        u32 oq = old_color / 4;
+        auto it = quad_remap.find(oq);
+        if (it == quad_remap.end()) {
+          const u32 nq = tie.colors.color_count / 4;
+          if ((nq + 1) * 4 > 8190) {
+            return 0;  // palette pleine : teinte 0 plutôt qu'un débordement
+          }
+          const size_t src_off = (size_t)oq * 4 * 4 * 8;
+          if (src_off + 128 > tree.colors.data.size()) {
+            return 0;
+          }
+          tie.colors.data.insert(tie.colors.data.end(), tree.colors.data.begin() + src_off,
+                                 tree.colors.data.begin() + src_off + 128);
+          tie.colors.color_count += 4;
+          it = quad_remap.emplace(oq, nq).first;
+        }
+        return (u16)(it->second * 4 + (old_color % 4));
+      };
+
+      // 4) réinjection : une instance de vent TIE par couronne
+      const u32 first_new_instance = (u32)tie.wind_instance_info.size();
+      std::vector<u32> crown_vert_base(crowns.size());
+      // les sommets de chaque couronne, en espace LOCAL (centre soustrait)
+      std::map<std::pair<int, u32>, u32> new_index;  // (draw, vert) -> index tie
+      for (size_t ci = 0; ci < crowns.size(); ci++) {
+        auto& inst = tie.wind_instance_info.emplace_back();
+        inst.matrix[0] = math::Vector4f(1.f, 0.f, 0.f, 0.f);
+        inst.matrix[1] = math::Vector4f(0.f, 1.f, 0.f, 0.f);
+        inst.matrix[2] = math::Vector4f(0.f, 0.f, 1.f, 0.f);
+        inst.matrix[3] = math::Vector4f((float)(crowns[ci].sx / crowns[ci].n),
+                                        (float)(crowns[ci].sy / crowns[ci].n),
+                                        (float)(crowns[ci].sz / crowns[ci].n), 1.f);
+        inst.wind_idx = 0;
+        inst.stiffness = 0.3f;
+      }
+      for (size_t di = 0; di < excised.size(); di++) {
+        for (u32 vi : excised[di].vidx) {
+          if (vi == UINT32_MAX) {
+            continue;
+          }
+          auto key = std::make_pair((int)di, vi);
+          if (new_index.count(key)) {
+            continue;
+          }
+          int ci = vert_crown[key];
+          const auto& c = crowns[ci];
+          const auto& src = tree.unpacked.vertices[vi];
+          tfrag3::PreloadedVertex nv = src;
+          nv.x = src.x - (float)(c.sx / c.n);
+          nv.y = src.y - (float)(c.sy / c.n);
+          nv.z = src.z - (float)(c.sz / c.n);
+          nv.color_index = remap_color(src.color_index);
+          nv.color_index2 = nv.color_index;
+          new_index[key] = (u32)tie.unpacked.vertices.size();
+          tie.unpacked.vertices.push_back(nv);
+        }
+      }
+      // 5) un draw de vent par (draw source × couronne) — flux en rubans
+      //    d'origine, découpés par couronne
+      for (size_t di = 0; di < excised.size(); di++) {
+        std::map<int, std::vector<u32>> per_crown_stream;
+        int cur_crown = -1;
+        for (u32 vi : excised[di].vidx) {
+          if (vi == UINT32_MAX) {
+            if (cur_crown >= 0) {
+              per_crown_stream[cur_crown].push_back(UINT32_MAX);
+            }
+            cur_crown = -1;
+            continue;
+          }
+          auto key = std::make_pair((int)di, vi);
+          int ci = vert_crown[key];
+          if (cur_crown >= 0 && ci != cur_crown) {
+            per_crown_stream[cur_crown].push_back(UINT32_MAX);
+          }
+          cur_crown = ci;
+          per_crown_stream[ci].push_back(new_index[key]);
+        }
+        for (auto& [ci, stream] : per_crown_stream) {
+          if (stream.size() < 3) {
+            continue;
+          }
+          auto& wd = tie.instanced_wind_draws.emplace_back();
+          wd.mode = excised[di].mode;
+          wd.tree_tex_id = excised[di].tex;
+          wd.vertex_index_stream = stream;
+          tfrag3::InstancedStripDraw::InstanceGroup grp;
+          grp.num = (u32)stream.size();
+          grp.instance_idx = first_new_instance + (u32)ci;
+          grp.vis_idx = 0;
+          wd.instance_groups.push_back(grp);
+        }
+      }
+      for (size_t ci = 0; ci < crowns.size() && ci < 3; ci++) {
+        lg::info("PC-REMAKE couronne greffée #{} à ({:.1f}, {:.1f}, {:.1f}) m", ci,
+                 crowns[ci].sx / crowns[ci].n / 4096.0, crowns[ci].sy / crowns[ci].n / 4096.0,
+                 crowns[ci].sz / crowns[ci].n / 4096.0);
+      }
+      crowns_made += (int)crowns.size();
+    }
+  }
+  if (crowns_made) {
+    lg::info("PC-REMAKE transplantation : {} couronnes de palmiers penchés greffées au vent",
+             crowns_made);
+  }
+}
+
+void apply_material_reflections(tfrag3::Level& lev) {
+  auto& models = lev.merc_data.models;
+
+  // an envmap texture the game already uses for reflective materials
+  u32 donor_tex = 0;
+  DrawMode donor_mode;
+  bool have_donor = false;
+  for (auto& model : models) {
+    for (auto& eff : model.effects) {
+      if (eff.has_envmap) {
+        donor_tex = eff.envmap_texture;
+        donor_mode = eff.envmap_mode;
+        have_donor = true;
+        break;
+      }
+    }
+    if (have_donor) {
+      break;
+    }
+  }
+  if (!have_donor) {
+    return;  // this level ships no reflective material to borrow from
+  }
+
+  int lit = 0;
+  for (auto& model : models) {
+    for (auto& eff : model.effects) {
+      if (eff.has_envmap || eff.has_mod_draw) {
+        continue;
+      }
+      // an effect is one material: look at the texture of its largest draw
+      u32 best = 0;
+      s32 tex_id = -1;
+      for (auto& d : eff.all_draws) {
+        if (d.eye_id == 0xff && d.index_count > best && d.tree_tex_id >= 0) {
+          best = d.index_count;
+          tex_id = d.tree_tex_id;
+        }
+      }
+      if (tex_id < 0 || tex_id >= (s32)lev.textures.size()) {
+        continue;
+      }
+      if (!texture_is_metal(lev.textures[tex_id])) {
+        continue;
+      }
+      eff.has_envmap = true;
+      eff.envmap_texture = donor_tex;
+      eff.envmap_mode = donor_mode;
+      lit++;
+    }
+  }
+  if (lit) {
+    lg::info("PC-REMAKE reflections: {} metal materials made reflective", lit);
+  }
+}
 
 Loader::Loader(const fs::path& base_path, int max_levels)
     : m_base_path(base_path), m_max_levels(max_levels) {
@@ -264,6 +949,13 @@ void Loader::loader_thread() {
         for (auto& tie_tree : result->tie_trees) {
           for (auto& tree : tie_tree) {
             tree.unpack();
+            // PC-REMAKE: round static TIE geometry (huts, barrels, bridges,
+            // fences). Foliage draws are excluded by texture name, and the
+            // wind-animated strips are converted alongside — the earlier
+            // "broken palms" came from that mode mismatch, now fixed.
+            if (tfrag3::g_tfrag_phong_subdiv && tree.use_strips) {
+              tree.subdivide_phong(result->textures);
+            }
           }
         }
       }
@@ -273,8 +965,16 @@ void Loader::loader_thread() {
         for (auto& t_tree : result->tfrag_trees) {
           for (auto& tree : t_tree) {
             tree.unpack();
+            // PC-REMAKE: round terrain geometry.
+            if (tfrag3::g_tfrag_phong_subdiv && tree.use_strips) {
+              tree.subdivide_phong();
+            }
           }
         }
+        // PC-REMAKE : balaye la géométrie du niveau pour les surfaces qui
+        // brillent (lave, feux, lueurs précurseurs…) — elles deviennent de
+        // vraies sources de lumière pour la passe différée.
+        pc_emissive_scan_level(*result);
       }
 
       {
@@ -283,6 +983,25 @@ void Loader::loader_thread() {
           shrub_tree.unpack();
         }
       }
+
+      // PC-REMAKE: material-driven reflections. Rather than remodelling props,
+      // we look at what each surface is MADE OF and switch the engine's
+      // environment-mapping pass on for the metal ones — so the grey steel of
+      // a scout-fly crate catches the sun and mirrors its surroundings, while
+      // wood and cloth stay matte.
+      apply_material_reflections(*result);
+      register_scenery_lamps(*result);
+      // PC-REMAKE: far-view temple rings become real tori
+      remake_medres_rings(*result);
+      // PC-REMAKE: leaning palms baked in the terrain get wind too
+      tag_tfrag_foliage(*result);
+      // PC-REMAKE: chirurgie RÉVOQUÉE le 17/08 — le test violet a
+      // prouvé que les penchés n'utilisent NI palm-leaf NI leafyground-hang ;
+      // la greffe ne faisait que dupliquer des touffes (herbes de rochers
+      // mouvantes) et sur-régimer les palmiers déjà validés. Le code reste
+      // disponible pour le jour où la vraie texture des penchés sera identifiée
+      // (projecteur violet /tmp/palm_debug).
+      // transplant_leaning_palms(*result);
 
       fmt::print(
           "------------> Load from file: {:.3f}s, import {:.3f}s, decomp {:.3f}s unpack {:.3f}s\n",
@@ -535,6 +1254,8 @@ void Loader::update(TexturePool& texture_pool) {
       auto to_unload = get_most_unloadable_level();
       if (to_unload) {
         auto& lev = m_loaded_tfrag3_levels.at(*to_unload);
+        // PC-REMAKE : retire les lumières émissives scannées de ce niveau
+        pc_emissive_drop_level(*to_unload);
         std::unique_lock<std::mutex> lk(texture_pool.mutex());
         fmt::print("------------------------- PC unloading {}\n", *to_unload);
         for (size_t i = 0; i < lev->level->textures.size(); i++) {

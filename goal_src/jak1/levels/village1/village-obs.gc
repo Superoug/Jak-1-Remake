@@ -757,11 +757,39 @@
         (suspend)))
   :post ja-post)
 
+(defun pc-register-village-lamps ()
+  "PC-REMAKE : déclare TOUS les lampadaires du niveau comme sources lumineuses
+   fixes, en lisant directement les entités du BSP. Sans ça les lampes ne
+   s'allument qu'une à une, au fur et à mesure que le jeu fait naître leur
+   acteur quand Jak s'en approche — et le village reste noir devant soi."
+  (dotimes (i 2)
+    (let ((lev (if (zero? i) (-> *level* level0) (-> *level* level1))))
+      (when (and (= (-> lev status) 'active) (nonzero? (-> lev bsp)))
+        (let ((arr (-> lev bsp actors)))
+          (when (nonzero? arr)
+            (dotimes (k (-> arr length))
+              (let ((act (-> arr data k actor)))
+                (when (and (nonzero? act) (= (-> act etype) hutlamp))
+                  ;; point d'émission ≈ 1 m au-dessus de l'ancrage, portée 12 m
+                  (pc-add-static-lamp! (the int act)
+                                       (-> act trans x)
+                                       (+ 4096.0 (-> act trans y))
+                                       (-> act trans z)
+                                       49152.0
+                                       1.0)))))))))
+  (none))
+
 (defmethod init-from-entity! ((this hutlamp) (arg0 entity-actor))
   (set! (-> this root) (new 'process 'trsqv))
   (process-drawable-from-entity! this arg0)
   (initialize-skeleton this *hutlamp-sg* '())
   (set! (-> this pivot) (new 'process 'joint-mod-set-local this 3 #f #t #f))
+  ;; PC-REMAKE : le lampadaire s'enregistre comme source lumineuse FIXE. Une
+  ;; fois posé il le reste, même quand le jeu met son acteur en pause parce que
+  ;; Jak s'est éloigné — sinon les lampes du village s'éteignent une à une dès
+  ;; qu'on leur tourne le dos. Clef = adresse de l'entité, donc pas de doublon.
+  ;; Point d'émission ≈ 1 m au-dessus de la base, portée 18 m.
+  (pc-register-village-lamps)
   (set-period (-> this clock) 900)
   (set! (-> this clock output) (rand-vu))
   (go hutlamp-idle)

@@ -44,6 +44,13 @@
   "process_game_text": true,
   // unpack game count to assets folder
   "process_game_count": true,
+  // PC-REMAKE 14/10 : textures HD fideles calculees ICI, a partir du jeu du joueur
+  // (aucune image du jeu n'est distribuee avec le mod). Un fichier present dans
+  // custom_assets/jak1/texture_replacements reste prioritaire.
+  "pc_faithful_hd_textures": true,
+  // ... et pour les personnages, objets et herbe (faux = textures PS2 d'origine,
+  // le rendu valide)
+  "pc_faithful_hd_models": false,
   // write goal imports for art groups
   "process_art_groups": false,
   // write goal imports for the part group table

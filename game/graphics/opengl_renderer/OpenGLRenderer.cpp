@@ -1,4 +1,10 @@
+#include <algorithm>
+#include <cstdlib>
+#include <unordered_map>
+
 #include "OpenGLRenderer.h"
+
+#include <cmath>
 
 #include "common/goal_constants.h"
 #include "common/log/log.h"
@@ -162,6 +168,29 @@ OpenGLRenderer::OpenGLRenderer(std::shared_ptr<TexturePool> texture_pool,
       break;
     default:
       ASSERT(false);
+  }
+
+  // [QA-TEST 25/08] interrupteur d'enquete : QA_DISABLE="motif1,motif2" eteint
+  // tout renderer dont le nom contient un des motifs (chasse au dessinateur du
+  // decor lointain). Sans la variable, aucun effet.
+  if (const char* dis = getenv("QA_DISABLE")) {
+    std::string spec(dis);
+    for (auto& br : m_bucket_renderers) {
+      if (!br) continue;
+      std::string n = br->name();
+      size_t start = 0;
+      while (start <= spec.size()) {
+        size_t comma = spec.find(',', start);
+        std::string pat = spec.substr(start, comma == std::string::npos ? std::string::npos
+                                                                        : comma - start);
+        if (!pat.empty() && n.find(pat) != std::string::npos) {
+          br->set_enabled(false);
+          lg::warn("[QA-DISABLE] renderer eteint : {}", n);
+        }
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+      }
+    }
   }
 }
 
@@ -927,6 +956,29 @@ Fbo make_fbo(int w, int h, int msaa, bool make_zbuf_and_stencil) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
   }
 
+  // PC-REMAKE 21/09 : G-buffer de normales sur l'attachement 1 du framebuffer
+  // principal. Il n'est PAS dans la liste de dessin par defaut (glDrawBuffers(1)) :
+  // les renderers PS2 emules n'ecrivent que la sortie 0, et une sortie non
+  // ecrite serait indefinie. Les renderers qui ont une normale (tfrag, tie,
+  // merc) l'activent le temps de leurs draws (pc_normal_target).
+  if (make_zbuf_and_stencil) {
+    GLuint ntex;
+    glGenTextures(1, &ntex);
+    result.normal_tex_id = ntex;
+    if (use_multisample) {
+      glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, ntex);
+      glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, msaa, GL_RGBA8, w, h, GL_TRUE);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D_MULTISAMPLE, ntex,
+                             0);
+    } else {
+      glBindTexture(GL_TEXTURE_2D, ntex);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, ntex, 0);
+    }
+  }
+
   GLenum render_targets[1] = {GL_COLOR_ATTACHMENT0};
   glDrawBuffers(1, render_targets);
   auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -981,7 +1033,191 @@ void OpenGLRenderer::blit_display(ScopedProfilerNode& prof) {
 /*!
  * Main render function. This is called from the gfx loop with the chain passed from the game.
  */
-void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
+namespace {
+// PC-REMAKE: colour target used to replay the post pass for screenshots.
+struct PostCapture {
+  GLuint fbo = 0;
+  GLuint tex = 0;
+  int w = 0, h = 0;
+  void ensure(int width, int height) {
+    if (fbo && w == width && h == height) {
+      return;
+    }
+    if (fbo) {
+      glDeleteFramebuffers(1, &fbo);
+      glDeleteTextures(1, &tex);
+    }
+    w = width;
+    h = height;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+};
+PostCapture g_post_capture;
+}  // namespace
+
+// PC-REMAKE 14/10 : SONDE [QA-PROF] (passe d'optimisation). `touch /tmp/qa_prof`
+// -> glFinish apres chaque bucket (temps GPU reel de chaque etape) et, toutes les
+// 240 images, le cout moyen des 30 noeuds les plus chers dans le journal. Inerte
+// sans le fichier (un stat() toutes les 60 images).
+namespace {
+bool g_qa_prof = false;
+int g_qa_prof_poll = 0;
+int g_qa_prof_frames = 0;
+std::unordered_map<std::string, std::pair<double, u32>> g_qa_prof_acc;  // ms, draws
+void qa_prof_walk(const ProfilerNode& n, const std::string& path, int depth) {
+  auto& e = g_qa_prof_acc[path];
+  e.first += n.stats().duration * 1000.0;
+  e.second += n.stats().draw_calls;
+  if (depth < 4) {
+    for (const auto& c : n.children()) {
+      qa_prof_walk(c, path + "/" + c.name(), depth + 1);
+    }
+  }
+}
+// PC-REMAKE 14/10 : SONDE [QA-GPU] — temps GPU REEL de chaque bucket et du post par
+// requetes GL_TIME_ELAPSED (lues 4 images plus tard : aucun blocage, aucune
+// serialisation, contrairement a [QA-PROF]). `touch /tmp/qa_gpu`.
+struct QaGpuTimer {
+  static constexpr int kRing = 4;
+  static constexpr int kSlots = 96;
+  GLuint q[kRing][kSlots] = {};
+  bool used[kRing][kSlots] = {};
+  std::string names[kSlots];
+  double acc[kSlots] = {};
+  bool init = false;
+  bool active = false;
+  bool open = false;
+  int ring = 0;
+  int poll = 0;
+  int frames = 0;
+  void begin_frame() {
+    if ((poll++ % 60) == 0) {
+      active = fs::exists("/tmp/qa_gpu");
+    }
+    if (!active) {
+      return;
+    }
+    if (!init) {
+      glGenQueries(kRing * kSlots, &q[0][0]);
+      init = true;
+    }
+    // la tranche du ring qu'on va reecrire a ete emise il y a kRing images
+    for (int i = 0; i < kSlots; i++) {
+      if (!used[ring][i]) {
+        continue;
+      }
+      GLuint64 ns = 0;
+      glGetQueryObjectui64v(q[ring][i], GL_QUERY_RESULT, &ns);
+      acc[i] += ns * 1e-6;
+      used[ring][i] = false;
+    }
+  }
+  void begin(int slot, const std::string& name) {
+    if (!active || open || slot < 0 || slot >= kSlots) {
+      return;
+    }
+    names[slot] = name;
+    glBeginQuery(GL_TIME_ELAPSED, q[ring][slot]);
+    used[ring][slot] = true;
+    open = true;
+  }
+  void end() {
+    if (open) {
+      glEndQuery(GL_TIME_ELAPSED);
+      open = false;
+    }
+  }
+  void end_frame() {
+    if (!active) {
+      return;
+    }
+    ring = (ring + 1) % kRing;
+    if (++frames >= 240 + kRing) {
+      std::vector<std::pair<double, int>> v;
+      double total = 0;
+      for (int i = 0; i < kSlots; i++) {
+        if (acc[i] > 0) {
+          v.push_back({acc[i], i});
+          total += acc[i];
+        }
+      }
+      std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+      const int n = 240;
+      std::string out =
+          fmt::format("[QA-GPU] temps GPU moyen sur {} images : total {:.3f} ms\n", n, total / n);
+      for (size_t k = 0; k < v.size() && k < 24; k++) {
+        out += fmt::format("  {:7.3f} ms  {}\n", v[k].first / n, names[v[k].second]);
+      }
+      lg::warn("{}", out);
+      for (auto& a : acc) {
+        a = 0;
+      }
+      frames = kRing;
+    }
+  }
+};
+QaGpuTimer g_qa_gpu;
+}  // namespace
+// [QA-GPU] 14/10 : decoupe le temps du bucket en cours en segments nommes (appelable
+// depuis les renderers : la requete ouverte est fermee, une nouvelle commence)
+void qa_gpu_split(int slot, const char* name) {
+  if (!g_qa_gpu.active || !g_qa_gpu.open) {
+    return;
+  }
+  g_qa_gpu.end();
+  g_qa_gpu.begin(slot, name);
+}
+// [QA-GLERR] 14/10 : glGetError apres chaque grande etape de l'image (appelable aussi
+// depuis les renderers : qa_glerr_check("...") ne coute rien sans /tmp/qa_glerr)
+bool g_qa_glerr = false;
+int g_qa_glerr_logged = 0;
+void qa_glerr_check(const char* where) {
+  if (!g_qa_glerr) {
+    return;
+  }
+  GLenum e = glGetError();
+  if (e != GL_NO_ERROR && g_qa_glerr_logged < 60) {
+    g_qa_glerr_logged++;
+    lg::warn("[QA-GLERR] 0x{:x} dans {}", (int)e, where);
+  }
+}
+namespace {
+}  // namespace
+
+void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings_in) {
+  {
+    static int poll = 0;
+    if ((poll++ % 60) == 0) {
+      g_qa_glerr = fs::exists("/tmp/qa_glerr");
+    }
+  }
+  qa_glerr_check("hors rendu (image precedente : ImGui, swap, capture...)");
+  g_qa_gpu.begin_frame();
+  // /tmp/qa_prof_cpu : meme releve SANS glFinish = temps PROCESSEUR de soumission
+  static bool qa_prof_cpu = false;
+  if ((g_qa_prof_poll++ % 60) == 0) {
+    qa_prof_cpu = fs::exists("/tmp/qa_prof_cpu");
+    g_qa_prof = qa_prof_cpu || fs::exists("/tmp/qa_prof");
+  }
+  RenderOptions settings_copy;
+  const RenderOptions* settings_ptr = &settings_in;
+  if (g_qa_prof && !qa_prof_cpu && !settings_in.gpu_sync) {
+    settings_copy = settings_in;
+    settings_copy.gpu_sync = true;
+    settings_ptr = &settings_copy;
+  }
+  const RenderOptions& settings = *settings_ptr;
+  pc_remake_lamps_begin_frame();  // PC-REMAKE: publish the lamps GOAL registered
   m_profiler.clear();
   m_render_state.reset();
   m_render_state.ee_main_memory = g_ee_main_mem;
@@ -990,7 +1226,10 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
   {
     g_current_renderer = "frame-setup";
     auto prof = m_profiler.root()->make_scoped_child("frame-setup");
+    g_qa_gpu.begin(90, "frame-setup");
     setup_frame(settings);
+    g_qa_gpu.end();
+    qa_glerr_check("frame-setup");
     if (settings.gpu_sync) {
       glFinish();
     }
@@ -1006,12 +1245,20 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
     } else {
       m_render_state.loader->update(*m_render_state.texture_pool);
     }
+    qa_glerr_check("loader");
   }
 
   // render the buckets!
   {
     auto prof = m_profiler.root()->make_scoped_child("buckets");
     dispatch_buckets(dma, prof, settings.gpu_sync);
+    // 14/10 : passe d'ombres du soleil DIFFEREE, en une seule bascule (voir
+    // SunShadowMap::flush_deferred) — avant le post, apres tous les casteurs
+    {
+      auto sp = prof.make_scoped_child("ombres-differees");
+      g_sun_shadow.flush_deferred(&m_render_state.shaders, m_render_state.frame_idx);
+      qa_glerr_check("passe d'ombres differee");
+    }
     if (m_texture_animator) {
       // if animation requests weren't made, assume the level is unloaded and the textures should
       // reset.
@@ -1031,8 +1278,11 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
   {
     g_current_renderer = "pcrtc";
     auto prof = m_profiler.root()->make_scoped_child("pcrtc");
+    qa_glerr_check("buckets / blit-display");
     do_pcrtc_effects(settings.pmode_alp_register, settings.brightness_contrast_color,
                      settings.brightness_contrast_alpha, &m_render_state, prof);
+    qa_glerr_check("pcrtc (post)");
+    g_qa_gpu.end_frame();
     if (settings.gpu_sync) {
       glFinish();
     }
@@ -1061,6 +1311,16 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
       x = 0;
       y = 0;
       fbo_id = screenshot_src->fbo_id;
+      // PC-REMAKE: that buffer holds the raw scene, BEFORE the post pass — so a
+      // screenshot taken from it shows none of the lighting, bloom, fog or
+      // tonemap the player actually sees. Replay the post pass into an
+      // offscreen colour buffer and capture that instead.
+      g_post_capture.ensure(w, h);
+      do_pcrtc_effects(settings.pmode_alp_register, settings.brightness_contrast_color,
+                       settings.brightness_contrast_alpha, &m_render_state, prof,
+                       g_post_capture.fbo, w, h);
+      fbo_id = g_post_capture.fbo;
+      read_buffer = GL_COLOR_ATTACHMENT0;
     } else {
       read_buffer = GL_BACK;
       w = settings.draw_region_width;
@@ -1090,6 +1350,24 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings) {
   }
 
   m_profiler.finish();
+  if (g_qa_prof) {
+    qa_prof_walk(*m_profiler.root(), "frame", 0);
+    if (++g_qa_prof_frames >= 240) {
+      std::vector<std::pair<std::string, std::pair<double, u32>>> v(g_qa_prof_acc.begin(),
+                                                                     g_qa_prof_acc.end());
+      std::sort(v.begin(), v.end(),
+                [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
+      std::string out = fmt::format("[QA-PROF] moyenne sur {} images (glFinish par bucket)\n",
+                                    g_qa_prof_frames);
+      for (size_t i = 0; i < v.size() && i < 30; i++) {
+        out += fmt::format("  {:7.3f} ms {:6.1f} draws  {}\n", v[i].second.first / g_qa_prof_frames,
+                           double(v[i].second.second) / g_qa_prof_frames, v[i].first);
+      }
+      lg::warn("{}", out);
+      g_qa_prof_acc.clear();
+      g_qa_prof_frames = 0;
+    }
+  }
   //  if (m_profiler.root_time() > 0.018) {
   //    fmt::print("Slow frame: {:.2f} ms\n", m_profiler.root_time() * 1000);
   //    fmt::print("{}\n", m_profiler.to_string());
@@ -1258,6 +1536,17 @@ void OpenGLRenderer::setup_frame(const RenderOptions& settings) {
     // Note: could rely on sky renderer to clear depth and color, but this causes problems with
     // letterboxing
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    // PC-REMAKE 21/09 : le G-buffer de normales s'efface a 0 (alpha 0 = « pas de
+    // normale ici », le post retombe alors sur sa reconstruction par profondeur)
+    g_pc_normal_target_ok = m_fbo_state.render_fbo->normal_tex_id.has_value();
+    if (g_pc_normal_target_ok) {
+      const GLenum both[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+      glDrawBuffers(2, both);
+      const float zeros[4] = {0.f, 0.f, 0.f, 0.f};
+      glClearBufferfv(GL_COLOR, 1, zeros);
+      const GLenum one[1] = {GL_COLOR_ATTACHMENT0};
+      glDrawBuffers(1, one);
+    }
     glDisable(GL_BLEND);
     m_render_state.stencil_dirty = false;
   }
@@ -1288,12 +1577,74 @@ void OpenGLRenderer::setup_frame(const RenderOptions& settings) {
   glViewport(0, 0, settings.game_res_w, settings.game_res_h);
 }
 
+// PC-REMAKE 22/09 : instantane de la scene AVANT les sprites 2D / HUD / textes
+// (voir pc_prehud_snapshot) — le post (reflets d'eau, rayons) lit cette copie
+// pour ne pas refleter les informations a l'ecran.
+void pc_prehud_snapshot(GLuint src_fbo, int w, int h, bool multisampled);
+GLuint pc_prehud_texture();
+// PC-REMAKE 12/10 : bloom large (source prise par Sprite3 avant le HUD)
+GLuint pc_bloom_run(GameVersion version,
+                    bool has_depth,
+                    bool has_normals,
+                    bool reload,
+                    u64 frame_idx);
+GLuint pc_hud_ref_texture();
+
 void OpenGLRenderer::dispatch_buckets_jak1(DmaFollower dma,
                                            ScopedProfilerNode& prof,
                                            bool sync_after_buckets) {
   // The first thing the DMA chain should be a call to a common default-registers chain.
   // this chain resets the state of the GS. After this is buckets
   m_category_times.fill(0);
+
+  // [QA] 13/10 : meme interrupteur que QA_DISABLE, mais A CHAUD — le contenu de
+  // /tmp/qa_disable (motifs separes par des virgules) eteint les renderers dont le
+  // nom contient un motif ; fichier absent = tous allumes. Inerte sans le fichier.
+  {
+    static int qa_dis_poll = 0;
+    static std::string qa_dis_spec = "\x01";
+    if ((qa_dis_poll++ % 30) == 0) {
+      std::string spec;
+      if (FILE* f = fopen("/tmp/qa_disable", "r")) {
+        char buf[512] = {};
+        size_t nread = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        spec.assign(buf, nread);
+        while (!spec.empty() && (spec.back() == '\n' || spec.back() == ' ')) {
+          spec.pop_back();
+        }
+      }
+      if (spec != qa_dis_spec && !(qa_dis_spec == "\x01" && spec.empty())) {
+        qa_dis_spec = spec;
+        for (auto& br : m_bucket_renderers) {
+          if (!br) {
+            continue;
+          }
+          const std::string n = br->name();
+          bool off = false;
+          size_t start = 0;
+          while (start <= spec.size() && !spec.empty()) {
+            size_t comma = spec.find(',', start);
+            std::string pat = spec.substr(
+                start, comma == std::string::npos ? std::string::npos : comma - start);
+            if (!pat.empty() && n.find(pat) != std::string::npos) {
+              off = true;
+            }
+            if (comma == std::string::npos) {
+              break;
+            }
+            start = comma + 1;
+          }
+          br->set_enabled(!off);
+          if (off) {
+            lg::warn("[QA-DISABLE] a chaud : {}", n);
+          }
+        }
+      } else if (qa_dis_spec == "\x01") {
+        qa_dis_spec = spec;
+      }
+    }
+  }
 
   m_render_state.buckets_base =
       dma.current_tag_offset() + 16;  // offset by 1 qw for the initial call
@@ -1324,12 +1675,45 @@ void OpenGLRenderer::dispatch_buckets_jak1(DmaFollower dma,
   m_render_state.next_bucket += 16;
 
   // loop over the buckets!
+  bool prehud_done = false;
   for (size_t bucket_id = 0; bucket_id < m_bucket_renderers.size(); bucket_id++) {
     auto& renderer = m_bucket_renderers[bucket_id];
     auto bucket_prof = prof.make_scoped_child(renderer->name_and_id());
     g_current_renderer = renderer->name_and_id();
+    // PC-REMAKE 22/09 : juste avant le bucket des sprites (particules 3D + HUD 2D,
+    // suivi des textes), on copie la scene pour le post (reflets sans HUD)
+    if (!prehud_done && m_bucket_categories[bucket_id] == BucketCategory::SPRITE &&
+        m_fbo_state.render_fbo) {
+      prehud_done = true;
+      pc_prehud_snapshot(m_fbo_state.render_fbo->fbo_id, m_fbo_state.render_fbo->width,
+                         m_fbo_state.render_fbo->height, m_fbo_state.render_fbo->multisampled);
+    }
     // lg::info("Render: {} start", g_current_renderer);
+    // [QA-GLERR] 14/10 : `touch /tmp/qa_glerr` -> glGetError apres chaque bucket ; les
+    // 40 premieres erreurs sont journalisees avec le bucket fautif (inerte sinon).
+    static bool qa_glerr = false;
+    static int qa_glerr_poll = 0, qa_glerr_logged = 0;
+    if (bucket_id == 0 && (qa_glerr_poll++ % 60) == 0) {
+      qa_glerr = fs::exists("/tmp/qa_glerr");
+      if (qa_glerr) {
+        GLenum e0 = glGetError();
+        if (e0 != GL_NO_ERROR && qa_glerr_logged < 40) {
+          qa_glerr_logged++;
+          lg::warn("[QA-GLERR] 0x{:x} AVANT les buckets (frame-setup / loader / image precedente)",
+                   (int)e0);
+        }
+      }
+    }
+    g_qa_gpu.begin((int)bucket_id, renderer->name_and_id());
     renderer->render(dma, &m_render_state, bucket_prof);
+    g_qa_gpu.end();
+    if (qa_glerr) {
+      GLenum e = glGetError();
+      if (e != GL_NO_ERROR && qa_glerr_logged < 40) {
+        qa_glerr_logged++;
+        lg::warn("[QA-GLERR] 0x{:x} dans {}", (int)e, renderer->name_and_id());
+      }
+    }
     if (sync_after_buckets) {
       auto pp = scoped_prof("finish");
       glFinish();
@@ -1614,12 +1998,468 @@ void OpenGLRenderer::finish_screenshot(const std::string& output_name,
   glBindFramebuffer(GL_READ_FRAMEBUFFER, oldbuf);
 }
 
+// PC-REMAKE: defined in background/background_common.cpp
+extern float g_post_fx[4];
+extern float g_toon_fx[4];
+extern float g_depth_fx[4];
+extern float g_light_fx[4];
+extern float g_grade_fx[4];
+extern float g_grade_amt2[4];
+extern float g_sky_color[4];
+extern float g_ground_color[4];
+extern float g_sun_shadow_params[4];
+extern float g_night_fx[4];
+
+// PC-REMAKE: lazily-created FBO holding a resolved (non-MSAA) copy of the
+// scene depth, sampled by the post shader for SSAO / aerial fog / DOF.
+namespace {
+// PC-REMAKE 21/09 : resolution (MSAA -> simple) du G-buffer de normales pour le post
+struct NormalResolve {
+  GLuint fbo = 0;
+  GLuint tex = 0;
+  int w = 0, h = 0;
+  void ensure(int width, int height) {
+    if (fbo && w == width && h == height) {
+      return;
+    }
+    if (fbo) {
+      glDeleteFramebuffers(1, &fbo);
+      glDeleteTextures(1, &tex);
+    }
+    w = width;
+    h = height;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+};
+NormalResolve g_normal_resolve;
+// PC-REMAKE 22/09 : copie de la scene avant HUD (meme mecanique que les normales)
+NormalResolve g_prehud_resolve;
+bool g_prehud_valid = false;
+}  // namespace
+// [QA-COPIES] 14/10 : temps PROCESSEUR des copies d'image de l'etape des sprites
+struct QaCopies {
+  double t[3] = {};
+  int n = 0;
+};
+QaCopies g_qa_copies;
+double g_qa_copies_depth_ms = 0;
+void qa_copies_tick() {
+  if (++g_qa_copies.n == 900) {
+    lg::info("[QA-COPIES] ms/image CPU : avant sprites {:.3f} | G-buffer HUD {:.3f} (dont "
+             "profondeur {:.3f}) | avant HUD {:.3f}",
+             g_qa_copies.t[0] / 900, g_qa_copies.t[1] / 900, g_qa_copies_depth_ms / 900,
+             g_qa_copies.t[2] / 900);
+    g_qa_copies = {};
+    g_qa_copies_depth_ms = 0;
+  }
+}
+void pc_prehud_snapshot(GLuint src_fbo, int w, int h, bool multisampled) {
+  (void)multisampled;
+  Timer qa_t;
+  g_prehud_resolve.ensure(w, h);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_prehud_resolve.fbo);
+  glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  qa_glerr_check("copie avant sprites (pc_prehud_snapshot)");
+  glBindFramebuffer(GL_FRAMEBUFFER, src_fbo);
+  g_prehud_valid = true;
+  g_qa_copies.t[0] += qa_t.getMs();
+  qa_copies_tick();
+}
+GLuint pc_prehud_texture() {
+  return g_prehud_valid ? g_prehud_resolve.tex : 0;
+}
+
+// ===================================================================
+// PC-REMAKE 12/10 : BLOOM LARGE (« rendu remake » — sur les images de reference,
+// le portail, les spirales vertes, la lave rayonnent d'un grand halo
+// doux ; notre bloom d'origine ne portait qu'a 6-14 pixels). Chaine de mips
+// 1/2 -> 1/32 : reduction 13 points (tri de ce qui rayonne + Karis au premier
+// niveau), remontee en tente additive. Source : la scene APRES les particules du
+// monde et AVANT les sprites du HUD (Sprite3::render_jak1) — le HUD et les textes
+// ne rayonnent jamais. Dose = curseur Bloom du menu Remake (0 = coupe).
+// A/B : `touch /tmp/qa_no_widebloom` le coupe a chaud.
+// ===================================================================
+namespace {
+struct BloomTarget {
+  GLuint fbo = 0;
+  GLuint tex = 0;
+  int w = 0;
+  int h = 0;
+};
+constexpr int kBloomLevels = 5;
+BloomTarget g_bloom_src;
+BloomTarget g_bloom_lv[kBloomLevels];
+bool g_bloom_src_fresh = false;
+int g_bloom_age = 1000;  // images depuis le dernier resultat calcule
+u64 g_bloom_frame = ~0ull;  // image du dernier calcul (la capture d'ecran rejoue le post)
+
+void bloom_ensure(BloomTarget& b, int w, int h, bool hdr) {
+  if (b.tex && b.w == w && b.h == h) {
+    return;
+  }
+  if (b.tex) {
+    glDeleteTextures(1, &b.tex);
+    glDeleteFramebuffers(1, &b.fbo);
+  }
+  b.w = w;
+  b.h = h;
+  glGenTextures(1, &b.tex);
+  glBindTexture(GL_TEXTURE_2D, b.tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, hdr ? GL_RGBA16F : GL_RGBA8, w, h, 0, GL_RGBA,
+               hdr ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenFramebuffers(1, &b.fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, b.fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, b.tex, 0);
+  GLenum db = GL_COLOR_ATTACHMENT0;
+  glDrawBuffers(1, &db);
+}
+
+bool bloom_off_by_file() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ & 31) == 0) {
+    off = fs::exists("/tmp/qa_no_widebloom");
+  }
+  return off;
+}
+}  // namespace
+
+// Appele par Sprite3 juste avant les sprites du HUD : copie de la scene (resout le
+// MSAA). Etat GL rendu tel quel (FBO, texture liee, ciseaux).
+extern bool g_pc_normal_target_ok;
+// 13/10 : profondeur + normales de la scene SANS le HUD (defini plus bas)
+void pc_hud_gbuffer_capture(GLuint src_fbo, int w, int h);
+
+void pc_bloom_snapshot(GLuint src_fbo, int w, int h) {
+  if (w > 0 && h > 0) {
+    pc_hud_gbuffer_capture(src_fbo, w, h);
+  }
+  if (w <= 0 || h <= 0 || bloom_off_by_file()) {
+    return;
+  }
+  Timer qa_t;
+  GLint prev_draw = 0, prev_read = 0, prev_tex = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  bloom_ensure(g_bloom_src, w, h, false);
+  glBindTexture(GL_TEXTURE_2D, prev_tex);
+  if (scissor) {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_bloom_src.fbo);
+  glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  qa_glerr_check("copie avant HUD (pc_bloom_snapshot)");
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw);
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+  g_bloom_src_fresh = true;
+  g_qa_copies.t[2] += qa_t.getMs();
+}
+
+// Scene sans HUD de CETTE image (0 si les sprites n'ont pas tourne : menu pause,
+// chargement — une reference perimee ferait passer tout le decor pour du HUD).
+GLuint pc_hud_ref_texture() {
+  return (g_bloom_age == 0 && g_bloom_src.tex) ? g_bloom_src.tex : 0;
+}
+
+// Calcule la chaine et rend la texture du bloom (niveau 1/2), ou 0. A appeler dans
+// le post, profondeur deja liee sur l'unite 15 et normales sur la 13, VAO plein
+// ecran lie. Programme, FBO, viewport, ciseaux et melange sont restaures ; la
+// texture liee a l'unite 0 ne l'est PAS (l'appelant la relie).
+GLuint pc_bloom_run(GameVersion version,
+                    bool has_depth,
+                    bool has_normals,
+                    bool reload,
+                    u64 frame_idx) {
+  static Shader* s_down = nullptr;
+  static Shader* s_up = nullptr;
+  if (reload || !s_down) {
+    delete s_down;
+    delete s_up;
+    s_down = new Shader("bloom_down", version);
+    s_up = new Shader("bloom_up", version);
+  }
+  if (!s_down->okay() || !s_up->okay() || bloom_off_by_file()) {
+    g_bloom_age = 1000;
+    return 0;
+  }
+  if (!g_bloom_src_fresh) {
+    // meme image rejouee (capture d'ecran) : resultat ET reference HUD valides
+    if (g_bloom_frame == frame_idx && g_bloom_age == 0 && g_bloom_lv[0].tex) {
+      return g_bloom_lv[0].tex;
+    }
+    // image sans sprites (chargement...) : on garde le dernier resultat un instant
+    g_bloom_age++;
+    return (g_bloom_age < 8 && g_bloom_lv[0].tex) ? g_bloom_lv[0].tex : 0;
+  }
+  g_bloom_src_fresh = false;
+  g_bloom_age = 0;
+  g_bloom_frame = frame_idx;
+
+  GLint vp[4];
+  glGetIntegerv(GL_VIEWPORT, vp);
+  GLint prev_fbo = 0, prev_prog = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+  GLint bsrc = 0, bdst = 0, beq = 0;
+  glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc);
+  glGetIntegerv(GL_BLEND_DST_RGB, &bdst);
+  glGetIntegerv(GL_BLEND_EQUATION_RGB, &beq);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  if (scissor) {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  glDisable(GL_BLEND);
+  glActiveTexture(GL_TEXTURE0);
+
+  const int w = std::max(1, g_bloom_src.w / 2);
+  const int h = std::max(1, g_bloom_src.h / 2);
+  for (int i = 0; i < kBloomLevels; i++) {
+    bloom_ensure(g_bloom_lv[i], std::max(1, w >> i), std::max(1, h >> i), true);
+  }
+
+  // 1. reduction (le premier niveau trie ce qui rayonne)
+  s_down->activate();
+  const GLuint pd = s_down->id();
+  glUniform1i(glGetUniformLocation(pd, "src_tex"), 0);
+  glUniform1i(glGetUniformLocation(pd, "depth_tex"), 15);
+  glUniform1i(glGetUniformLocation(pd, "normal_tex"), 13);
+  glUniform1i(glGetUniformLocation(pd, "pre_tex"), 12);
+  const float has_pre = pc_prehud_texture() ? 1.f : 0.f;  // lie sur l'unite 12 par le post
+  const BloomTarget* src = &g_bloom_src;
+  for (int i = 0; i < kBloomLevels; i++) {
+    const BloomTarget& dst = g_bloom_lv[i];
+    glBindFramebuffer(GL_FRAMEBUFFER, dst.fbo);
+    glViewport(0, 0, dst.w, dst.h);
+    glBindTexture(GL_TEXTURE_2D, src->tex);
+    glUniform4f(glGetUniformLocation(pd, "bloom_p"), i == 0 ? 1.f : 0.f, has_depth ? 1.f : 0.f,
+                has_normals ? 1.f : 0.f, has_pre);
+    glUniform2f(glGetUniformLocation(pd, "src_texel"), 1.f / src->w, 1.f / src->h);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    src = &dst;
+  }
+
+  // 2. remontee : chaque niveau s'ajoute au niveau plus grand
+  s_up->activate();
+  const GLuint pu = s_up->id();
+  glUniform1i(glGetUniformLocation(pu, "src_tex"), 0);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_ONE, GL_ONE);
+  glBlendEquation(GL_FUNC_ADD);
+  for (int i = kBloomLevels - 1; i > 0; i--) {
+    const BloomTarget& s = g_bloom_lv[i];
+    const BloomTarget& d = g_bloom_lv[i - 1];
+    glBindFramebuffer(GL_FRAMEBUFFER, d.fbo);
+    glViewport(0, 0, d.w, d.h);
+    glBindTexture(GL_TEXTURE_2D, s.tex);
+    glUniform2f(glGetUniformLocation(pu, "src_texel"), 1.f / s.w, 1.f / s.h);
+    glUniform1f(glGetUniformLocation(pu, "up_weight"), 1.f);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  }
+
+  // 3. etat rendu a l'appelant
+  glBlendFunc(bsrc, bdst);
+  glBlendEquation(beq);
+  if (!blend) {
+    glDisable(GL_BLEND);
+  }
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+  glViewport(vp[0], vp[1], vp[2], vp[3]);
+  glUseProgram(prev_prog);
+  return g_bloom_lv[0].tex;
+}
+namespace {
+
+struct DepthResolve {
+  GLuint fbo = 0;
+  GLuint tex = 0;
+  int w = 0, h = 0;
+  void ensure(int width, int height) {
+    if (fbo && w == width && h == height) {
+      return;
+    }
+    if (fbo) {
+      glDeleteFramebuffers(1, &fbo);
+      glDeleteTextures(1, &tex);
+    }
+    w = width;
+    h = height;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    // MUST match the render FBO's depth format exactly (GL_DEPTH24_STENCIL8):
+    // glBlitFramebuffer refuses a depth blit between different depth formats,
+    // and it fails silently, leaving this texture cleared to zero.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL,
+                 GL_UNSIGNED_INT_24_8, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, tex, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+};
+DepthResolve g_depth_resolve;
+// 13/10 (textes affiches dans un rectangle transparent) : les
+// quads des textes et du HUD ecrivent la PROFONDEUR (et laissent les normales du
+// G-buffer indefinies) sur tout leur rectangle. Le post, qui lit profondeur et
+// normales APRES le HUD, traitait ce rectangle comme une surface collee a la
+// camera : autre eclairage, autre brume -> un cadre visible autour de chaque
+// texte. Copie prise JUSTE AVANT les sprites du HUD (Sprite3), utilisee par le
+// post a la place.
+DepthResolve g_hud_depth;
+NormalResolve g_hud_normal;
+bool g_hud_gbuf_pending = false;
+bool g_hud_gbuf_has_normals = false;
+u64 g_hud_gbuf_frame = ~0ull;
+}  // namespace
+
+void pc_hud_gbuffer_capture(GLuint src_fbo, int w, int h) {
+  Timer qa_t;
+  GLint prev_draw = 0, prev_read = 0, prev_tex = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  if (scissor) {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  qa_glerr_check("avant capture G-buffer HUD (sprites 3D)");
+  g_hud_depth.ensure(w, h);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_hud_depth.fbo);
+  {
+    // PERF 14/10 : PROFONDEUR SEULE — le post ne lit jamais le stencil de cette copie,
+    // et le pilote Apple fait la copie profondeur+stencil d'un tampon MSAA par un
+    // chemin lent (0,88 ms de processeur par image contre 0,25 ms, mesure au village).
+    // (original : GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
+    // `touch /tmp/qa_depth_stencil` = ancien chemin (A/B).
+    static bool depth_only = true;
+    static int poll = 0;
+    if ((poll++ % 64) == 0) {
+      depth_only = !fs::exists("/tmp/qa_depth_stencil");
+    }
+    Timer qa_d;
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h,
+                      depth_only ? GL_DEPTH_BUFFER_BIT : (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT),
+                      GL_NEAREST);
+    g_qa_copies_depth_ms += qa_d.getMs();
+  }
+  qa_glerr_check("copie profondeur avant HUD");
+  g_hud_gbuf_has_normals = g_pc_normal_target_ok;
+  if (g_hud_gbuf_has_normals) {
+    g_hud_normal.ensure(w, h);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_hud_normal.fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    qa_glerr_check("copie normales avant HUD");
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+  }
+  glBindTexture(GL_TEXTURE_2D, prev_tex);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw);
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+  g_hud_gbuf_pending = true;
+  g_qa_copies.t[1] += qa_t.getMs();
+}
+
+// PERF 14/10 : POST EN DEUX PASSES (voir post_processing.frag, POST_PASS1/2). Chaque
+// reglage du post est envoye au programme courant ET, en mode scinde, au programme de
+// la 2e passe (glProgramUniform, GL 4.1). `touch /tmp/qa_post_single` = passe unique
+// d'origine (A/B).
+namespace {
+GLuint g_post_prog_a = 0;  // programme qui recoit les reglages (passe unique ou passe 1)
+GLuint g_post_prog_b = 0;  // passe 2 (0 = pas de passe 2)
+Shader g_post_p1, g_post_p2;
+bool g_post_split_built = false;
+GLuint g_lit_fbo = 0, g_lit_tex = 0;
+int g_lit_w = 0, g_lit_h = 0;
+void ensure_lit_target(int w, int h) {
+  if (g_lit_fbo && g_lit_w == w && g_lit_h == h) {
+    return;
+  }
+  if (g_lit_fbo) {
+    glDeleteFramebuffers(1, &g_lit_fbo);
+    glDeleteTextures(1, &g_lit_tex);
+  }
+  g_lit_w = w;
+  g_lit_h = h;
+  GLint prev_tex = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+  glGenTextures(1, &g_lit_tex);
+  glBindTexture(GL_TEXTURE_2D, g_lit_tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, prev_tex);
+  GLint prev_fbo = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+  glGenFramebuffers(1, &g_lit_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_lit_fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_lit_tex, 0);
+  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+}
+}  // namespace
+#define POST_U(suffix, name, ...)                                                   \
+  do {                                                                              \
+    glProgramUniform##suffix(g_post_prog_a, pc_uniform_loc(g_post_prog_a, name),    \
+                             __VA_ARGS__);                                          \
+    if (g_post_prog_b) {                                                            \
+      glProgramUniform##suffix(g_post_prog_b, pc_uniform_loc(g_post_prog_b, name),  \
+                               __VA_ARGS__);                                        \
+    }                                                                               \
+  } while (0)
+
 void OpenGLRenderer::do_pcrtc_effects(float alp,
                                       int brightness_contrast_color,
                                       int brightness_contrast_alpha,
                                       SharedRenderState* render_state,
-                                      ScopedProfilerNode& prof) {
+                                      ScopedProfilerNode& prof,
+                                      unsigned int dst_fbo,
+                                      int vp_w,
+                                      int vp_h) {
   Fbo* window_blit_src = nullptr;
+  // [QA-GPU] 14/10 : sous-passes du post (seulement la passe ecran, pas la capture)
+  const bool qa_gpu_here = dst_fbo == 0;
+  if (qa_gpu_here) {
+    g_qa_gpu.begin(84, "post: setup + resolution MSAA couleur");
+  }
   if (m_fbo_state.resources.resolve_buffer.valid) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_state.render_fbo->fbo_id);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_fbo_state.resources.resolve_buffer.fbo_id);
@@ -1641,37 +2481,600 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
 
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_BLEND);
-  glViewport(render_state->draw_offset_x, render_state->draw_offset_y, render_state->draw_region_w,
-             render_state->draw_region_h);
+  // PERF 25/08 : le post rendait TOUJOURS a la resolution de la FENETRE (8,4
+  // Mpx retina) — la resolution interne n'y changeait rien. Quand le jeu rend
+  // plus petit que la zone d'affichage, le post rend desormais dans un FBO a la
+  // resolution du JEU puis un blit lineaire (quasi gratuit) monte vers la
+  // fenetre. A resolution native : chemin d'origine strictement inchange.
+  static Fbo s_post_fbo;
+  const int post_game_w = m_fbo_state.render_fbo->width;
+  const int post_game_h = m_fbo_state.render_fbo->height;
+  const bool use_post_fbo =
+      (vp_w <= 0 && vp_h <= 0 && post_game_w < render_state->draw_region_w);
+  if (use_post_fbo && !s_post_fbo.matches(post_game_w, post_game_h, 1)) {
+    s_post_fbo.clear();
+    s_post_fbo = make_fbo(post_game_w, post_game_h, 1, false);
+  }
+  const GLuint post_target = use_post_fbo ? s_post_fbo.fbo_id : dst_fbo;
+  if (use_post_fbo) {
+    glViewport(0, 0, post_game_w, post_game_h);
+  } else if (vp_w > 0 && vp_h > 0) {
+    glViewport(0, 0, vp_w, vp_h);
+  } else {
+    glViewport(render_state->draw_offset_x, render_state->draw_offset_y,
+               render_state->draw_region_w, render_state->draw_region_h);
+  }
   glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glBindFramebuffer(GL_FRAMEBUFFER, post_target);
 
   glBindVertexArray(screen_vao);
   glBindBuffer(GL_ARRAY_BUFFER, screen_vbo);
 
   float color = (float)brightness_contrast_color / 128.0f;
   float alpha = (float)brightness_contrast_alpha / 128.0f;
-  auto& shader = render_state->shaders[ShaderId::POST_PROCESSING];
+  // [QA] 12/10 (outillage) : rechargement a chaud du post — `touch /tmp/pc_reload_post`
+  // recompile post_processing.frag sans relancer le jeu. Inerte sans le fichier ; un
+  // shader qui ne compile pas laisse l'ancien en place (erreur dans le journal).
+  bool post_reloaded = false;  // 12/10 : les shaders du bloom large suivent
+  {
+    static int s_reload_poll = 0;
+    if (++s_reload_poll >= 30) {
+      s_reload_poll = 0;
+      if (FILE* rf = fopen("/tmp/pc_reload_post", "r")) {
+        fclose(rf);
+        remove("/tmp/pc_reload_post");
+        post_reloaded = true;
+        Shader fresh("post_processing", render_state->version);
+        if (fresh.okay()) {
+          render_state->shaders[ShaderId::POST_PROCESSING] = fresh;
+          lg::info("[QA] post_processing recharge");
+        } else {
+          lg::error("[QA] post_processing : echec de compilation, ancien shader garde");
+        }
+      }
+    }
+  }
+  // 14/10 : programmes de la version en DEUX PASSES (construits une fois, et a chaque
+  // rechargement a chaud du post). Echec de compilation = passe unique d'origine.
+  static bool post_single = false;
+  {
+    static int poll = 0;
+    if ((poll++ % 64) == 0) {
+      post_single = fs::exists("/tmp/qa_post_single");
+    }
+  }
+  if (!g_post_split_built || post_reloaded) {
+    g_post_split_built = true;
+    Shader p1("post_processing", render_state->version, "POST_PASS1");
+    Shader p2("post_processing", render_state->version, "POST_PASS2");
+    if (p1.okay() && p2.okay()) {
+      g_post_p1 = p1;
+      g_post_p2 = p2;
+    } else {
+      lg::error("[QA] post en deux passes : echec de compilation, passe unique");
+      g_post_p1 = Shader();
+      g_post_p2 = Shader();
+    }
+  }
+  const bool post_split = !post_single && g_post_p1.okay() && g_post_p2.okay();
+  // (original : auto& shader = render_state->shaders[ShaderId::POST_PROCESSING];)
+  auto& shader = post_split ? g_post_p1 : render_state->shaders[ShaderId::POST_PROCESSING];
+  g_post_prog_a = shader.id();
+  g_post_prog_b = post_split ? g_post_p2.id() : 0;
   shader.activate();
-  glUniform1i(glGetUniformLocation(shader.id(), "tex_T0"), 0);
+  POST_U(1i, "tex_T0", 0);
   if (brightness_contrast_color < 0) {
     // subtractive blend - note that color is already negative
     float color_neg = color * alpha;
-    glUniform4f(glGetUniformLocation(shader.id(), "color_mult"), 1.0f, 1.0f, 1.0f, alpha);
-    glUniform4f(glGetUniformLocation(shader.id(), "color_add"), color_neg, color_neg, color_neg,
+    POST_U(4f, "color_mult", 1.0f, 1.0f, 1.0f, alpha);
+    POST_U(4f, "color_add", color_neg, color_neg, color_neg,
                 0.0f);
   } else {
     // additive blend
-    glUniform4f(glGetUniformLocation(shader.id(), "color_mult"), 1.0f, 1.0f, 1.0f, alpha);
-    glUniform4f(glGetUniformLocation(shader.id(), "color_add"), color, color, color, 0.0f);
+    POST_U(4f, "color_mult", 1.0f, 1.0f, 1.0f, alpha);
+    POST_U(4f, "color_add", color, color, color, 0.0f);
+  }
+  // PC-REMAKE: bloom / saturation / warmth, driven from GOAL via pc-set-post-fx!
+  // (storage in background_common.cpp; all values neutral at zero).
+  POST_U(4fv, "post_fx", 1, g_post_fx);
+  POST_U(4fv, "fx_quality", 1, g_fx_quality);
+  POST_U(4fv, "toon_fx", 1, g_toon_fx);
+
+  // PC-REMAKE rebuilt lighting rig: feed the sun's on-screen position (needed
+  // for god rays and for the directional relight) plus the ambient palette.
+  {
+    float sun_screen[4] = {0.5f, 1.2f, 0.f, 0.f};
+    float sx = g_sun_shadow_params[0], sy = g_sun_shadow_params[1],
+          sz = g_sun_shadow_params[2];
+    float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (len > 1e-4f && m_render_state.has_pc_data) {
+      // direction TO the sun (the parameters describe where its light travels)
+      float ux = -sx / len, uy = -sy / len, uz = -sz / len;
+      sun_screen[3] = std::max(0.f, uy);  // altitude: 0 at the horizon, 1 overhead
+      // project a point far along that direction, with the SAME matrix the post
+      // uses to unproject the depth buffer (g_clip_from_world = the PC shaders'
+      // camera). 22/09 : the old code used m_render_state.camera_matrix (the
+      // game's own matrix, not the one the shaders draw with) — sun_screen came
+      // out at (1110, 1122) and the post's sun disc, god rays and flares were
+      // NEVER drawn (sun_screen.z stayed 0).
+      const float kFar = 4096.f * 4000.f;
+      float vx = ux * kFar, vy = uy * kFar, vz = uz * kFar;
+      const float* G = g_clip_from_world;
+      float cx = G[0] * vx + G[4] * vy + G[8] * vz + G[12];
+      float cy = G[1] * vx + G[5] * vy + G[9] * vz + G[13];
+      float cw = G[3] * vx + G[7] * vy + G[11] * vz + G[15];
+      if (cw > 1e-3f) {
+        float ndc_x = cx / cw, ndc_y = cy / cw;
+        sun_screen[0] = ndc_x * 0.5f + 0.5f;
+        sun_screen[1] = ndc_y * 0.5f + 0.5f;
+        bool on_screen = sun_screen[0] > -0.35f && sun_screen[0] < 1.35f &&
+                         sun_screen[1] > -0.35f && sun_screen[1] < 1.35f;
+        sun_screen[2] = on_screen ? 1.f : 0.f;
+      }
+    }
+    // direction TOWARDS the sun, for the deferred N.L pass
+    {
+      float sd[4] = {0.f, 1.f, 0.f, 0.f};
+      if (len > 1e-4f) {
+        sd[0] = -sx / len;
+        sd[1] = -sy / len;
+        sd[2] = -sz / len;
+        sd[3] = sd[1] > 0.02f ? 1.f : 0.f;  // light must travel downwards
+      }
+      POST_U(4fv, "sun_dir", 1, sd);
+    }
+    POST_U(4fv, "light_fx", 1, g_light_fx);
+    POST_U(4fv, "grade_fx", 1, g_grade_fx);
+    POST_U(4fv, "grade_amt2", 1, g_grade_amt2);
+    POST_U(4fv, "sun_screen", 1, sun_screen);
+    POST_U(4fv, "sky_color", 1, g_sky_color);
+    POST_U(4fv, "ground_color", 1, g_ground_color);
+
+    // Inverse of the exact background vertex transform, so the post pass can
+    // rebuild a world position per pixel — what makes local lamps possible.
+    float Ainv[16];
+    if (g_world_from_clip_ok) {
+      for (int i = 0; i < 16; i++) {
+        Ainv[i] = g_world_from_clip[i];
+      }
+    } else {
+      for (int i = 0; i < 16; i++) {
+        Ainv[i] = (i % 5 == 0) ? 1.f : 0.f;
+      }
+    }
+    POST_U(Matrix4fv, "inv_camera", 1, GL_FALSE, Ainv);
+    POST_U(Matrix4fv, "clip_from_world", 1, GL_FALSE,
+                       g_clip_from_world);
+    POST_U(4f, "cam_trans", m_render_state.camera_pos[0],
+                m_render_state.camera_pos[1], m_render_state.camera_pos[2], 0.f);
+
+    // lamps collected this frame, narrowed down to the ones nearest the camera
+    pc_remake_select_lamps(m_render_state.camera_pos.data());
+    int lamp_n_all = pc_remake_lamp_count();
+    // PERF 14/10 : TRI DES LAMPES pour le post (image identique). Le shader testait
+    // les 48 lampes pour CHAQUE pixel (1,15 ms de GPU en plein jour au village, ou
+    // presque aucune n'eclaire). On ne lui envoie que les lampes qui peuvent toucher
+    // un pixel visible : eclairage possible (presence * intensite >= 0,001, memes
+    // regles que le shader) ET sphere de portee dans le champ, OU halo possible
+    // (memes portes que le shader). Le rang d'origine suit (lamp_orig) : le
+    // vacillement des feux depend de lui. /tmp/qa_no_lamp_cull = toutes (A/B).
+    static float c_pos[48 * 4], c_col[48 * 4], c_scr[48 * 4], c_orig[48], c_rect[48 * 4];
+    int lamp_n = 0;
+    {
+      static bool lamp_cull = true;
+      static int lamp_cull_poll = 0;
+      if ((lamp_cull_poll++ % 64) == 0) {
+        lamp_cull = !fs::exists("/tmp/qa_no_lamp_cull");
+      }
+      const float* lp = pc_remake_lamp_pos();
+      const float* lc = pc_remake_lamp_color();
+      const float* G = g_clip_from_world;
+      const float camx = m_render_state.camera_pos[0];
+      const float camy = m_render_state.camera_pos[1];
+      const float camz = m_render_state.camera_pos[2];
+      const float night = std::clamp(g_night_fx[0], 0.f, 1.f);
+      const float interior = std::clamp(g_ground_color[3], 0.f, 1.f);
+      const float hut = std::clamp(g_grade_amt2[3], 0.f, 1.f);
+      const float lamp_hour = std::max(night, interior);
+      const float glow_gate = std::max(night, hut) * std::clamp(g_night_fx[2], 0.f, 2.f);
+      // plans du champ (lignes de clip_from_world, colonne majeure) : w+x, w-x, w+y,
+      // w-y, et w (devant la camera)
+      float planes[5][4];
+      for (int k = 0; k < 4; k++) {
+        const float r0 = G[k * 4 + 0], r1 = G[k * 4 + 1], r3 = G[k * 4 + 3];
+        planes[0][k] = r3 + r0;
+        planes[1][k] = r3 - r0;
+        planes[2][k] = r3 + r1;
+        planes[3][k] = r3 - r1;
+        planes[4][k] = r3;
+      }
+      for (int i = 0; i < lamp_n_all && i < 48; i++) {
+        const float inten = lc[i * 4 + 3];
+        const bool world_em = inten < -8.f;
+        const bool fixture = inten < -40.f;
+        const bool eco = inten < 0.f && !world_em;
+        // portee (memes regles que le shader)
+        float reach = (inten < 0.f) ? 1.f : std::max(g_night_fx[1], 0.05f);
+        if (inten >= 0.f) {
+          reach = reach + (1.f - reach) * hut;
+        }
+        const float r = std::max(lp[i * 4 + 3] * reach, 1.f);
+        // presence * intensite (pour le feu : toujours > 0)
+        float pi;
+        if (fixture) {
+          pi = (-inten - 64.f) * (0.30f + 0.70f * lamp_hour);
+        } else if (world_em) {
+          pi = 1.f;
+        } else if (eco) {
+          pi = -inten * std::max(g_night_fx[2], 1.2f) * 0.45f * (0.85f + 0.15f * lamp_hour);
+        } else {
+          pi = lamp_hour * inten * std::max(g_night_fx[2], 0.f);
+        }
+        bool light = pi >= 0.001f;
+        if (light) {
+          const float vx = lp[i * 4 + 0] - camx, vy = lp[i * 4 + 1] - camy,
+                      vz = lp[i * 4 + 2] - camz;
+          for (auto& pl : planes) {
+            const float len = std::sqrt(pl[0] * pl[0] + pl[1] * pl[1] + pl[2] * pl[2]);
+            const float d = pl[0] * vx + pl[1] * vy + pl[2] * vz + pl[3];
+            if (len > 0.f && d < -(r * 1.02f + 4096.f) * len) {
+              light = false;  // sphere de portee entierement hors du champ
+              break;
+            }
+          }
+        }
+        // halo : projection ecran de la lampe, memes formules que l'ancien code du
+        // shader (cadre elargi -0,3..1,3, rayon angulaire, fondu 30-85 m)
+        float scr[4];
+        {
+          const float vx = lp[i * 4 + 0] - camx, vy = lp[i * 4 + 1] - camy,
+                      vz = lp[i * 4 + 2] - camz;
+          scr[0] = scr[1] = scr[2] = 0.f;
+          scr[3] = -1.f;
+          const float cx = G[0] * vx + G[4] * vy + G[8] * vz + G[12];
+          const float cy = G[1] * vx + G[5] * vy + G[9] * vz + G[13];
+          const float cw = G[3] * vx + G[7] * vy + G[11] * vz + G[15];
+          if (cw >= 1e-5f) {
+            const float u = (cx / cw) * 0.5f + 0.5f, v = (cy / cw) * 0.5f + 0.5f;
+            if (u >= -0.3f && u <= 1.3f && v >= -0.3f && v <= 1.3f) {
+              const float ldist = std::sqrt(vx * vx + vy * vy + vz * vz);
+              const float rad =
+                  std::clamp((4096.f * 3.2f) / std::max(ldist, 1.f), 0.006f, 0.075f);
+              float t = std::clamp((ldist - 4096.f * 30.f) / (4096.f * 55.f), 0.f, 1.f);
+              const float fade = 1.f - t * t * (3.f - 2.f * t);
+              if (fade >= 0.01f) {
+                scr[0] = u;
+                scr[1] = v;
+                scr[2] = rad;
+                scr[3] = fade;
+              }
+            }
+          }
+        }
+        const bool halo = scr[3] >= 0.f && (world_em || eco || glow_gate > 0.f);
+        if (lamp_cull && !light && !halo) {
+          continue;
+        }
+        for (int k = 0; k < 4; k++) {
+          c_pos[lamp_n * 4 + k] = lp[i * 4 + k];
+          c_col[lamp_n * 4 + k] = lc[i * 4 + k];
+          c_scr[lamp_n * 4 + k] = scr[k];
+        }
+        c_orig[lamp_n] = (float)i;
+        // 14/10 : rectangle ECRAN (uv) ou la lampe peut agir — eclairage (projection
+        // de la boite de sa sphere de portee) + halo et reflets fantomes. Sert aux
+        // tuiles (lamp_tiles, plus bas). Conservateur : un coin derriere la camera
+        // = tout l'ecran.
+        {
+          float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+          auto add = [&](float ax, float ay, float bx, float by) {
+            x0 = std::min(x0, ax);
+            y0 = std::min(y0, ay);
+            x1 = std::max(x1, bx);
+            y1 = std::max(y1, by);
+          };
+          if (light) {
+            const float cx0 = lp[i * 4 + 0] - camx, cy0 = lp[i * 4 + 1] - camy,
+                        cz0 = lp[i * 4 + 2] - camz;
+            const float rr = r * 1.02f + 4096.f;
+            bool behind = false;
+            float u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
+            for (int c = 0; c < 8 && !behind; c++) {
+              const float vx = cx0 + ((c & 1) ? rr : -rr), vy = cy0 + ((c & 2) ? rr : -rr),
+                          vz = cz0 + ((c & 4) ? rr : -rr);
+              const float px = G[0] * vx + G[4] * vy + G[8] * vz + G[12];
+              const float py = G[1] * vx + G[5] * vy + G[9] * vz + G[13];
+              const float pw = G[3] * vx + G[7] * vy + G[11] * vz + G[15];
+              if (pw < 1e-3f) {
+                behind = true;
+                break;
+              }
+              const float u = (px / pw) * 0.5f + 0.5f, v = (py / pw) * 0.5f + 0.5f;
+              u0 = std::min(u0, u);
+              v0 = std::min(v0, v);
+              u1 = std::max(u1, u);
+              v1 = std::max(v1, v);
+            }
+            if (behind) {
+              add(-1.f, -1.f, 2.f, 2.f);
+            } else {
+              add(u0, v0, u1, v1);
+            }
+          }
+          if (scr[3] >= 0.f) {
+            const float aspect = (float)m_fbo_state.render_fbo->width /
+                                 std::max(1.f, (float)m_fbo_state.render_fbo->height);
+            const float u = scr[0], v = scr[1], rad = scr[2];
+            // disque du halo (rayon rad en hauteur, rad/aspect en largeur)
+            add(u - rad / aspect, v - rad, u + rad / aspect, v + rad);
+            // deux reflets fantomes sur l'axe lampe -> centre (k = 0,45 et 1,05)
+            const float gscale = std::clamp(rad / 0.03f, 0.5f, 1.5f);
+            for (int g = 0; g < 2; g++) {
+              const float k = g == 0 ? 0.45f : 1.05f;
+              const float grad = (g == 0 ? 0.020f : 0.034f) * gscale;
+              const float gu = u + (0.5f - u) * k, gv = v + (0.5f - v) * k;
+              add(gu - grad / aspect, gv - grad, gu + grad / aspect, gv + grad);
+            }
+          }
+          c_rect[lamp_n * 4 + 0] = x0;
+          c_rect[lamp_n * 4 + 1] = y0;
+          c_rect[lamp_n * 4 + 2] = x1;
+          c_rect[lamp_n * 4 + 3] = y1;
+        }
+        lamp_n++;
+      }
+      static int qa_n = 0;
+      if ((qa_n++ % 600) == 0) {
+        lg::info("[QA-LAMPES] post : {} lampes envoyees sur {}", lamp_n, lamp_n_all);
+      }
+    }
+    float night_fx[4] = {g_night_fx[0], g_night_fx[1], g_night_fx[2], (float)lamp_n};
+    POST_U(4fv, "night_fx", 1, night_fx);
+    // scintillement de l'eau : niveau de la mer + forces jour/nuit + temps
+    float wg[4] = {g_water_glitter[0], g_water_glitter[1], g_water_glitter[2],
+                   (float)(m_render_state.frame_idx % 216000) / 60.f};
+    POST_U(4fv, "water_glitter", 1, wg);
+    // [QA-GLITTER] 25/08 : preuve de la COURSE entre threads — main.gc desarme
+    // chaque frame GOAL, draw-ocean re-arme ; si le rendu lit ENTRE les deux,
+    // la frame se peint sans aucun effet d'eau (l'eau disparaissait). Compte
+    // ce que le rendu LIT reellement. A retirer une fois l'eau reglee.
+    {
+      static int qa_wg_arm = 0, qa_wg_dis = 0, qa_wg_n = 0;
+      if (wg[1] > 0.001f || wg[2] > 0.001f) {
+        qa_wg_arm++;
+      } else {
+        qa_wg_dis++;
+      }
+      if (++qa_wg_n >= 300) {
+        lg::info("[QA-GLITTER] lus par le rendu : {} armes / {} DESARMES sur 300", qa_wg_arm,
+                 qa_wg_dis);
+        qa_wg_n = qa_wg_arm = qa_wg_dis = 0;
+      }
+    }
+    if (lamp_n > 0) {
+      // note: name the first element explicitly — safer across drivers than
+      // relying on the bare array name resolving to element 0
+      // 14/10 : listes TRIEES (voir plus haut) — original : pc_remake_lamp_pos() /
+      // pc_remake_lamp_color() en entier
+      POST_U(4fv, "lamp_pos[0]", lamp_n, c_pos);
+      POST_U(4fv, "lamp_color[0]", lamp_n, c_col);
+      POST_U(1fv, "lamp_orig[0]", lamp_n, c_orig);
+      // PERF 14/10 : TUILES DE LAMPES — 16 x 9 tuiles d'ecran, chacune avec le masque
+      // (48 bits) des lampes dont le rectangle d'action la touche. Le shader ne
+      // parcourt que ces lampes : ailleurs leur contribution valait exactement 0.
+      // /tmp/qa_no_lamp_cull = toutes les lampes partout (A/B).
+      {
+        constexpr int TX = 16, TY = 9;
+        static GLuint tiles[TX * TY * 2];
+        static bool all_tiles = false;
+        static int all_poll = 0;
+        if ((all_poll++ % 64) == 0) {
+          all_tiles = fs::exists("/tmp/qa_no_lamp_cull");
+        }
+        for (int t = 0; t < TX * TY * 2; t++) {
+          tiles[t] = 0;
+        }
+        for (int l = 0; l < lamp_n; l++) {
+          int tx0 = 0, ty0 = 0, tx1 = TX - 1, ty1 = TY - 1;
+          if (!all_tiles) {
+            const float* rc = &c_rect[l * 4];
+            if (rc[0] > 1.f || rc[1] > 1.f || rc[2] < 0.f || rc[3] < 0.f) {
+              continue;  // rien a l'ecran
+            }
+            tx0 = std::clamp((int)std::floor(rc[0] * TX), 0, TX - 1);
+            ty0 = std::clamp((int)std::floor(rc[1] * TY), 0, TY - 1);
+            tx1 = std::clamp((int)std::floor(rc[2] * TX), 0, TX - 1);
+            ty1 = std::clamp((int)std::floor(rc[3] * TY), 0, TY - 1);
+          }
+          for (int ty = ty0; ty <= ty1; ty++) {
+            for (int tx = tx0; tx <= tx1; tx++) {
+              tiles[(ty * TX + tx) * 2 + (l >> 5)] |= 1u << (l & 31);
+            }
+          }
+        }
+        POST_U(2uiv, "lamp_tiles[0]", TX * TY, tiles);
+      }
+      // PERF 14/10 : position ECRAN de chaque lampe (uv, rayon du halo, fondu ; w < 0 =
+      // sautee) calculee une fois par image dans le tri ci-dessus (c_scr) — le post la
+      // recalculait pour chacun des 2 millions de pixels.
+      POST_U(4fv, "lamp_scr[0]", lamp_n, c_scr);
+    }
+  }
+  // PC-REMAKE: depth-aware post (SSAO / aerial fog / DOF). Resolve the scene
+  // depth (possibly MSAA) into a texture and bind it on unit 15.
+  POST_U(4fv, "depth_fx", 1, g_depth_fx);
+  // 13/10 : G-buffer d'avant le HUD (voir g_hud_depth) valable pour CETTE image —
+  // la capture d'ecran rejoue le post dans la meme image : meme copie
+  if (g_hud_gbuf_pending) {
+    g_hud_gbuf_pending = false;
+    g_hud_gbuf_frame = render_state->frame_idx;
+  }
+  const bool hud_gbuf = g_hud_gbuf_frame == render_state->frame_idx &&
+                        g_hud_depth.w == m_fbo_state.render_fbo->width &&
+                        g_hud_depth.h == m_fbo_state.render_fbo->height;
+  if (qa_gpu_here) {
+    g_qa_gpu.end();
+    g_qa_gpu.begin(85, "post: resolutions profondeur + normales");
+  }
+  if (g_depth_fx[0] > 0.001f || g_depth_fx[1] > 0.001f || g_depth_fx[2] > 0.001f) {
+    int src_w = m_fbo_state.render_fbo->width;
+    int src_h = m_fbo_state.render_fbo->height;
+    GLuint dtex = g_hud_depth.tex;
+    if (!hud_gbuf) {
+      g_depth_resolve.ensure(src_w, src_h);
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_state.render_fbo->fbo_id);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_depth_resolve.fbo);
+      // 14/10 : profondeur seule (voir pc_hud_gbuffer_capture) —
+      // original : GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT
+      glBlitFramebuffer(0, 0, src_w, src_h, 0, 0, src_w, src_h, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+      glBindFramebuffer(GL_FRAMEBUFFER, post_target);  // back to OUR target, not always the window
+      dtex = g_depth_resolve.tex;
+    }
+    glActiveTexture(GL_TEXTURE15);
+    glBindTexture(GL_TEXTURE_2D, dtex);
+    glActiveTexture(GL_TEXTURE0);
+    POST_U(1i, "depth_tex", 15);
+  }
+  // PC-REMAKE 21/09 : G-buffer de normales -> unite 13 (normal_tex). Avec MSAA la
+  // texture est multi-echantillons : on la resout par blit de l'attachement 1.
+  float bloom_has_normals = 0.f;  // 12/10 : le bloom large lit aussi les drapeaux
+  {
+    float has_normals = 0.f;
+    if (m_fbo_state.render_fbo->normal_tex_id.has_value()) {
+      int src_w = m_fbo_state.render_fbo->width;
+      int src_h = m_fbo_state.render_fbo->height;
+      GLuint ntex = 0;
+      if (hud_gbuf && g_hud_gbuf_has_normals) {
+        ntex = g_hud_normal.tex;  // 13/10 : normales d'avant le HUD
+      } else if (m_fbo_state.render_fbo->multisampled) {
+        g_normal_resolve.ensure(src_w, src_h);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_state.render_fbo->fbo_id);
+        glReadBuffer(GL_COLOR_ATTACHMENT1);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_normal_resolve.fbo);
+        glBlitFramebuffer(0, 0, src_w, src_h, 0, 0, src_w, src_h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_state.render_fbo->fbo_id);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);  // ne pas laisser l'etat de lecture sur l'att. 1
+        glBindFramebuffer(GL_FRAMEBUFFER, post_target);
+        ntex = g_normal_resolve.tex;
+      } else {
+        ntex = m_fbo_state.render_fbo->normal_tex_id.value();
+      }
+      glActiveTexture(GL_TEXTURE13);
+      glBindTexture(GL_TEXTURE_2D, ntex);
+      glActiveTexture(GL_TEXTURE0);
+      POST_U(1i, "normal_tex", 13);
+      has_normals = 1.f;
+    }
+    // PC-REMAKE 22/09 : scene sans HUD pour les reflets d'eau et les rayons
+    {
+      GLuint pt = pc_prehud_texture();
+      glActiveTexture(GL_TEXTURE12);
+      glBindTexture(GL_TEXTURE_2D, pt ? pt : 0);
+      glActiveTexture(GL_TEXTURE0);
+      POST_U(1i, "scene_tex", 12);
+      POST_U(1f, "has_scene_tex", pt ? 1.f : 0.f);
+    }
+    // [QA] QA_NO_GBUFFER=1 : le post ignore le G-buffer (A/B contre la reconstruction)
+    static const bool qa_no_gb = [] {
+      const char* e = getenv("QA_NO_GBUFFER");
+      return e && e[0] == '1';
+    }();
+    if (qa_no_gb) {
+      has_normals = 0.f;
+    }
+    POST_U(1f, "has_normal_tex", has_normals);
+    bloom_has_normals = has_normals;
+    static const float qa_show_env = [] {
+      const char* e = getenv("QA_SHOW_NORMALS");
+      return (e && e[0] == '1') ? 1.f : 0.f;
+    }();
+    // 21/09 : bascule A CHAUD par fichier (touch /tmp/qa_show_normals), scrutee
+    // toutes les 32 images — evite une relance du jeu pour un controle visuel
+    static int qa_show_poll = 0;
+    static float qa_show_file = 0.f;
+    if ((qa_show_poll++ & 31) == 0) {
+      qa_show_file = fs::exists("/tmp/qa_show_normals") ? 1.f : 0.f;
+    }
+    POST_U(1f, "qa_show_normals",
+                std::max(qa_show_env, qa_show_file));
+  }
+  // PC-REMAKE 12/10 : BLOOM LARGE (voir pc_bloom_run) -> unite 11 (bloom_tex)
+  {
+    const bool bloom_has_depth =
+        g_depth_fx[0] > 0.001f || g_depth_fx[1] > 0.001f || g_depth_fx[2] > 0.001f;
+    if (qa_gpu_here) {
+      g_qa_gpu.end();
+      g_qa_gpu.begin(86, "post: bloom large (chaine de mips)");
+    }
+    GLuint btex = pc_bloom_run(render_state->version, bloom_has_depth, bloom_has_normals > 0.5f,
+                               post_reloaded, render_state->frame_idx);
+    if (qa_gpu_here) {
+      g_qa_gpu.end();
+    }
+    glActiveTexture(GL_TEXTURE11);
+    glBindTexture(GL_TEXTURE_2D, btex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);  // la chaine a pris l'unite 0
+    POST_U(1i, "bloom_tex", 11);
+    POST_U(1f, "has_bloom_tex", btex ? 1.f : 0.f);
+    // HUD intact : la scene sans HUD de cette image -> unite 10
+    GLuint href = pc_hud_ref_texture();
+    glActiveTexture(GL_TEXTURE10);
+    glBindTexture(GL_TEXTURE_2D, href);
+    glActiveTexture(GL_TEXTURE0);
+    POST_U(1i, "hud_ref_tex", 10);
+    POST_U(1f, "has_hud_ref", href ? 1.f : 0.f);
   }
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glActiveTexture(GL_TEXTURE0);
-  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  if (qa_gpu_here) {
+    g_qa_gpu.begin(87, "post: shader principal");
+  }
+  if (post_split) {
+    // passe 1 -> texture flottante a la taille de la cible du post
+    GLint cur_fbo = 0;
+    GLint vp[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &cur_fbo);
+    glGetIntegerv(GL_VIEWPORT, vp);
+    ensure_lit_target(vp[2], vp[3]);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_lit_fbo);
+    glViewport(0, 0, vp[2], vp[3]);
+    shader.activate();
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // passe 2 -> cible d'origine
+    glBindFramebuffer(GL_FRAMEBUFFER, cur_fbo);
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+    g_post_p2.activate();
+    glActiveTexture(GL_TEXTURE9);
+    glBindTexture(GL_TEXTURE_2D, g_lit_tex);
+    glActiveTexture(GL_TEXTURE0);
+    glProgramUniform1i(g_post_p2.id(), pc_uniform_loc(g_post_p2.id(), "lit_tex"), 9);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  } else {
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  }
+  if (qa_gpu_here) {
+    g_qa_gpu.end();
+    g_qa_gpu.begin(88, "post: copie vers la fenetre + fin");
+  }
 
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindVertexArray(0);
+
+  // PERF 25/08 : remontee du FBO post (resolution jeu) vers la fenetre
+  if (use_post_fbo) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_post_fbo.fbo_id);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
+    glBlitFramebuffer(0, 0, post_game_w, post_game_h, render_state->draw_offset_x,
+                      render_state->draw_offset_y,
+                      render_state->draw_offset_x + render_state->draw_region_w,
+                      render_state->draw_offset_y + render_state->draw_region_h,
+                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, dst_fbo);
+    glViewport(render_state->draw_offset_x, render_state->draw_offset_y,
+               render_state->draw_region_w, render_state->draw_region_h);
+  }
 
   glEnable(GL_BLEND);
   if (alp < 1) {
@@ -1681,4 +3084,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     m_blackout_renderer.draw(Vector4f(0, 0, 0, 1.f - alp), render_state, prof);
   }
   glEnable(GL_DEPTH_TEST);
+  if (qa_gpu_here) {
+    g_qa_gpu.end();
+  }
 }

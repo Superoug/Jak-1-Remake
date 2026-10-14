@@ -21,6 +21,15 @@ out vec3 vtx_color;
 out vec2 vtx_st;
 
 out float fog;
+// PC-REMAKE: tight sun glint for metal materials
+out float vtx_glint;
+// xyz = sun direction in this shader's space, w = enable (0/1)
+uniform vec4 sun_dir_view;
+// PC-REMAKE 13/10 : reflet et eclat calcules PAR PIXEL (voir emerc.frag)
+out vec3 v_nrm;
+out vec3 v_pos;
+out vec4 v_unp;    // position « deperspectivee » (vf09 du microcode)
+out vec4 v_unpk;   // constantes de deperspective (vf23)
 
 struct MercMatrixData {
   mat4 X;
@@ -53,6 +62,22 @@ void main() {
   vec4 transformed = perspective_matrix * vtx_pos;
 
   rotated_nrm = normalize(rotated_nrm);
+  v_nrm = rotated_nrm;
+  v_pos = vtx_pos.xyz;
+
+  // PC-REMAKE: sun glint. The view direction in this space is the vertex
+  // direction itself; a Blinn-style half-vector against the game's key light
+  // gives a tight highlight that only reflective (metal) materials receive,
+  // because this shader only ever runs on them.
+  {
+    // this shader has no light uniforms, so the glint is built from the sun
+    // direction supplied by the PC renderer, expressed in this space.
+    vec3 V = normalize(-vtx_pos.xyz);
+    vec3 L = normalize(sun_dir_view.xyz);
+    vec3 H = normalize(L + V);
+    float nh = max(dot(rotated_nrm, H), 0.0);
+    vtx_glint = pow(nh, 30.0) * sun_dir_view.w;
+  }
 
   float Q = fog_constants.x / transformed[3];
   fog = 255 - clamp(-transformed.w + hvdf_offset.w, fog_constants.y, fog_constants.z);
@@ -74,6 +99,8 @@ void main() {
     // vf24 = normal st
     // mul.xyzw vf09, vf08, vf23 ;; do unperspect
     vec4 vf09 = vf08 * vf23;
+    v_unp = vf09;
+    v_unpk = vf23;
     //subw.z vf10, vf10, vf00 ;; subtract 1 from z
     vf10.z -= 1;
     //addw.z vf09, vf00, vf09 ;; xyww the unperspected thing

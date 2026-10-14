@@ -2,7 +2,10 @@
 
 #include <algorithm>
 
+#include <cstring>
+
 #include "common/global_profiler/GlobalProfiler.h"
+#include "common/log/log.h"
 #include "common/util/string_util.h"
 
 #include "game/graphics/display.h"
@@ -19,6 +22,19 @@ void FrameTimeRecorder::finish_frame() {
   m_frame_times[m_idx++] = m_compute_timer.getMs();
   if (m_idx == SIZE) {
     m_idx = 0;
+    // PERF 25/08 : temps de TRAVAIL reel (hors attente vsync/limiteur) —
+    // moyenne + 3 pires sur 300 frames. La sonde [QA-PERF] du swap mesure la
+    // cadence percue ; celle-ci mesure le cout. A retirer apres la passe.
+    float sorted[SIZE];
+    memcpy(sorted, m_frame_times, sizeof(sorted));
+    std::sort(sorted, sorted + SIZE);
+    float avg = 0.f;
+    for (float t : sorted) {
+      avg += t;
+    }
+    avg /= (float)SIZE;
+    float worst3 = (sorted[SIZE - 1] + sorted[SIZE - 2] + sorted[SIZE - 3]) / 3.f;
+    lg::info("[QA-COUT] travail moyen {:.2f} ms | pire 1% {:.2f} ms", avg, worst3);
   }
 }
 

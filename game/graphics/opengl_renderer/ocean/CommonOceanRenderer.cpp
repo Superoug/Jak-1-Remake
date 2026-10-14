@@ -6,9 +6,12 @@ constexpr int OCEAN_TEX_TBP_JAK1 = 8160;  // todo
 constexpr int OCEAN_TEX_TBP_JAK2 = 672;
 
 CommonOceanRenderer::CommonOceanRenderer() {
-  m_vertices.resize(4096 * 10);  // todo decrease
+  // PC-REMAKE : rayon du proche étendu de 34 m à ~220 m (le trou de transition
+  // complet) — l'ancien 4096*10 débordait dès le village (ASSERT « add more
+  // vertices »). ×16 : ~10 Mo, sans enjeu sur M1 Pro.
+  m_vertices.resize(4096 * 160);
   for (auto& buf : m_indices) {
-    buf.resize(4096 * 10);
+    buf.resize(4096 * 160);
   }
 
   // create OpenGL objects
@@ -83,6 +86,13 @@ void CommonOceanRenderer::init_for_near() {
 }
 
 void CommonOceanRenderer::kick_from_near(const u8* data) {
+  // PC-REMAKE QA : chaque xgkick du programme VU proche passe ici
+  {
+    static int qa_kicks = 0;
+    if ((qa_kicks++ % 2000) == 0) {
+      lg::warn("[QA] ocean kick_from_near invoque (n° {})", qa_kicks);
+    }
+  }
   bool eop = false;
 
   u32 offset = 0;
@@ -278,6 +288,17 @@ void CommonOceanRenderer::handle_near_adgif(const u8* data, u32 offset, u32 coun
 }
 
 void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProfilerNode& prof) {
+  // diagnostic de la zone plate autour du joueur : le rendu
+  // PROCHE tourne-t-il seulement ? — max de sommets vu sur l'intervalle
+  {
+    static int qa_near = 0;
+    static u32 qa_max_verts = 0;
+    qa_max_verts = std::max(qa_max_verts, m_next_free_vertex);
+    if ((qa_near++ % 300) == 0) {
+      lg::warn("[QA] ocean flush_near tourne (max {} sommets sur l'intervalle)", qa_max_verts);
+      qa_max_verts = 0;
+    }
+  }
   glBindVertexArray(m_ogl.vao);
   glBindBuffer(GL_ARRAY_BUFFER, m_ogl.vertex_buffer);
   glEnable(GL_PRIMITIVE_RESTART);
@@ -288,6 +309,9 @@ void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProf
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "fog_color"),
               render_state->fog_color[0] / 255.f, render_state->fog_color[1] / 255.f,
               render_state->fog_color[2] / 255.f, render_state->fog_intensity / 255);
+  // PC-REMAKE "Spyro water": animated sea (time + strength)
+  glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "water_fx"),
+              (float)(render_state->frame_idx % 100000) / 60.f, 1.f, 0.f, 0.f);
 
   glDepthMask(GL_FALSE);
   glEnable(GL_DEPTH_TEST);
@@ -313,7 +337,9 @@ void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProf
             glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "tex_T0"), 0);
         glUniform1i(
             glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"), 0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        // PC-REMAKE : même filtrage que le large (le proche couvre ~220 m
+        // maintenant) — GL_LINEAR seul aplatissait la texture au loin
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       }
 
@@ -346,6 +372,103 @@ void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProf
     glDrawElements(GL_TRIANGLE_STRIP, m_next_free_index[bucket], GL_UNSIGNED_INT, nullptr);
     prof.add_draw_call();
     prof.add_tri(m_next_free_index[bucket]);
+  }
+}
+
+void reverse_indices(u32* indices, u32 count);  // définie plus bas dans ce fichier
+
+// PC-REMAKE EAU TRANSPARENTE (25/08) : le mid dessiné APRÈS Jak, en vraie
+// transparence. Trois passes sur les mêmes sommets :
+//   A. surface (bucket shader 3) : blend alpha classique, RGB seulement —
+//      l'alpha du shader est une VRAIE transparence (rampe rivage × distance) ;
+//   B. dépôt d'alpha (bucket shader 5) : écrit UNIQUEMENT l'alpha destination
+//      avec la formule d'origine PS2 (motif alphamod) pour doser le reflet —
+//      le même rôle que la passe « alpha » du near des artistes ;
+//   C. reflet envmap additif (bucket shader 4) : inchangé (DST_ALPHA, ONE).
+// Jamais d'écriture de profondeur ; GEQUAL comme le near — un rocher devant
+// masque l'eau, Jak immergé reçoit le voile.
+void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
+                                                ScopedProfilerNode& prof) {
+  glBindVertexArray(m_ogl.vao);
+  glBindBuffer(GL_ARRAY_BUFFER, m_ogl.vertex_buffer);
+  glEnable(GL_PRIMITIVE_RESTART);
+  glPrimitiveRestartIndex(UINT32_MAX);
+  glBufferData(GL_ARRAY_BUFFER, m_next_free_vertex * sizeof(Vertex), m_vertices.data(),
+               GL_STREAM_DRAW);
+  render_state->shaders[ShaderId::OCEAN_COMMON].activate();
+  glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "fog_color"),
+              render_state->fog_color[0] / 255.f, render_state->fog_color[1] / 255.f,
+              render_state->fog_color[2] / 255.f, render_state->fog_intensity / 255);
+  glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "water_fx"),
+              (float)(render_state->frame_idx % 100000) / 60.f, 1.f, 0.f, 0.f);
+
+  glDepthMask(GL_FALSE);
+  glEnable(GL_DEPTH_TEST);
+  glDepthFunc(GL_GEQUAL);
+  glEnable(GL_BLEND);
+
+  // même astuce que flush_mid : envmap en ordre inverse + alpha destination 0
+  reverse_indices(m_indices[1].data(), m_next_free_index[1]);
+
+  // ---- passe A : surface transparente (RGB), alpha du framebuffer préservé
+  {
+    auto tbp = render_state->version == GameVersion::Jak1 ? OCEAN_TEX_TBP_JAK1 : OCEAN_TEX_TBP_JAK2;
+    auto tex = render_state->texture_pool->lookup(tbp);
+    if (!tex) {
+      tex = render_state->texture_pool->get_placeholder_texture();
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, *tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "tex_T0"),
+                0);
+    glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"),
+                3);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+    glBlendEquation(GL_FUNC_ADD);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ogl.index_buffer[0]);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_next_free_index[0] * sizeof(u32), m_indices[0].data(),
+                 GL_STREAM_DRAW);
+    glDrawElements(GL_TRIANGLE_STRIP, m_next_free_index[0], GL_UNSIGNED_INT, nullptr);
+    prof.add_draw_call();
+    prof.add_tri(m_next_free_index[0]);
+
+    // ---- passe B : dépôt d'alpha (dose du reflet), mêmes sommets
+    glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"),
+                5);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    glDisable(GL_BLEND);
+    glDrawElements(GL_TRIANGLE_STRIP, m_next_free_index[0], GL_UNSIGNED_INT, nullptr);
+    prof.add_draw_call();
+    prof.add_tri(m_next_free_index[0]);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glEnable(GL_BLEND);
+  }
+
+  // ---- passe C : reflet envmap additif, identique à flush_mid
+  {
+    auto tex = render_state->texture_pool->lookup(m_envmap_tex);
+    if (!tex) {
+      tex = render_state->texture_pool->get_placeholder_texture();
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, *tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE, GL_ONE, GL_ZERO);
+    glBlendEquation(GL_FUNC_ADD);
+    glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"),
+                4);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ogl.index_buffer[1]);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_next_free_index[1] * sizeof(u32), m_indices[1].data(),
+                 GL_STREAM_DRAW);
+    glDrawElements(GL_TRIANGLE_STRIP, m_next_free_index[1], GL_UNSIGNED_INT, nullptr);
+    prof.add_draw_call();
+    prof.add_tri(m_next_free_index[1]);
   }
 }
 
@@ -455,6 +578,12 @@ void reverse_indices(u32* indices, u32 count) {
 }
 
 void CommonOceanRenderer::flush_mid(SharedRenderState* render_state, ScopedProfilerNode& prof) {
+  {
+    static int qa_mid = 0;
+    if ((qa_mid++ % 300) == 0) {
+      lg::warn("[QA] ocean flush_mid tourne ({} sommets)", m_next_free_vertex);
+    }
+  }
   glBindVertexArray(m_ogl.vao);
   glBindBuffer(GL_ARRAY_BUFFER, m_ogl.vertex_buffer);
   glEnable(GL_PRIMITIVE_RESTART);
@@ -465,6 +594,9 @@ void CommonOceanRenderer::flush_mid(SharedRenderState* render_state, ScopedProfi
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "fog_color"),
               render_state->fog_color[0] / 255.f, render_state->fog_color[1] / 255.f,
               render_state->fog_color[2] / 255.f, render_state->fog_intensity / 255);
+  // PC-REMAKE "Spyro water": animated sea (time + strength)
+  glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "water_fx"),
+              (float)(render_state->frame_idx % 100000) / 60.f, 1.f, 0.f, 0.f);
 
   glDepthMask(GL_TRUE);
   glEnable(GL_DEPTH_TEST);

@@ -1,0 +1,4 @@
+# Textures de MODELES (merc) qui prennent leur remplacement de texture_replacements/.
+# Par defaut les personnages et objets gardent leurs textures PS2 d origine.
+# Une ligne par texture : page/nom
+title-vis-pris/trademark

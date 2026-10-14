@@ -128,6 +128,7 @@ class Merc2 {
 
     GLuint fog_color;
     GLuint perspective_matrix;
+    GLuint sun_light_from_cam;  // PC-REMAKE: character sun shadows
 
     GLuint ignore_alpha;
     GLuint decal;
@@ -196,6 +197,29 @@ class Merc2 {
     u64 hash;
   };
 
+  // PC-REMAKE: one entry per merc draw, kept until the NEXT frame's shadow
+  // pass. The bone buffer on the GPU is only rewritten when the draws are
+  // flushed, so at that point it still holds exactly these poses.
+  struct ShadowCaster {
+    unsigned int vertices;
+    unsigned int indices;
+    u32 first_index;
+    u32 index_count;
+    u16 first_bone;
+    u8 no_strip;
+  };
+  std::vector<ShadowCaster> m_shadow_casters;
+  float m_shadow_light_from_cam[16] = {};
+  bool m_shadow_light_valid = false;
+  // PC-REMAKE 21/09 : la matrice de normales merc->monde est valide ce frame
+  bool m_world_normal_valid = false;
+  static Merc2* s_shadow_instance;
+
+ public:
+  static void shadow_hook(void* shader_lib);
+  void render_shadow_casters(void* shader_lib);
+
+ private:
   struct LevelDrawBucket {
     const LevelData* level = nullptr;
     std::vector<Draw> draws;

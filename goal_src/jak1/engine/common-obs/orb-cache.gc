@@ -6,6 +6,9 @@
 
 ;; DECOMP BEGINS
 
+;; kernel-defs peut compiler après nous en incrémental : extern local
+(define-extern pc-add-lamp! (function float float float float float int none))
+
 (deftype orb-cache-top (baseplat)
   ((active-distance   float)
    (inactive-distance float)
@@ -43,6 +46,14 @@
         (else (plat-event proc argc message block))))
   :trans
     (behavior ()
+      ;; PC-REMAKE 26/08 : le socle à orbes attend l'éco BLEU —
+      ;; il brille en bleu, comme les boules qu'il réclame.
+      (pc-add-lamp! (-> self root trans x)
+                    (+ 4096.0 (-> self root trans y))
+                    (-> self root trans z)
+                    32768.0
+                    2.0
+                    2)
       (if (and (and *target* (>= 20480.0 (vector-vector-distance (-> self root trans) (-> *target* control trans))))
                (not (send-event *target* 'query 'powerup (pickup-type eco-blue))))
         (level-hint-spawn (text-id sidekick-hint-orb-cache-top) "sksp0009" (the-as entity #f) *entity-pool* (game-task none))))

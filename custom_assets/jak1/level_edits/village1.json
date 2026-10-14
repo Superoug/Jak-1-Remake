@@ -1,0 +1,150 @@
+{
+ "level": "village1",
+ "add": [],
+ "remove": [
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -106.459,
+    10.193,
+    71.935
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -107.536,
+    10.133,
+    71.971
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -106.584,
+    10.275,
+    71.081
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -105.829,
+    9.679,
+    74.868
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -105.72,
+    10.217,
+    71.704
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -107.235,
+    9.81,
+    74.279
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -105.082,
+    10.22,
+    71.389
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -104.946,
+    10.104,
+    71.996
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -102.488,
+    9.957,
+    71.883
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -105.361,
+    10.299,
+    71.061
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -105.844,
+    10.212,
+    70.239
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -105.326,
+    11.21,
+    76.569
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -103.981,
+    11.217,
+    77.016
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -103.339,
+    11.221,
+    70.603
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -103.325,
+    11.221,
+    69.829
+   ]
+  },
+  {
+   "kind": "shrub",
+   "proto": "grass.mb",
+   "pos": [
+    -102.692,
+    9.97,
+    71.787
+   ]
+  }
+ ]
+}

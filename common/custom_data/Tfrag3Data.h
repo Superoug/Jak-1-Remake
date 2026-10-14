@@ -98,6 +98,11 @@ struct PreloadedVertex {
 
   // color table index
   u16 color_index = 0;
+  // PC-REMAKE 22/09 : second index de palette — les milieux d'arete de la
+  // subdivision Phong prennent (A, B) et le shader moyenne les deux couleurs
+  // (sinon chaque moitie de triangle prenait la couleur d'un seul sommet :
+  // pans plats a bords droits sur les ombres peintes). Sommets d'origine : = color_index.
+  u16 color_index2 = 0;
 
   struct hash {
     std::size_t operator()(const PreloadedVertex& x) const;
@@ -348,6 +353,8 @@ struct TfragTree {
     std::vector<u32> indices;
   } unpacked;
   void unpack();
+  // PC-REMAKE: runtime Phong subdivision — rounds faceted geometry at load
+  void subdivide_phong();
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
 };
@@ -440,6 +447,9 @@ struct TieTree {
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
   void unpack();
+  // PC-REMAKE: runtime Phong subdivision of static TIE geometry. Needs the
+  // level textures to leave foliage draws (palms etc.) untouched.
+  void subdivide_phong(const std::vector<Texture>& textures);
 };
 
 struct ShrubTree {
@@ -625,12 +635,22 @@ struct MercModelGroup {
   std::vector<MercModel> models;
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
+  // PC-REMAKE: runtime Phong subdivision of actor/prop models (uses the
+  // authored normals). Called after deserialization on the game side.
+  void subdivide_phong();
+  // PC-REMAKE: fully remodeled demo props (barrel, scout-fly crate) — modern
+  // parametric geometry fitted to the original bounding boxes.
+  void replace_demo_models();
 };
 
 //
 
 constexpr int TFRAG_GEOS = 3;
 constexpr int TIE_GEOS = 4;
+
+// PC-REMAKE: runtime Phong subdivision toggles (defined in Tfrag3Data.cpp)
+extern bool g_tfrag_phong_subdiv;
+extern float g_tfrag_phong_strength;
 
 struct Level {
   u16 version = TFRAG3_VERSION;

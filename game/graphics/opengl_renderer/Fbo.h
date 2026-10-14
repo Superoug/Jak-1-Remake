@@ -11,6 +11,10 @@ struct Fbo {
   // optional rgba/zbuffer/stencil data.
   std::optional<GLuint> tex_id;
   std::optional<GLuint> zbuf_stencil_id;
+  // PC-REMAKE 21/09 : G-buffer de normales (attachement couleur 1, RGBA8 :
+  // rgb = normale monde *0.5+0.5, a = 1 quand le pixel en a une). Seul le
+  // framebuffer principal (avec z/stencil) en possede un.
+  std::optional<GLuint> normal_tex_id;
 
   bool multisampled = false;
   int multisample_count = 0;  // Should be 1 if multisampled is disabled
@@ -43,6 +47,10 @@ struct Fbo {
       if (zbuf_stencil_id) {
         glDeleteRenderbuffers(1, &zbuf_stencil_id.value());
         zbuf_stencil_id.reset();
+      }
+      if (normal_tex_id) {
+        glDeleteTextures(1, &normal_tex_id.value());
+        normal_tex_id.reset();
       }
 
       valid = false;

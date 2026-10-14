@@ -1,48 +1,56 @@
-> [!NOTE]
-> You can read the original README for the OpenGOAL project [here](https://github.com/open-goal/jak-project/blob/master/README.md).
-> In particular you may want to check out the Development Environment setup [here](https://github.com/open-goal/jak-project/blob/master/README.md#setting-up-a-development-environment)
+# Jak 1 Remake — mod OpenGOAL pour Jak and Daxter
 
-# OpenGoal-Mod-Base
-Serves as a base template for openGOAL mods that will be supported via [OG-ModLauncher](https://github.com/OpenGOAL-Mods/OG-ModLauncher).
+Un remake visuel de **Jak and Daxter: The Precursor Legacy** sous forme de **mod pour le
+lanceur officiel [OpenGOAL](https://opengoal.dev)** : éclairage moderne (soleil, ombres,
+lampes, lueurs), herbe dense, eau et cascades retravaillées, textures HD fidèles, étalonnage
+moderne… sans remodeler quoi que ce soit : le travail des artistes d'origine est conservé.
 
-- Please ensure you are not committing copyrighted material to your repo (the `.gitignore` should help prevent this). 
-- Generally speaking you should only be updating certain directories/files:
-  - GOAL code (`/goal_src`)
-  - Assets specific to the PC Port (`/game/assets/jak1/`, `/custom_assets/`)
-  - The executable binaries (`/out/build/Release/goalc.exe`, `/out/build/Release/gk.exe`, `/out/build/Release/extractor.exe`)
-  - Decompiler config (`/decompiler/config`)
+> **Il faut posséder le jeu original.** Ce dépôt ne contient AUCUN fichier du jeu : ni
+> niveaux, ni modèles, ni textures, ni sons. Tout est reconstruit sur l'ordinateur du joueur, à
+> partir de SA copie du jeu (ISO PS2), par le lanceur OpenGOAL. Même les textures HD sont
+> calculées à l'installation depuis les originaux du joueur (agrandissement « fidèle » : rien
+> n'est inventé).
 
-## Custom Navmesh Implementation and Example
+## Installer (joueurs)
 
-LuminarLight made changes that allow placing custom navmesh into Jak 1 levels. This will hopefully become useless one day, if proper navmesh support is ever added to OpenGOAL.
+1. Installer le [lanceur OpenGOAL](https://opengoal.dev) (v2.4.10 ou plus récent) et faire
+   l'installation normale de **Jak 1** avec votre ISO.
+2. Dans le lanceur : **Réglages → Mods → Ajouter une source**, et coller l'adresse de la source
+   de mods de ce projet (voir la page des versions du dépôt).
+3. Ouvrir la page des mods de Jak 1, choisir **Jak 1 Remake**, puis **Installer**. Le lanceur
+   télécharge le mod, le reconstruit depuis votre jeu (quelques minutes) et l'ajoute à la liste.
 
-The navmesh system in Jak II is more advanced, I haven't managed to figure it out yet.
+Sans source de mods : télécharger l'archive de votre système sur la page des versions du
+dépôt (`windows-….zip`, `linux-….tar.gz` ou `macos-intel-….tar.gz`), puis dans le lanceur :
+page de **Jak 1 → Features → Mods → Ajouter depuis un fichier**, et choisir l'archive.
 
-### Getting Started
+Plateformes : Windows, Linux (dont Steam Deck en mode bureau) et macOS (Intel, et Apple
+Silicon via Rosetta).
 
-Please keep in mind that you are expected to be familiar with custom levels and GOAL. Still, I tried to make things as understandable as possible.
+Réglages en jeu : **Options → Graphismes → Remake** (nuit, lampes, soleil, ombres, rayons,
+bloom, rendu remake…).
 
-I would recommend copying an existing navmesh as a start. You can use the inspect method I made. The actor whose navmesh you want to copy must be loaded. Example:
-`(inspect (-> (the-as entity-actor (entity-by-name "snow-bunny-55")) nav-mesh))`
+## Ce qui change par rapport au jeu d'origine
 
-You should change the origin and bounds, depending on where you want to place your navmesh.
+- Éclairage reconstruit : soleil qui suit le ciel, ombres portées, lampes et sources
+  émissives (lave, éco, précurseurs), nuits bleutées, halos.
+- Herbe dense semée sur les sols d'herbe, buissons qui ondulent et réagissent aux pas.
+- Eau : reflets, brume sous-marine, cascades lisibles.
+- Textures HD **fidèles** (Lanczos tuilé borné au voisinage d'origine), calculées chez vous.
+- Rendu remake : exposition, épaule des hautes lumières, contraste, saturation maîtrisée.
+- Performances : tri de visibilité de l'herbe et des ombres, lampes par tuiles d'écran, post en
+  deux passes — 60 images/s visées partout.
 
-I usually just remove the nodes, because I do not understand it and things seem fine without it. But keep in mind that every navmesh that is in the game has at least one node.
+## Développeurs
 
-We do not understand route, but it is needed - otherwise game will crash. If you copy an existing navmesh, the route data is copied correctly. But since we don't understand it, for fully custom navmesh we can never have proper route data. Correct route data is essential if you want to take advantage of gap triangles (where enemies jump).
+Ce dépôt est basé sur [OG-Mod-Base](https://github.com/OpenGOAL-Mods/OG-Mod-Base) (lui-même
+dérivé de [jak-project](https://github.com/open-goal/jak-project), licence ISC). Les
+modifications du remake sont signalées dans le code par `PC-REMAKE`. Les versions sont
+produites par l'action GitHub **Cut Mod Release** (binaires Windows, Linux, macOS Intel).
 
-You can make multiple enemies use the same navmesh. To do this, create the navmesh through code for the first actor, like in the example. And for the other actors, add a lump that tells the game to use another actor's navmesh. Reference is by aid. Example: `"nav-mesh-actor": ["uint32", 40000]`. Tip: You can do the same thing with paths, using the `path-actor` lump.
+Options du décompilateur ajoutées (`decompiler/config/jak1/jak1_config.jsonc`) :
+- `pc_faithful_hd_textures` : textures HD calculées à l'extraction (vrai) ;
+- `pc_faithful_hd_models` : aussi pour personnages, objets et herbe (faux = textures PS2
+  d'origine, le rendu validé).
 
-If the game crashes when you approach a custom navmesh, make sure you added `:custom-hacky? #t` to your custom navmesh definition. If that is there, then check if the actor has a path. It needs a path.
-
-If something is still unclear, please look at the code. I added a lot of comments.
-
-### Final Words
-
-I am not an expert at decompiling, so my methods were not the most efficient. But with a lot of time, I managed to figure things out. There are probably people who could do this a lot better than me. Hopefully it will happen.
-
-Also, I know my inspect method is not perfect. But it is very tedious to write such a thing, so I just included what we really need. And I think the nodes part could use a cleanup.
-
-I am happy if anyone finds this useful. But I have a request: If you learn more about navmeshes, especially things that would benefit other modders as well, please let me know. And maybe we will add it to this branch.
-
-*~~Luminar Light*
+Le README d'origine d'OG-Mod-Base est dans [`docs/MOD-BASE-README.md`](docs/MOD-BASE-README.md).

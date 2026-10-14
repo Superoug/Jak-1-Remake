@@ -11,6 +11,11 @@
 #include "game/graphics/opengl_renderer/loader/Loader.h"
 #include "game/graphics/texture/TexturePool.h"
 
+// PC-REMAKE 14/10 (perf) : glGetUniformLocation avec un NOM LITTERAL, memorise par
+// (programme, nom). Les renderers le faisaient pour chaque draw (des milliers de
+// recherches de texte par image). Programmes lies une seule fois (Shader.cpp) : sur.
+int pc_uniform_loc(unsigned int program, const char* literal_name);
+
 struct Fbo;
 
 struct LevelVis {
@@ -99,6 +104,7 @@ class BucketRenderer {
                       SharedRenderState* render_state,
                       ScopedProfilerNode& prof) = 0;
   std::string name() const;
+  void set_enabled(bool e) { m_enabled = e; }  // [QA-TEST]
   std::string name_and_id() const;
   virtual ~BucketRenderer() = default;
   bool& enabled() { return m_enabled; }

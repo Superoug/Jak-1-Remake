@@ -398,6 +398,11 @@ endif()
 
 add_executable(gk main.cpp)
 target_link_libraries(gk runtime)
+# PC-REMAKE 14/10 : avec les SDK Xcode recents, SDL3 statique tire libswiftCoreMedia
+# (@rpath) — sans ce chemin le jeu ne demarrait pas (« Library not loaded »).
+if(APPLE)
+  target_link_options(gk PRIVATE "-Wl,-rpath,/usr/lib/swift")
+endif()
 if(WIN32)
     set_target_properties(gk PROPERTIES VS_DPI_AWARE "PerMonitor")
 endif()

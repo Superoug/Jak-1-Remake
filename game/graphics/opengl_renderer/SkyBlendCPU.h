@@ -29,4 +29,13 @@ class SkyBlendCPU {
     u32 tbp;
     GpuTexture* tex;
   } m_textures[2];
+
+  // PC-REMAKE 14/10 : TROIS textures GL par tampon (ciel, nuages), utilisees a tour
+  // de role. Reecrire par glTexImage2D une texture que le GPU lit encore (le ciel de
+  // l'image en vol) forcait le pilote Apple a faire ATTENDRE le processeur : 3 a
+  // 4,5 ms par image mesures au village. Une seule mise en ligne par tampon et par
+  // image, dans une texture que le GPU n'utilise plus.
+  static constexpr int kRing = 3;
+  GLuint m_ring[2][kRing] = {};
+  int m_ring_cur[2] = {0, 0};
 };

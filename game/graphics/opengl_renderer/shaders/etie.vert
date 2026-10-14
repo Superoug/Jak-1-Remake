@@ -2,7 +2,7 @@
 
 layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;
-layout (location = 2) in int time_of_day_index;
+layout (location = 2) in ivec2 time_of_day_index;  // (index A, index B) : milieux de subdivision = moyenne
 layout (location = 3) in vec3 normal;
 layout (location = 4) in vec4 proto_tint;
 
@@ -18,6 +18,13 @@ uniform int decal;
 out vec4 fragment_color;
 out vec3 tex_coord;
 out float fogginess;
+// PC-REMAKE 13/10 : reflet calcule PAR PIXEL (voir etie.frag) — normale et position
+// en repere camera, interpolees
+out vec3 v_env_nrm;
+out vec3 v_env_pos;
+// 13/10 : ombre du soleil sur le reflet (le reflet n'eclaire pas sous un palmier)
+uniform mat4 sun_light_vp;
+out vec4 sun_light_pos;
 
 // etie stuff
 uniform vec4 persp0;
@@ -38,6 +45,10 @@ void main() {
   vf17 += cam_no_persp[1] * position_in.y;
   vf17 += cam_no_persp[2] * position_in.z;
 
+
+  v_env_nrm = nrm_vf23;
+  v_env_pos = vf17.xyz;
+  sun_light_pos = sun_light_vp * vec4(position_in, 1.0);
 
   // This is the ETIE math.
   // It seems right only if the nrm_vf23 is normalized first

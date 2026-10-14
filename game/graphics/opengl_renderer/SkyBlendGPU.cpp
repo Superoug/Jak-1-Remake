@@ -1,6 +1,7 @@
 #include "SkyBlendGPU.h"
 
 #include "common/log/log.h"
+#include "common/util/Timer.h"
 
 #include "game/graphics/opengl_renderer/AdgifHandler.h"
 
@@ -73,10 +74,25 @@ void SkyBlendGPU::init_textures(TexturePool& tex_pool, GameVersion version) {
   }
 }
 
+// [QA-SKY] 14/10 : chronometrage CPU des appels du melange du ciel (4,5 ms CPU
+// par image mesures au village pour 2 draws) — a retirer apres la passe.
+namespace {
+struct QaSky {
+  double t[8] = {};
+  int n = 0;
+};
+QaSky g_qa_sky;
+}  // namespace
+
 SkyBlendStats SkyBlendGPU::do_sky_blends(DmaFollower& dma,
                                          SharedRenderState* render_state,
                                          ScopedProfilerNode& prof) {
   SkyBlendStats stats;
+  Timer qa_t;
+  auto qa_lap = [&](int k) {
+    g_qa_sky.t[k] += qa_t.getMs();
+    qa_t.start();
+  };
   GLuint vao;
   glGenVertexArrays(1, &vao);
   glBindVertexArray(vao);
@@ -86,6 +102,7 @@ SkyBlendStats SkyBlendGPU::do_sky_blends(DmaFollower& dma,
 
   GLint old_framebuffer;
   glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_framebuffer);
+  qa_lap(0);
 
   while (dma.current_tag().qwc == 6) {
     // assuming that the vif and gif-tag is correct
@@ -128,9 +145,12 @@ SkyBlendStats SkyBlendGPU::do_sky_blends(DmaFollower& dma,
     ASSERT(tex);
 
     // setup for rendering!
+    qa_lap(1);
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffers[buffer_idx]);
+    qa_lap(2);
     glViewport(0, 0, m_sizes[buffer_idx], m_sizes[buffer_idx]);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, m_textures[buffer_idx], 0);
+    qa_lap(3);
     render_state->shaders[ShaderId::SKY_BLEND].activate();
 
     // if the first is set, it disables alpha. we can just clear here, so it's easier to find
@@ -175,8 +195,10 @@ SkyBlendStats SkyBlendGPU::do_sky_blends(DmaFollower& dma,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    qa_lap(4);
     // Draw a sqaure
     glDrawArrays(GL_TRIANGLES, 0, 6);
+    qa_lap(5);
 
     // 1 draw, 2 triangles
     prof.add_draw_call(1);
@@ -200,10 +222,20 @@ SkyBlendStats SkyBlendGPU::do_sky_blends(DmaFollower& dma,
     }
   }
 
+  qa_lap(6);
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
   glBindFramebuffer(GL_FRAMEBUFFER, old_framebuffer);
   glBindVertexArray(0);
   glDeleteVertexArrays(1, &vao);
+  qa_lap(7);
+  if (++g_qa_sky.n == 300) {
+    auto& t = g_qa_sky.t;
+    lg::info("[QA-SKY] ms/image : prep {:.3f} | dma {:.3f} | bindFBO {:.3f} | attache {:.3f} | "
+             "etat {:.3f} | draw {:.3f} | suite {:.3f} | retour {:.3f}",
+             t[0] / 300, t[1] / 300, t[2] / 300, t[3] / 300, t[4] / 300, t[5] / 300, t[6] / 300,
+             t[7] / 300);
+    g_qa_sky = {};
+  }
 
   return stats;
 }

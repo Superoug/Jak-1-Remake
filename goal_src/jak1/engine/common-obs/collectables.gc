@@ -209,10 +209,38 @@
   (initialize-effect this (-> this fact pickup-type))
   (initialize-params this 0 (the-as float 1024.0))
   (update-transforms! (-> this root))
+  ;; PC-REMAKE : chaque eco du decor emet une lueur douce de sa couleur, visible
+  ;; aussi en journee. Ici et pas dans le defstate wait (partage entre sous-types,
+  ;; crash connu) ; les ecos sans entite (crates, events) ne s'enregistrent pas.
+  (when arg0
+    (pc-add-eco-lamp! (the-as int arg0)
+                      (-> this root trans x)
+                      (-> this root trans y)
+                      (-> this root trans z)
+                      (the-as int arg1)))
   (if (logtest? (fact-options eco-blocked) (-> this fact options)) (go (method-of-object this blocked)))
   (go (method-of-object this wait)))
 
 (defmethod animate ((this eco-collectable))
+  ;; PC-REMAKE 25/08 : chaque boule d'éco au sol est une VRAIE
+  ;; source de lumière de sa couleur — même canal que les lampes (les kinds éco
+  ;; passent en intensité négative côté C++ : couleur pleine, jour et nuit).
+  (when (and (nonzero? (-> this draw))
+             (nonzero? (-> this fact))
+             (not (logtest? (-> this draw status) (draw-status hidden))))
+    (let ((lamp-kind (case (-> this fact pickup-type)
+                       (((pickup-type eco-blue)) 2)
+                       (((pickup-type eco-yellow)) 5)
+                       (((pickup-type eco-red)) 6)
+                       (((pickup-type eco-green)) 1)
+                       (else -1))))
+      (when (>= lamp-kind 0)
+        (pc-add-lamp! (-> this root trans x)
+                      (+ 1638.4 (-> this root trans y))
+                      (-> this root trans z)
+                      36864.0
+                      3.0
+                      lamp-kind))))
   0
   (none))
 
@@ -368,6 +396,7 @@
         (go-virtual pickup #f (process->handle *target*))))
   :trans
     (behavior ()
+      (animate self)  ;; PC-REMAKE : la boule rayonne aussi en attente
       (cond
         ((logtest? (-> self flags) (collectable-flags trans))
          (vector-v++! (-> self root transv) (compute-acc-due-to-gravity (-> self root) (new-stack-vector0) (the-as float 0.0)))
@@ -556,6 +585,9 @@
         (a1-0 (-> this root root-prim prim-core)))
     (spawn a0-1 (-> a1-0 world-sphere)))
   (if (nonzero? (-> this sound)) (update! (-> this sound)))
+  ;; PC-REMAKE 26/08 : cette redefinition ECRASAIT la lampe du parent — les
+  ;; boules de niveau ne s'allumaient pas. On chaine.
+  ((method-of-type eco-collectable animate) this)
   0
   (none))
 
@@ -612,6 +644,8 @@
         (a1-0 (-> this root root-prim prim-core)))
     (spawn a0-1 (-> a1-0 world-sphere)))
   (if (nonzero? (-> this sound)) (update! (-> this sound)))
+  ;; PC-REMAKE 26/08 : la lampe verte du parent (meme raison que eco)
+  ((method-of-type eco-collectable animate) this)
   0
   (none))
 
@@ -631,6 +665,16 @@
 
 (defmethod init-from-entity! ((this eco-pill) (arg0 entity-actor))
   (initialize-eco this arg0 (pickup-type eco-pill) (-> *FACT-bank* health-small-inc))
+  (none))
+
+;; kernel-defs peut compiler apres nous dans un build incremental : extern local
+(define-extern pc-remove-eco-lamp! (function int none))
+
+(defmethod deactivate ((this eco-collectable))
+  ;; PC-REMAKE 18/08 : eteint la lueur fixe de cet eco — sans ca elle restait
+  ;; allumee pour toujours apres le ramassage (bug de l'enquete du 18/08)
+  (if (-> this entity) (pc-remove-eco-lamp! (the-as int (-> this entity))))
+  ((method-of-type collectable deactivate) this)
   (none))
 
 (defmethod deactivate ((this eco-pill))
@@ -883,7 +927,15 @@
            (update-trans! (-> self sound) (the-as vector gp-2))
            (update! (-> self sound)))))))
   (set-vector! (-> self draw color-mult) 0.5 0.5 0.5 1.0)
-  (set-vector! (-> self draw color-emissive) 0.5 0.5 0.5 1.0)
+  (set-vector! (-> self draw color-emissive) 0.22 0.22 0.22 1.0)
+  ;; PC-REMAKE : une cellule d'énergie est une source lumineuse. Le rendu ne
+  ;; l'allume qu'à la tombée du jour, donc c'est gratuit en plein soleil.
+  (pc-add-lamp! (-> self root trans x)
+                (+ 2048.0 (-> self root trans y))
+                (-> self root trans z)
+                45056.0
+                0.55
+                0)
   0
   (none))
 
@@ -1735,6 +1787,23 @@
               (gp-0 (-> self sound)))
           (if (and (nonzero? a0-0) (-> self show-particles)) (spawn a0-0 a1-0))
           (if (nonzero? gp-0) (update! gp-0)))
+        ;; PC-REMAKE 25/08 : un évent d'éco actif est un
+        ;; ORIFICE LUMINEUX — vraie lampe de la couleur de son éco, posée sur
+        ;; la colonne de particules.
+        (when (-> self show-particles)
+          (let ((lamp-kind (case (-> self fact pickup-type)
+                             (((pickup-type eco-blue)) 2)
+                             (((pickup-type eco-yellow)) 5)
+                             (((pickup-type eco-red)) 6)
+                             (((pickup-type eco-green)) 1)
+                             (else -1))))
+            (when (>= lamp-kind 0)
+              (pc-add-lamp! (-> self root trans x)
+                            (+ 8192.0 (-> self root trans y))
+                            (-> self root trans z)
+                            53248.0
+                            3.5
+                            lamp-kind))))
         (suspend))))
 
 (defstate vent-blocked (vent)

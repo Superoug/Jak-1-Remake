@@ -69,6 +69,12 @@ void VisDataHandler::render(DmaFollower& dma,
         m_stats[i].num_visible = -1;
       }
     } else {
+      // No fresh visibility for this level this frame. The previous string is
+      // now meaningless — it was computed for a camera position inside that
+      // level. Leaving it marked valid is what makes a neighbouring level draw
+      // in torn fragments when it is displayed from outside; dropping it falls
+      // back to frustum culling only, which is correct.
+      render_state->occlusion_vis[i].valid = false;
       m_stats[i].has_vis = false;
       m_stats[i].num_visible = -1;
     }

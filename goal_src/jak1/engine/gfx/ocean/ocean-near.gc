@@ -5,6 +5,12 @@
 
 ;; DECOMP BEGINS
 
+;; PC-REMAKE DEBUG : compteurs des portillons du rendu proche (voir draw-ocean-near)
+(define *pc-neardbg-c0* 0)
+(define *pc-neardbg-c1* 0)
+(define *pc-neardbg-c2* 0)
+(define *pc-neardbg-c3* 0)
+
 (define ocean-near-block (new 'static 'vu-function)) ;; :length #x3dc :qlength #x1ee
 
 (defun ocean-near-add-call ((arg0 dma-buffer) (arg1 int))
@@ -555,18 +561,43 @@
         (let ((s1-0 s5-0)
               (s0-0 s4-0))
           (while (>= s0-0 s1-0)
+            (+! *pc-neardbg-c0* 1)
             (when (ocean-trans-camera-masks-bit? s3-0 s1-0)
+              (+! *pc-neardbg-c1* 1)
               (let* ((a1-13 (- (shr s1-0 2) (-> *ocean-work* mid-minx)))
                      (a2-1 (- (shr s3-0 2) (-> *ocean-work* mid-minz)))
                      (v1-13 (logand s1-0 3))
                      (a0-19 (logand s3-0 3))
                      (a1-17 (-> (the-as (pointer int16) (+ (* (+ (* a2-1 4) a1-13) 2) (the-as uint *ocean-work*))) 1550)))
                 (when (>= a1-17 0)
+                  (+! *pc-neardbg-c2* 1)
                   (let ((a1-19 (-> *ocean-map* ocean-near-indices data a1-17)))
                     (when (>= (-> (the-as (pointer int16) (+ (* (+ (* a0-19 4) v1-13) 2) (the-as uint a1-19)))) 0)
+                      (+! *pc-neardbg-c3* 1)
                       (ocean-near-add-upload arg0 s3-0 s1-0)
                       (ocean-near-add-call arg0 39))))))
             (+! s1-0 1)))
         (+! s3-0 1))))
+  ;; PC-REMAKE DEBUG : le rendu proche émet 0 sommet en jeu — on compte ce que
+  ;; chaque portillon laisse passer (balayées / bit trans / index near / émises)
+  ;; 14/10 : enquete resolue (voir memoire ocean) — traces coupees, gardees pour memoire
+  ;; (original : les deux format s'affichaient toutes les 256 images)
+  (when (zero? (logand (-> *display* base-frame-counter) 255))
+    (when #f
+      (format 0 "PCDBG near bornes ~d ~d ~d ~d~%"
+              (-> *ocean-work* near-minx)
+              (-> *ocean-work* near-maxx)
+              (-> *ocean-work* near-minz)
+              (-> *ocean-work* near-maxz))
+      (format 0 "PCDBG near balayees ~d transbit ~d idx ~d emises ~d~%"
+              *pc-neardbg-c0*
+              *pc-neardbg-c1*
+              *pc-neardbg-c2*
+              *pc-neardbg-c3*))
+    ;; les compteurs restent remis a zero (pas de debordement en longue partie)
+    (set! *pc-neardbg-c0* 0)
+    (set! *pc-neardbg-c1* 0)
+    (set! *pc-neardbg-c2* 0)
+    (set! *pc-neardbg-c3* 0))
   0
   (none))

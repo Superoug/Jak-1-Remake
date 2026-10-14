@@ -23,9 +23,24 @@ uniform vec4 fog_constants;
 
 uniform mat4 perspective_matrix;
 
+// PC-REMAKE: view-space -> sun shadow clip space (see background_common.cpp)
+uniform mat4 sun_light_from_cam;
+// PC-REMAKE 21/09 : normale merc (espace des os) -> monde pour le G-buffer
+uniform mat3 world_nrm_from_merc;
+uniform float write_normals;
+out vec3 w_nor;
+
 // output
 out vec4 vtx_color;
 out vec2 vtx_st;
+out vec4 sun_light_pos;
+// PC-REMAKE 22/09 : ECLAIRAGE PAR PIXEL (Phong) — la normale interpolee et la
+// couleur brute du sommet partent au fragment, qui refait le calcul de lumiere
+// exact de la VU1 par pixel. Le Gouraud d'origine (lumiere calculee aux sommets
+// puis interpolee) dessinait les aretes des polygones sur les visages en
+// cinematique (lignes des polygones trop visibles, 21/09).
+out vec3 v_nrm;
+out vec4 v_rgba;
 
 out float fog;
 
@@ -72,7 +87,11 @@ void main() {
 
   vec4 transformed = perspective_matrix * vtx_pos;
 
+  // PC-REMAKE: sun shadow lookup for characters
+  sun_light_pos = sun_light_from_cam * vtx_pos;
+
   rotated_nrm = normalize(rotated_nrm);
+  w_nor = (write_normals > 0.5) ? normalize(world_nrm_from_merc * rotated_nrm) : vec3(0.0);
   vec3 light_intensity = light_dir0_fade.xyz * rotated_nrm.x + light_dir1_fade_en.xyz * rotated_nrm.y + light_dir2 * rotated_nrm.z;
   light_intensity = max(light_intensity, vec3(0, 0, 0));
 
@@ -98,6 +117,8 @@ void main() {
   gl_Position = transformed;
 
 
-  vtx_color = rgba * light_color;
+  vtx_color = rgba * light_color;  // (Gouraud d'origine, garde pour reference / repli)
+  v_nrm = rotated_nrm;
+  v_rgba = rgba;
   vtx_st = st_in;
 }

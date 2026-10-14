@@ -2,7 +2,14 @@
 
 layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;
-layout (location = 2) in int time_of_day_index;
+layout (location = 2) in ivec2 time_of_day_index;  // (index A, index B) : milieux de subdivision = moyenne
+// PC-REMAKE 21/09 : normale (monde, deja tournee par l'instance a l'unpack)
+layout (location = 3) in vec4 normal_in;
+out vec3 w_nor;
+// PC-REMAKE 13/10 : ombre du soleil (projection de lumiere sur les objets
+// precurseurs) — ils etaient les seuls du decor a ne pas la recevoir
+uniform mat4 sun_light_vp;
+out vec4 sun_light_pos;
 
 uniform vec4 hvdf_offset;
 uniform mat4 camera;
@@ -24,6 +31,7 @@ uniform mat4 cam_no_persp;
 void main() {
   float fog1 = camera[3].w + camera[0].w * position_in.x + camera[1].w * position_in.y + camera[2].w * position_in.z;
   fogginess = 255 - clamp(fog1 + hvdf_offset.w, fog_min, fog_max);
+  sun_light_pos = sun_light_vp * vec4(position_in, 1.0);
   vec4 vf17 = cam_no_persp[3];
   vf17 += cam_no_persp[0] * position_in.x;
   vf17 += cam_no_persp[1] * position_in.y;
@@ -48,6 +56,7 @@ void main() {
   // scissoring area adjust
   transformed.y *= SCISSOR_ADJUST * HEIGHT_SCALE;
   gl_Position = transformed;
+  w_nor = normal_in.xyz;
 
 
 
@@ -55,7 +64,7 @@ void main() {
     fragment_color = vec4(1.0, 1.0, 1.0, 1.0);
   } else {
     // time of day lookup
-    fragment_color = texelFetch(tex_T10, time_of_day_index, 0);
+    fragment_color = (0.5 * (texelFetch(tex_T10, time_of_day_index.x, 0) + texelFetch(tex_T10, time_of_day_index.y, 0)));
     // color adjustment
     fragment_color *= 2;
     fragment_color.a *= 2;

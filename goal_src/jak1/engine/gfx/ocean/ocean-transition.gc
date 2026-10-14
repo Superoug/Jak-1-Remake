@@ -344,7 +344,7 @@
       (.add.y.vf.x vf1 vf1 vf1)
       (.add.z.vf.x vf1 vf1 vf1)
       (.mov a3-2 vf1)
-      (when (< a3-2 19327350000.0)
+      (when (< a3-2 812000000000.0)
         (logior! (-> arg0 mask arg2) (ash 1 arg1))
         (return #f))
       (+! (-> v1-0 x) 98304.0)
@@ -357,7 +357,7 @@
       (.add.y.vf.x vf1 vf1 vf1)
       (.add.z.vf.x vf1 vf1 vf1)
       (.mov a3-6 vf1)
-      (when (< a3-6 19327350000.0)
+      (when (< a3-6 812000000000.0)
         (logior! (-> arg0 mask arg2) (ash 1 arg1))
         (return #f))
       (+! (-> v1-0 z) 98304.0)
@@ -370,7 +370,7 @@
       (.add.y.vf.x vf1 vf1 vf1)
       (.add.z.vf.x vf1 vf1 vf1)
       (.mov a3-10 vf1)
-      (when (< a3-10 19327350000.0)
+      (when (< a3-10 812000000000.0)
         (logior! (-> arg0 mask arg2) (ash 1 arg1))
         (return #f))
       (+! (-> v1-0 x) -98304.0)
@@ -381,7 +381,7 @@
     (.add.y.vf.x vf1 vf1 vf1)
     (.add.z.vf.x vf1 vf1 vf1)
     (.mov v1-10 vf1)
-    (when (< v1-10 19327350000.0)
+    (when (< v1-10 812000000000.0)
       (logior! (-> arg0 mask arg2) (ash 1 arg1))
       (return #f)
       v0-0)))
@@ -571,6 +571,14 @@
               (when (ocean-mid-camera-masks-bit? s5-1 s3-1)
                 (let ((v1-43 (-> *ocean-map* ocean-trans-indices data (+ (* (the-as uint 48) s5-1) s3-1))))
                   (when (>= (-> v1-43 parent) 0)
+                    ;; PC-REMAKE DEBUG : valeurs parent/enfant des cellules camera
+                    ;; 14/10 : traces coupees (original : (when (zero? (logand ... 255))
+                    (when #f
+                      (format 0 "PCDBG trans cellule z ~d x ~d parent ~d enfant ~d~%"
+                              s5-1
+                              s3-1
+                              (-> v1-43 parent)
+                              (-> v1-43 child)))
                     (let ((sv-44 (+ (* (- s5-1 sv-34) 4) (- s3-1 sv-32))))
                       (set! (-> *ocean-work* near-mask-indices sv-44) (the-as uint (-> v1-43 child)))
                       (let ((s1-0 (-> *ocean-map* ocean-mid-masks data (-> v1-43 parent))))

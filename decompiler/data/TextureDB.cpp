@@ -1,11 +1,18 @@
 #include "TextureDB.h"
 
+#include <cstdlib>
+#include <deque>
+#include <mutex>
+
+#include "decompiler/data/faithful_upscale.h"
+
 #include "common/log/log.h"
 #include "common/util/Assert.h"
 
 #include "fmt/format.h"
 #define STBI_WINDOWS_UTF8
 #include "third-party/stb_image/stb_image.h"
+#include "third-party/stb_image/stb_image_write.h"
 
 namespace decompiler {
 
@@ -188,7 +195,7 @@ std::optional<ResolvedTextureData> TextureDB::replace_texture(u32 id) const {
   return result;
 }
 
-ResolvedTextureData TextureDB::resolve_texture(u32 id) const {
+ResolvedTextureData TextureDB::resolve_texture(u32 id, bool allow_faithful) const {
   const auto& tex = textures.at(id);
 
   ResolvedTextureData result{
@@ -201,6 +208,52 @@ ResolvedTextureData TextureDB::resolve_texture(u32 id) const {
 
   if (auto replacement = replace_texture(id)) {
     result = std::move(*replacement);
+  } else if (faithful_hd && allow_faithful && !faithful_upscale_frozen(tex.name)) {
+    // PC-REMAKE 14/10 : version HD FIDELE calculee ici depuis l'original du joueur
+    // (cache borne : une texture partagee par plusieurs niveaux n'est calculee
+    // qu'une fois tant qu'elle reste dans les 256 derniers Mo)
+    static std::mutex cache_mutex;
+    static std::unordered_map<u32, ResolvedTextureData> cache;
+    static std::deque<u32> order;
+    static size_t cache_bytes = 0;
+    {
+      std::lock_guard<std::mutex> lk(cache_mutex);
+      auto it = cache.find(id);
+      if (it != cache.end()) {
+        return it->second;
+      }
+    }
+    if (auto up = faithful_upscale(result.rgba.data(), result.w, result.h)) {
+      const auto& tpage_name = tpage_names.at(tex.page);
+      if (tpage_name == "title-vis-pris" && tex.name == "trademark") {
+        // TM du logo : son RGB d'origine est un rebut violet/noir (seul l'alpha a un
+        // sens) -> dessin d'origine en creme (13/10)
+        for (auto& px : up->rgba) {
+          px = (px & 0xff000000u) | (222u << 16) | (232u << 8) | 235u;
+        }
+      }
+      result.w = (u16)up->w;
+      result.h = (u16)up->h;
+      result.rgba = std::move(up->rgba);
+      if (const char* dump = std::getenv("PC_FAITHFUL_DUMP")) {
+        auto path = fs::path(dump) / tpage_name / (tex.name + ".png");
+        file_util::create_dir_if_needed_for_file(path);
+        stbi_write_png(path.string().c_str(), result.w, result.h, 4, result.rgba.data(),
+                       result.w * 4);
+      }
+      std::lock_guard<std::mutex> lk(cache_mutex);
+      cache[id] = result;
+      order.push_back(id);
+      cache_bytes += result.rgba.size() * 4;
+      while (cache_bytes > (256u << 20) && !order.empty()) {
+        auto old = cache.find(order.front());
+        if (old != cache.end()) {
+          cache_bytes -= old->second.rgba.size() * 4;
+          cache.erase(old);
+        }
+        order.pop_front();
+      }
+    }
   }
 
   return result;

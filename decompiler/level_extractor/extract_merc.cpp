@@ -2,6 +2,8 @@
 
 #include "merc_replacement.h"
 
+#include <set>
+
 #include "common/log/log.h"
 #include "common/util/BitUtils.h"
 #include "common/util/FileUtil.h"
@@ -720,6 +722,32 @@ std::string debug_dump_to_ply(const std::vector<MercDraw>& draws,
   return result;
 }
 
+// PC-REMAKE 13/10 : les modeles merc recopient la texture d'ORIGINE brute
+// (rgba_bytes) et ignorent texture_replacements (le test sur debug_name compare
+// au nom du MODELE, jamais a celui de la texture). Tous les personnages et objets
+// gardent donc leurs textures PS2 — c'est le rendu valide, on n'y touche pas.
+// Exception explicite, au cas par cas : les textures listees (page/nom, une par
+// ligne, # = commentaire) dans custom_assets/jak1/merc_texture_replacements.txt
+// prennent leur remplacement. Premier cas : title-vis-pris/trademark (TM du logo,
+// RGB d'origine = rebut violet/noir, seul son alpha a un sens).
+static bool merc_replacement_allowed(const std::string& tpage, const std::string& name) {
+  static const std::set<std::string> allowed = [] {
+    std::set<std::string> result;
+    auto path = file_util::get_jak_project_dir() / "custom_assets" / "jak1" /
+                "merc_texture_replacements.txt";
+    if (file_util::file_exists(path.string())) {
+      for (auto& line : str_util::split(file_util::read_text_file(path), '\n')) {
+        auto t = str_util::trim(line);
+        if (!t.empty() && t[0] != '#') {
+          result.insert(t);
+        }
+      }
+    }
+    return result;
+  }();
+  return allowed.count(tpage + "/" + name) > 0;
+}
+
 s32 find_or_add_texture_to_level(tfrag3::Level& out,
                                  const TextureDB& tex_db,
                                  const std::string& debug_name,
@@ -758,14 +786,25 @@ s32 find_or_add_texture_to_level(tfrag3::Level& out,
       }
     } else {
       idx_in_level_texture = out.textures.size();
-      auto resolved = tex_db.resolve_texture(pc_combo_tex_id);
+      // PC-REMAKE 14/10 : pas de HD calculee pour les modeles (rendu valide = textures
+      // PS2 d'origine), sauf la liste blanche (merc_texture_replacements.txt : le TM du
+      // logo) ou si pc_faithful_hd_models. Un fichier de remplacement s'applique
+      // toujours (correction officielle #4405).
+      const auto& merc_tpage = tex_db.tpage_names.at(tex_it->second.page);
+      const bool allow_hd = tex_db.faithful_hd_models ||
+                            merc_replacement_allowed(merc_tpage, tex_it->second.name);
+      auto resolved = tex_db.resolve_texture(pc_combo_tex_id, allow_hd);
       auto& new_tex = out.textures.emplace_back();
       new_tex.combo_id = pc_combo_tex_id;
       new_tex.w = resolved.w;
       new_tex.h = resolved.h;
       new_tex.debug_name = tex_it->second.name;
-      new_tex.debug_tpage_name = tex_db.tpage_names.at(tex_it->second.page);
+      new_tex.debug_tpage_name = merc_tpage;
       new_tex.data = std::move(resolved.rgba);
+      if (allow_hd && !tex_db.faithful_hd_models) {
+        lg::info("merc {} : HD autorisee pour {}/{}", debug_name, new_tex.debug_tpage_name,
+                 new_tex.debug_name);
+      }
     }
   }
 

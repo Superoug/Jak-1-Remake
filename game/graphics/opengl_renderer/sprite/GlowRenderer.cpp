@@ -2,6 +2,8 @@
 
 #include "third-party/imgui/imgui.h"
 
+void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
+
 /*
  * The glow renderer draws a sprite, but only if the center of the sprite is "visible".
  * To determine visibility, we draw a test "probe" at the center of the sprite and see how many
@@ -594,6 +596,7 @@ void GlowRenderer::downsample_chain(SharedRenderState* render_state,
     // the grid fill order is the same as the downsample order, so we don't need to do all cells
     // if we aren't using all sprites.
     glDrawElements(GL_TRIANGLE_STRIP, num_sprites * 5, GL_UNSIGNED_INT, nullptr);
+    qa_glerr_check("glow draw #1 (ligne 596)");  // [QA-GLERR] 14/10
   }
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
@@ -631,6 +634,7 @@ void GlowRenderer::draw_probes(SharedRenderState* render_state,
   glDepthFunc(GL_GEQUAL);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
+  qa_glerr_check("glow draw #2 (ligne 632)");  // [QA-GLERR] 14/10
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
 
@@ -646,6 +650,7 @@ void GlowRenderer::debug_draw_probes(SharedRenderState* render_state,
   glBindFramebuffer(GL_FRAMEBUFFER, render_state->render_fb);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
+  qa_glerr_check("glow draw #3 (ligne 647)");  // [QA-GLERR] 14/10
 }
 
 /*!
@@ -671,6 +676,7 @@ void GlowRenderer::draw_probe_copies(SharedRenderState* render_state,
   prof.add_tri(m_next_sprite * 2);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
+  qa_glerr_check("glow draw #4 (ligne 672)");  // [QA-GLERR] 14/10
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
 
@@ -687,6 +693,7 @@ void GlowRenderer::debug_draw_probe_copies(SharedRenderState* render_state,
   glBindFramebuffer(GL_FRAMEBUFFER, render_state->render_fb);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
+  qa_glerr_check("glow draw #5 (ligne 688)");  // [QA-GLERR] 14/10
 }
 
 void GlowRenderer::probe_and_copy_old(SharedRenderState* render_state, ScopedProfilerNode& prof) {
@@ -760,6 +767,7 @@ void GlowRenderer::probe_and_copy_new(SharedRenderState* render_state, ScopedPro
   prof.add_tri(m_next_sprite * 2);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
+  qa_glerr_check("glow draw #6 (ligne 761)");  // [QA-GLERR] 14/10
 
   render_state->shaders[ShaderId::GLOW_PROBE_ON_GRID].activate();
   glDepthFunc(GL_GREATER);
@@ -767,6 +775,7 @@ void GlowRenderer::probe_and_copy_new(SharedRenderState* render_state, ScopedPro
   prof.add_tri(m_next_sprite * 2);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
+  qa_glerr_check("glow draw #7 (ligne 768)");  // [QA-GLERR] 14/10
 
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
@@ -819,11 +828,21 @@ void GlowRenderer::draw_sprites(SharedRenderState* render_state, ScopedProfilerN
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
   render_state->shaders[ShaderId::GLOW_DRAW].activate();
+  // PC-REMAKE (18/08) : les couronnes vanilla (halo des piles d'énergie, des
+  // orbes) étaient calibrées pour l'écran PS2 — sous notre bloom moderne elles
+  // deviennent des boules aveuglantes (la pile éblouissait, l'objet
+  // devenait indistinct). Réduction globale : l'objet redevient lisible,
+  // la VRAIE lumière autour vient désormais du système émissif.
+  if (!m_debug.enable_glow_boost) {
+    m_debug.glow_boost = 0.05f;
+  }
   if (!m_debug.enable_glow_boost && Gfx::g_global_settings.target_fps > 60.0f) {
+    m_debug.glow_boost = 0.05f * 60.0f / Gfx::g_global_settings.target_fps;
+  } else if (false) {
     // on higher framerates, more glow sprites are drawn, so we scale the boost a bit
     m_debug.glow_boost = 60.0f / Gfx::g_global_settings.target_fps;
   }
-  glUniform1f(glGetUniformLocation(render_state->shaders[ShaderId::GLOW_DRAW].id(), "glow_boost"),
+  glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::GLOW_DRAW].id(), "glow_boost"),
               m_debug.glow_boost);
 
   // on PS2's, it's enabled but all sprite z's are UINT24_MAX, so it always passes.
@@ -869,6 +888,7 @@ void GlowRenderer::draw_sprites(SharedRenderState* render_state, ScopedProfilerN
     prof.add_draw_call();
     prof.add_tri(2);
     glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_INT, (void*)(record.idx * sizeof(u32)));
+    qa_glerr_check("glow draw #8 (ligne 881)");  // [QA-GLERR] 14/10
   }
   glEnable(GL_DEPTH_TEST);
 }

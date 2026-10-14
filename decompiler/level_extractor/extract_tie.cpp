@@ -1,12 +1,17 @@
 #include "extract_tie.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <map>
+#include <set>
 
 #include "common/log/log.h"
 #include "common/util/FileUtil.h"
 #include "common/util/string_util.h"
 
 #include "decompiler/ObjectFile/LinkedObjectFile.h"
+#include "decompiler/level_extractor/level_editor.h"
 
 // Jak 2 notes:
 // - proto flags are currently ignored, but stored.
@@ -215,6 +220,10 @@ struct TieInstanceInfo {
   u16 wind_index = 0;
 
   std::vector<TieInstanceFragInfo> frags;  // per-instance per-fragment info (just colors)
+
+  // PC-REMAKE 13/10 (editeur de niveaux) : 0 = artistes, 3 = ajout de l'editeur
+  u8 src = 0;
+  int add_id = 0;
 };
 
 // The 5 qw of adgif data contains draw settings, and they also snuck in some extra data.
@@ -440,6 +449,22 @@ std::vector<TieProtoInfo> collect_instance_info(
     info.mat[3][2] += info.bsphere[2];
     info.wind_index = instance.wind_index;
 
+    // PC-REMAKE : catalogue des spécimens de feuillage (un par proto, position
+    // en mètres) pour la visite guidée de réglage du vent
+    {
+      static std::set<std::string> logged_specimens;
+      const std::string& pname = protos->at(instance.bucket_index).name;
+      std::string ln = pname;
+      std::transform(ln.begin(), ln.end(), ln.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      if ((ln.find("palm") != std::string::npos || ln.find("canopy") != std::string::npos ||
+           ln.find("tree") != std::string::npos || ln.find("frond") != std::string::npos) &&
+          logged_specimens.insert(pname).second) {
+        lg::info("PC-REMAKE palm specimen '{}' at ({:.1f}, {:.1f}, {:.1f}) m", pname,
+                 info.mat[3][0] / 4096.f, info.mat[3][1] / 4096.f, info.mat[3][2] / 4096.f);
+      }
+    }
+
     info.mat[0][3] = 0.f;
 
     // each fragment has its own color data (3 dmatags)
@@ -633,7 +658,8 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
                        const std::vector<level_tools::TextureRemap>& map,
                        const std::vector<level_tools::PrototypeBucketTie>& protos,
                        int geo,
-                       GameVersion version) {
+                       GameVersion version,
+                       const TextureDB* tex_db = nullptr) {
   out->resize(std::max(out->size(), protos.size()));
   for (size_t i = 0; i < protos.size(); i++) {
     const auto& proto = protos[i];
@@ -643,6 +669,29 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
     info.name = proto.name;
     // wind "stiffness" nonzero value means it has the wind effect
     info.stiffness = proto.stiffness;
+    // PC-REMAKE: certaines variantes de palmiers livrent stiffness 0 (immobiles).
+    // On les force dans le circuit du vent : elles héritent
+    // de toute l'animation des frondes. Le log permet de repérer les protos de
+    // feuillage nommés autrement.
+    {
+      std::string lname = proto.name;
+      std::transform(lname.begin(), lname.end(), lname.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      // TENTATIVE CHIRURGICALE (16/08, après le succès du
+      // détachement) : UNIQUEMENT les deux protos de palmiers penchés — leurs
+      // troncs seront épinglés par le détachement par texture d'écorce, leurs
+      // feuilles recevront le battement validé. Tout le reste demeure vanilla.
+      const bool is_foliage = lname.find("palm-tilt") != std::string::npos ||
+                              lname.find("palm-straight") != std::string::npos;
+      if (is_foliage) {
+        // 0.10 = la raideur D'ORIGINE des palm-01/02 fluides (log d'inventaire) ;
+        // 0.30 rendait les penchés secs et brutaux (17/08)
+        info.stiffness = 0.10f;
+        lg::info("PC-REMAKE wind: proto force '{}' (stiffness 0 -> 0.10)", proto.name);
+      } else {
+        lg::info("PC-REMAKE tie proto '{}' stiffness {:.2f}", proto.name, info.stiffness);
+      }
+    }
     math::Vector<u8, 4> jak2_tint_color;
     if (proto.has_envmap_shader) {
       std::vector<u8> adgif;
@@ -747,6 +796,11 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
         GenericTieHeader header;
         memcpy(&header, generic.data(), sizeof(GenericTieHeader));
         frag_info.envmap_tint_color = header.tint_color;
+        if (getenv("QA_TINT_DUMP")) {
+          lg::info("QA-TINT proto '{}' frag tint {} {} {} {}", proto.name,
+                   header.tint_color.x(), header.tint_color.y(), header.tint_color.z(),
+                   header.tint_color.w());
+        }
         int normal_count = header.num_bps + header.num_ips;
         frag_info.normal_data_packed.resize(normal_count);
         for (int ni = 0; ni < normal_count; ni++) {
@@ -758,6 +812,30 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
       }
 
       info.frags.push_back(std::move(frag_info));
+    }
+
+    // PC-REMAKE (17/08, identification au projecteur violet) :
+    // détection AUTOMATIQUE des palmiers penchés — tout proto resté immobile
+    // dont un draw porte la texture de couronne « palm-leaf-colorful » entre
+    // dans le circuit du vent. Fini les noms devinés : c'est la texture, prouvée
+    // à l'écran, qui désigne les protos. Le tronc (palmtree-trunk) et la barbe
+    // (palmtree-beard) sont épinglés par le détachement par texture côté rendu.
+    if (info.stiffness == 0.f && tex_db) {
+      std::string crown_tex;
+      for (auto& frag : info.frags) {
+        for (auto& ad : frag.adgifs) {
+          auto it = tex_db->textures.find(ad.combo_tex);
+          if (it != tex_db->textures.end() &&
+              it->second.name.find("palm-leaf-colorful") != std::string::npos) {
+            crown_tex = it->second.name;
+          }
+        }
+      }
+      if (!crown_tex.empty()) {
+        // même raideur que les palm-01/02 fluides d'origine
+        info.stiffness = 0.10f;
+        lg::info("PC-REMAKE wind: proto AUTO force '{}' (couronne '{}')", proto.name, crown_tex);
+      }
     }
   }
 }
@@ -2743,6 +2821,134 @@ void merge_groups(std::vector<tfrag3::PackedTieVertices::MatrixGroup>& grps) {
   std::swap(result, grps);
 }
 
+// ============================================================================
+// PC-REMAKE 13/10 : EDITEUR DE NIVEAUX (voir level_editor.h)
+// Ajouts = clones d'une instance du meme objet DANS ce niveau (ses couleurs par
+// sommet), rattaches a la visibilite de l'instance la plus proche ; suppressions
+// par (objet, position). NB : la COLLISION du decor est celle du jeu d'origine
+// (un rocher retire laisse son mur invisible, un ajout n'a pas de collision).
+// ============================================================================
+void editor_apply_tie_edits(std::vector<TieProtoInfo>& protos,
+                            const level_editor::LevelEdits& edits,
+                            const std::string& level) {
+  if (edits.empty()) {
+    return;
+  }
+  for (const auto& a : edits.adds) {
+    if (a.kind != "tie") {
+      continue;
+    }
+    if (!a.from_level.empty()) {
+      lg::warn("PC-REMAKE editeur [{}] : objet '{}' d'un autre niveau ({}) — non supporte",
+               level, a.proto, a.from_level);
+      continue;
+    }
+    TieProtoInfo* proto = nullptr;
+    for (auto& p : protos) {
+      if (p.name == a.proto && !p.instances.empty()) {
+        proto = &p;
+        break;
+      }
+    }
+    if (!proto) {
+      // un niveau peut avoir plusieurs arbres TIE : l objet est dans l un d eux
+      lg::debug("PC-REMAKE editeur [{}] : objet {} absent de cet arbre", level, a.proto);
+      continue;
+    }
+    // modele : la premiere instance d'origine de cet objet
+    const TieInstanceInfo* model = nullptr;
+    for (const auto& inst : proto->instances) {
+      if (inst.src == 0) {
+        model = &inst;
+        break;
+      }
+    }
+    if (!model) {
+      model = &proto->instances.front();
+    }
+    TieInstanceInfo clone = *model;
+    const float w33 = clone.mat[3][3];
+    clone.mat = level_editor::add_matrix(a);
+    clone.mat[0][3] = 0.f;
+    clone.mat[3][3] = w33;
+    clone.bsphere = math::Vector4f(clone.mat[3][0], clone.mat[3][1], clone.mat[3][2],
+                                   model->bsphere.w() * std::max(a.scale, 0.1f) +
+                                       2.f * level_editor::kMeter);
+    // visibilite : celle de l'instance d'origine la plus proche (tous objets)
+    float best = 1e30f;
+    for (const auto& p : protos) {
+      for (const auto& inst : p.instances) {
+        if (inst.src != 0) {
+          continue;
+        }
+        float dx = inst.mat[3][0] - clone.mat[3][0], dy = inst.mat[3][1] - clone.mat[3][1],
+              dz = inst.mat[3][2] - clone.mat[3][2];
+        float d = dx * dx + dy * dy + dz * dz;
+        if (d < best) {
+          best = d;
+          clone.vis_id = inst.vis_id;
+        }
+      }
+    }
+    clone.src = 3;
+    clone.add_id = a.id;
+    proto->instances.push_back(clone);
+  }
+  for (auto& p : protos) {
+    p.instances.erase(std::remove_if(p.instances.begin(), p.instances.end(),
+                                     [&](const TieInstanceInfo& inst) {
+                                       return inst.src != 3 &&
+                                              level_editor::is_removed(edits, "tie", p.name,
+                                                                       inst.mat[3]);
+                                     }),
+                      p.instances.end());
+  }
+}
+
+void editor_export_ties(const std::vector<TieProtoInfo>& protos, const TextureDB& tdb) {
+  for (const auto& proto : protos) {
+    if (proto.instances.empty() && proto.frags.empty()) {
+      continue;
+    }
+    std::map<u32, level_editor::ExportPart> by_tex;
+    for (const auto& frag : proto.frags) {
+      for (const auto& strip : frag.strips) {
+        auto& part = by_tex[strip.adgif.combo_tex];
+        if (part.tex_name.empty()) {
+          auto it = tdb.textures.find(strip.adgif.combo_tex);
+          if (it != tdb.textures.end()) {
+            part.tex_name = it->second.name;
+            auto pit = tdb.tpage_names.find(it->second.page);
+            part.tex_page = pit != tdb.tpage_names.end() ? pit->second : "";
+          }
+        }
+        for (size_t i = 2; i < strip.verts.size(); i++) {
+          for (size_t k : {i - 2, i - 1, i}) {
+            const auto& v = strip.verts[k];
+            part.pos.push_back(v.pos.x() / level_editor::kMeter);
+            part.pos.push_back(v.pos.y() / level_editor::kMeter);
+            part.pos.push_back(v.pos.z() / level_editor::kMeter);
+            part.uv.push_back(v.tex.x());
+            part.uv.push_back(v.tex.y());
+            part.rgb.push_back(128);
+            part.rgb.push_back(128);
+            part.rgb.push_back(128);
+          }
+        }
+      }
+    }
+    std::vector<level_editor::ExportPart> parts;
+    for (auto& [combo, part] : by_tex) {
+      parts.push_back(std::move(part));
+    }
+    int eidx = level_editor::add_proto("tie", proto.name, "", std::move(parts));
+    for (const auto& inst : proto.instances) {
+      level_editor::add_instance("tie", eidx, inst.mat, inst.src == 3 ? "ajout" : "jeu",
+                                 inst.add_id);
+    }
+  }
+}
+
 void extract_tie(const level_tools::DrawableTreeInstanceTie* tree,
                  const std::string& debug_name,
                  const std::vector<level_tools::TextureRemap>& tex_map,
@@ -2793,7 +2999,12 @@ void extract_tie(const level_tools::DrawableTreeInstanceTie* tree,
     // convert level format data to a nicer format
     auto info =
         collect_instance_info(as_instance_array, &tree->prototypes.prototype_array_tie.data, geo);
-    update_proto_info(&info, tex_map, tree->prototypes.prototype_array_tie.data, geo, version);
+    update_proto_info(&info, tex_map, tree->prototypes.prototype_array_tie.data, geo, version,
+                      &tex_db);
+    // PC-REMAKE 13/10 : modifications de l'editeur de niveaux (memes a chaque LOD) —
+    // APRES update_proto_info : c'est lui qui donne leur nom aux objets
+    editor_apply_tie_edits(info, level_editor::load_edits(level_editor::current_level()),
+                           level_editor::current_level());
     if (version < GameVersion::Jak2) {
       check_wind_vectors_zero(info, tree->prototypes.wind_vectors);
     }
@@ -2801,6 +3012,11 @@ void extract_tie(const level_tools::DrawableTreeInstanceTie* tree,
     emulate_tie_prototype_program(info);
     emulate_tie_instance_program(info, version);
     emulate_kicks(info);
+
+    // PC-REMAKE 13/10 : export pour l'editeur (LOD le plus detaille seulement)
+    if (geo == 0) {
+      editor_export_ties(info, tex_db);
+    }
 
     // debug save to .obj
     if (dump_level) {

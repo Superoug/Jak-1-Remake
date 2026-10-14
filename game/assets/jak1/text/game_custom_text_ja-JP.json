@@ -229,5 +229,17 @@
   "1616": "アスペクトひのほかのせんたくしはありません",
   "1617": "コントローラのLEDでズーマーのおんどをひょうじする",
   "1618": "PRESSURE SENSITIVITY",
-  "1619": "ANALOG SENSITIVITY"
+  "1619": "ANALOG SENSITIVITY",
+  "161a": "REMAKE",
+  "161b": "NIGHT INTENSITY",
+  "161c": "LAMP POWER",
+  "161d": "LAMP RANGE",
+  "161e": "SUN RELIGHT",
+  "161f": "AMBIENT OCCLUSION",
+  "1620": "SUN SHADOWS",
+  "1621": "SUN RAYS",
+  "1622": "BLOOM",
+  "1623": "ARTISTS' SUN",
+  "1624": "GROUND DETAIL",
+  "1625": "REMAKE LOOK"
 }

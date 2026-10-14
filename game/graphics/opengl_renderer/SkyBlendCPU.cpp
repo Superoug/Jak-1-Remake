@@ -11,17 +11,22 @@
 
 SkyBlendCPU::SkyBlendCPU() {
   for (int i = 0; i < 2; i++) {
-    glGenTextures(1, &m_textures[i].gl);
-    glBindTexture(GL_TEXTURE_2D, m_textures[i].gl);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_sizes[i], m_sizes[i], 0, GL_RGBA,
-                 GL_UNSIGNED_INT_8_8_8_8_REV, 0);
+    // 14/10 : anneau de 3 textures (voir m_ring) ; m_textures[i].gl = la premiere
+    glGenTextures(kRing, m_ring[i]);
+    for (int r = 0; r < kRing; r++) {
+      glBindTexture(GL_TEXTURE_2D, m_ring[i][r]);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_sizes[i], m_sizes[i], 0, GL_RGBA,
+                   GL_UNSIGNED_INT_8_8_8_8_REV, 0);
+    }
+    m_textures[i].gl = m_ring[i][0];
+    m_ring_cur[i] = 0;
     m_texture_data[i].resize(4 * m_sizes[i] * m_sizes[i]);
   }
 }
 
 SkyBlendCPU::~SkyBlendCPU() {
-  for (auto& tex : m_textures) {
-    glDeleteTextures(1, &tex.gl);
+  for (int i = 0; i < 2; i++) {
+    glDeleteTextures(kRing, m_ring[i]);
   }
 }
 
@@ -136,6 +141,7 @@ SkyBlendStats SkyBlendCPU::do_sky_blends(DmaFollower& dma,
                                          SharedRenderState* render_state,
                                          ScopedProfilerNode& /*prof*/) {
   SkyBlendStats stats;
+  bool dirty[2] = {false, false};
 
   while (dma.current_tag().qwc == 6) {
     // assuming that the vif and gif-tag is correct
@@ -217,13 +223,26 @@ SkyBlendStats SkyBlendCPU::do_sky_blends(DmaFollower& dma,
           stats.cloud_blends++;
         }
       }
-      glBindTexture(GL_TEXTURE_2D, m_textures[buffer_idx].gl);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_sizes[buffer_idx], m_sizes[buffer_idx], 0, GL_RGBA,
-                   GL_UNSIGNED_INT_8_8_8_8_REV, m_texture_data[buffer_idx].data());
-
-      render_state->texture_pool->move_existing_to_vram(m_textures[buffer_idx].tex,
-                                                        m_textures[buffer_idx].tbp);
+      // 14/10 : la mise en ligne se fait UNE fois a la fin (voir m_ring) — original :
+      //   glBindTexture(m_textures[buffer_idx].gl); glTexImage2D(... data) ;
+      //   move_existing_to_vram(...) apres CHAQUE melange
+      dirty[buffer_idx] = true;
     }
+  }
+
+  for (int i = 0; i < 2; i++) {
+    if (!dirty[i]) {
+      continue;
+    }
+    const int r = (m_ring_cur[i] + 1) % kRing;
+    glBindTexture(GL_TEXTURE_2D, m_ring[i][r]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_sizes[i], m_sizes[i], GL_RGBA,
+                    GL_UNSIGNED_INT_8_8_8_8_REV, m_texture_data[i].data());
+    m_ring_cur[i] = r;
+    m_textures[i].gl = m_ring[i][r];
+    render_state->texture_pool->update_gl_texture(m_textures[i].tex, m_sizes[i], m_sizes[i],
+                                                  m_ring[i][r]);
+    render_state->texture_pool->move_existing_to_vram(m_textures[i].tex, m_textures[i].tbp);
   }
 
   return stats;

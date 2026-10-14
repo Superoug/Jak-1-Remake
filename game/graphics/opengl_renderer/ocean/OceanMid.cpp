@@ -14,7 +14,49 @@ OceanMid::OceanMid() {
   vu.vf25 = Vf(1, 1, 1, 1);
 }
 
+// PC-REMAKE EAU TRANSPARENTE (25/08) : pont vers OceanNear — le mid accumule
+// ses sommets au bucket 4 mais se dessine au bucket ocean-near (63), APRÈS
+// Jak, en transparent. Pointeur posé chaque frame par run(), consommé par
+// OceanNear::render via flush_deferred (même frame, même thread de rendu).
+OceanMid* g_ocean_mid_deferred = nullptr;
+
+// [QA-EAU] : bilan toutes les 300 frames — si des mids accumules ne sont
+// JAMAIS dessines (drop), l'eau disparait ces frames-la. A retirer une fois
+// le clignotement regle.
+int qa_eau_flush = 0;
+int qa_eau_drop = 0;
+
+void OceanMid::flush_deferred(SharedRenderState* render_state, ScopedProfilerNode& prof) {
+  if (!m_flush_pending) {
+    return;
+  }
+  m_flush_pending = false;
+  qa_eau_flush++;
+  m_common_ocean_renderer.flush_mid_transparent(render_state, prof);
+}
+
+// PC-REMAKE QA : compte les programmes VU exécutés par image pour vérifier que
+// la transition proche/large (107/275) tourne réellement en jeu.
+static int qa_mid_frames = 0;
+static int qa_c46 = 0, qa_c73 = 0, qa_c107 = 0, qa_c275 = 0, qa_c41 = 0, qa_c43 = 0;
+
 void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProfilerNode& prof) {
+  // un différé de la frame précédente qui n'aurait jamais été dessiné (frame
+  // avortée) est simplement abandonné — ses sommets vont être réécrits
+  if (m_flush_pending) {
+    qa_eau_drop++;  // [QA-EAU] une frame d'eau a ete PERDUE (jamais dessinee)
+  }
+  m_flush_pending = false;
+  {
+    static int qa_eau_frames = 0;
+    if (++qa_eau_frames >= 300) {
+      lg::info("[QA-EAU] mid differe : {} dessines, {} PERDUS sur {} frames", qa_eau_flush,
+               qa_eau_drop, qa_eau_frames);
+      qa_eau_frames = 0;
+      qa_eau_flush = 0;
+      qa_eau_drop = 0;
+    }
+  }
   m_common_ocean_renderer.init_for_mid();
   // first is setting base and offset
   {
@@ -101,15 +143,19 @@ void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProf
                v1.kind == VifCode::Kind::MSCALF) {
       switch (v1.immediate) {
         case 46:
+          qa_c46++;
           run_call46_vu2c();
           break;
         case 73:
+          qa_c73++;
           run_call73_vu2c();
           break;
         case 107:
+          qa_c107++;
           run_call107_vu2c();
           break;
         case 275:
+          qa_c275++;
           run_call275_vu2c();
           break;
         default:
@@ -118,9 +164,11 @@ void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProf
     } else if (v0.kind == VifCode::Kind::MSCALF && v1.kind == VifCode::Kind::FLUSHA) {
       switch (v0.immediate) {
         case 41:
+          qa_c41++;
           run_call41_vu2c();
           break;
         case 43:
+          qa_c43++;
           run_call43_vu2c();
           break;
         default:
@@ -130,7 +178,22 @@ void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProf
       ASSERT_MSG(false, fmt::format("{} {}", data.vifcode0().print(), data.vifcode1().print()));
     }
   }
-  m_common_ocean_renderer.flush_mid(render_state, prof);
+  // PC-REMAKE EAU TRANSPARENTE (25/08) : ne PAS dessiner ici (bucket 4, avant
+  // Jak — la surface gravait sa profondeur et coupait le joueur immergé à la
+  // ligne de flottaison). Le dessin part au bucket ocean-near via
+  // flush_deferred. Ligne d'origine, à restaurer pour revenir en arrière :
+  // m_common_ocean_renderer.flush_mid(render_state, prof);
+  m_flush_pending = true;
+  g_ocean_mid_deferred = this;
+  qa_mid_frames++;
+  if (qa_mid_frames >= 300) {
+    lg::info(
+        "[QA] ocean VU sur {} images : large 46={} 73={} | transition 107={} 275={} | flush "
+        "41={} 43={}",
+        qa_mid_frames, qa_c46, qa_c73, qa_c107, qa_c275, qa_c41, qa_c43);
+    qa_mid_frames = 0;
+    qa_c46 = qa_c73 = qa_c107 = qa_c275 = qa_c41 = qa_c43 = 0;
+  }
 }
 
 void OceanMid::run_jak2(DmaFollower& dma,

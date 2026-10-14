@@ -461,6 +461,9 @@
     (set! *ocean-heights* (the-as ocean-wave-info (-> gp-0 base)))
     (ocean-interp-wave *ocean-heights*
                        (the uint (* (/ (-> *display* time-factor) 5.0) (-> *display* integral-frame-counter)))) ;; og:preserve-this changed for high fps
+    ;; PC-REMAKE : eau laissée d'origine. La simulation
+    ;; d'ondes reste disponible côté C++ (OceanSim) mais n'est plus appelée ;
+    ;; pour la réactiver, remettre : (pc-ocean-sim! (the-as pointer *ocean-heights*))
     (&+! (-> gp-0 base) 4096)
     (set! *ocean-verts* (the-as (inline-array vector) (-> gp-0 base)))
     (ocean-generate-verts *ocean-verts* *ocean-heights*)
@@ -475,6 +478,17 @@
         ((< (+ f0-3 (* f1-3 f1-3)) 40000.0) (set! (-> *ocean-map* start-corner y) -4096.0))
         ((or (< -409600.0 (-> v1-12 y)) (movie?)) (set! (-> *ocean-map* start-corner y) 0.0))
         (else (set! (-> *ocean-map* start-corner y) -98304.0))))
+    ;; PC-REMAKE : publie le niveau de la mer pour le scintillement — ICI le
+    ;; pointeur est garanti par le garde du moteur (la lecture per-frame depuis
+    ;; main-cheats crashait en transition de niveau). Ré-arme les forces chaque
+    ;; frame ; main-cheats les désarme — sans océan actif, zéro scintillement.
+    ;; ... et SEULEMENT si la camera est proche de la surface : dans la cite
+    ;; engloutie, tout le niveau est 30 m+ sous le "niveau de la mer" de ses
+    ;; tables -> la brume sous-marine voilait l'ecran entier en bleu opaque
+    ;; (tournee du 18/08). A -30 m sous l'eau de surface, on est dans un
+    ;; souterrain : pas de brume.
+    (if (> (-> (camera-pos) y) (- (-> *ocean-map* start-corner y) 122880.0))
+        (pc-set-water-glitter! (-> *ocean-map* start-corner y) 1.0 1.0))
     (when (not *ocean-off*)
       (when (logtest? *vu1-enable-user* (vu1-renderer-mask ocean))
         (let* ((s5-0 (-> *display* frames (-> *display* on-screen) frame global-buf))

@@ -1,11 +1,20 @@
 #include "OceanNear.h"
 
 #include "common/log/log.h"
+#include "common/util/FileUtil.h"
+
+#include "game/graphics/opengl_renderer/ocean/OceanMid.h"
 
 #include "third-party/imgui/imgui.h"
 
 OceanNear::OceanNear(const std::string& name, int my_id)
-    : BucketRenderer(name, my_id), m_texture_renderer(false) {
+    // PC-REMAKE : mipmaps aussi pour la texture du proche — depuis que le rayon
+    // couvre ~220 m, le proche est vu de loin comme le large ; sans mipmaps il
+    // s'aplatissait en nappe unie (frontière visible, captures 17/08 soir)
+    : BucketRenderer(name, my_id), m_texture_renderer(true) {
+  // et parité totale : le proche n'écrase plus la texture du large à 8160 —
+  // les deux zones échantillonnent le même contenu
+  m_texture_renderer.set_move_to_vram(false);
   for (auto& a : m_vu_data) {
     a.fill(0);
   }
@@ -25,6 +34,13 @@ static bool is_end_tag(const DmaTag& tag, const VifCode& v0, const VifCode& v1) 
 void OceanNear::render(DmaFollower& dma,
                        SharedRenderState* render_state,
                        ScopedProfilerNode& prof) {
+  // PC-REMAKE EAU TRANSPARENTE (25/08) : le mid différé se dessine ICI, après
+  // tous les buckets merc (Jak) — AVANT tout early-out : il doit sortir même
+  // si le near est vide ou désactivé.
+  if (g_ocean_mid_deferred) {
+    g_ocean_mid_deferred->flush_deferred(render_state, prof);
+  }
+
   // skip if disabled
   if (!m_enabled) {
     while (dma.current_tag_offset() != render_state->next_bucket) {
@@ -67,7 +83,21 @@ void OceanNear::render_jak1(DmaFollower& dma,
   {
     auto p = prof.make_scoped_child("texture");
     // TODO: this looks the same as the previous ocean renderer to me... why do it again?
-    m_texture_renderer.handle_ocean_texture_jak1(dma, render_state, p);
+    // PC-REMAKE 14/10 : c'est bien la meme (le drapeau qui les distinguait est commente
+    // dans draw-ocean-texture) et, depuis le 17/08, cette instance ne publie plus sa
+    // texture (les tuiles proches lisent celle du large) : on lit les paquets sans
+    // dessiner — plus de rendu de texture + mips au milieu de l'image.
+    // `touch /tmp/qa_ocean_near_tex` = ancien chemin (A/B).
+    static bool old_path = false;
+    static int poll = 0;
+    if ((poll++ % 64) == 0) {
+      old_path = fs::exists("/tmp/qa_ocean_near_tex");
+    }
+    if (old_path) {
+      m_texture_renderer.handle_ocean_texture_jak1(dma, render_state, p);
+    } else {
+      m_texture_renderer.skip_ocean_texture_jak1(dma);
+    }
   }
 
   if (dma.current_tag().qwc != 2) {
@@ -99,6 +129,11 @@ void OceanNear::render_jak1(DmaFollower& dma,
     ASSERT(off.immediate == VU1_INPUT_BUFFER_OFFSET);
   }
 
+  // PC-REMAKE QA : le rendu proche émet 33 appels 39/image côté GOAL mais 0
+  // sommet côté flush — on compte chaque étape pour trouver la fuite.
+  static int qa_near_frames = 0;
+  static int qa_near_uploads = 0, qa_near_c0 = 0, qa_near_c39 = 0, qa_near_inconnus = 0;
+
   while (!is_end_tag(dma.current_tag(), dma.current_tag_vif0(), dma.current_tag_vif1())) {
     auto data = dma.read_and_advance();
     auto v0 = data.vifcode0();
@@ -110,23 +145,40 @@ void OceanNear::render_jak1(DmaFollower& dma,
       u16 addr = up.addr_qw + (up.use_tops_flag ? get_upload_buffer() : 0);
       ASSERT(addr + v1.num <= 1024);
       memcpy(m_vu_data + addr, data.data, 16 * v1.num);
+      qa_near_uploads++;
     } else if (v0.kind == VifCode::Kind::MSCALF && v1.kind == VifCode::Kind::STMOD) {
       ASSERT(v1.immediate == 0);
       switch (v0.immediate) {
         case 0:
+          qa_near_c0++;
           run_call0_vu2c();
           break;
         case 39:
+          qa_near_c39++;
           run_call39_vu2c();
           break;
         default:
           ASSERT_MSG(false, fmt::format("unknown ocean near call: {}", v0.immediate));
+      }
+    } else {
+      // paquet ni upload ni appel : jusqu'ici il etait JETE EN SILENCE
+      qa_near_inconnus++;
+      if (qa_near_inconnus <= 8) {
+        lg::warn("[QA] ocean near paquet inconnu : {} {}", v0.print(), v1.print());
       }
     }
   }
 
   while (dma.current_tag_offset() != render_state->next_bucket) {
     dma.read_and_advance();
+  }
+
+  qa_near_frames++;
+  if (qa_near_frames >= 300) {
+    lg::info("[QA] ocean near sur {} images : uploads={} call0={} call39={} inconnus={}",
+             qa_near_frames, qa_near_uploads, qa_near_c0, qa_near_c39, qa_near_inconnus);
+    qa_near_frames = 0;
+    qa_near_uploads = qa_near_c0 = qa_near_c39 = qa_near_inconnus = 0;
   }
 
   m_common_ocean_renderer.flush_near(render_state, prof);

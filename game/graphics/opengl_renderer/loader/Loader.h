@@ -12,6 +12,9 @@
 #include "game/graphics/opengl_renderer/loader/common.h"
 #include "game/graphics/texture/TexturePool.h"
 
+// PC-REMAKE: switch the engine reflection pass on for metal materials
+void apply_material_reflections(tfrag3::Level& lev);
+
 class Loader {
  public:
   static constexpr float TIE_LOAD_BUDGET = 1.5f;

@@ -6,7 +6,10 @@
 
 #include "game/graphics/pipelines/opengl.h"
 
-Shader::Shader(const std::string& shader_name, GameVersion version) : m_name(shader_name) {
+Shader::Shader(const std::string& shader_name,
+               GameVersion version,
+               const std::string& frag_define)
+    : m_name(shader_name) {
   const std::string height_scale = version == GameVersion::Jak1 ? "1.0" : "0.5";
   const std::string scissor_height = version == GameVersion::Jak1 ? "448.0" : "416.0";
   const std::string scissor_adjust = "512.0 / " + scissor_height;
@@ -20,6 +23,11 @@ Shader::Shader(const std::string& shader_name, GameVersion version) : m_name(sha
   vert_src = std::regex_replace(vert_src, std::regex("HEIGHT_SCALE"), height_scale);
   vert_src = std::regex_replace(vert_src, std::regex("SCISSOR_HEIGHT"), scissor_height);
   frag_src = std::regex_replace(frag_src, std::regex("SCISSOR_HEIGHT"), scissor_height);
+  if (!frag_define.empty()) {
+    // apres la ligne #version (elle doit rester la premiere)
+    auto nl = frag_src.find('\n');
+    frag_src.insert(nl == std::string::npos ? 0 : nl + 1, "#define " + frag_define + "\n");
+  }
   vert_src = std::regex_replace(vert_src, std::regex("SCISSOR_ADJUST"), "(" + scissor_adjust + ")");
 
   m_vert_shader = glCreateShader(GL_VERTEX_SHADER);
@@ -125,6 +133,8 @@ ShaderLibrary::ShaderLibrary(GameVersion version) {
   at(ShaderId::ETIE_BASE) = {"etie_base", version};
   at(ShaderId::ETIE) = {"etie", version};
   at(ShaderId::SHADOW2) = {"shadow2", version};
+  at(ShaderId::SHADOW_DEPTH) = {"shadow_depth", version};  // PC-REMAKE
+  at(ShaderId::MERC_SHADOW) = {"merc_shadow", version};    // PC-REMAKE
   at(ShaderId::TEX_ANIM) = {"tex_anim", version};
   at(ShaderId::GLOW_DEPTH_COPY) = {"glow_depth_copy", version};
   at(ShaderId::GLOW_PROBE_ON_GRID) = {"glow_probe_on_grid", version};

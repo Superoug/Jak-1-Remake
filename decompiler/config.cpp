@@ -116,6 +116,12 @@ Config make_config_via_json(nlohmann::json& json) {
   config.write_tpage_imports = json.at("write_tpage_imports").get<bool>();
   config.process_game_text = json.at("process_game_text").get<bool>();
   config.process_game_count = json.at("process_game_count").get<bool>();
+  if (json.contains("pc_faithful_hd_textures")) {
+    config.pc_faithful_hd_textures = json.at("pc_faithful_hd_textures").get<bool>();
+  }
+  if (json.contains("pc_faithful_hd_models")) {
+    config.pc_faithful_hd_models = json.at("pc_faithful_hd_models").get<bool>();
+  }
   config.process_art_groups = json.at("process_art_groups").get<bool>();
   if (json.contains("process_subtitle_text")) {
     config.process_subtitle_text = json.at("process_subtitle_text").get<bool>();
@@ -329,6 +335,12 @@ Config make_config_via_json(nlohmann::json& json) {
   }
 
   config.levels_to_extract = inputs_json.at("levels_to_extract").get<std::vector<std::string>>();
+  // PC-REMAKE 13/10 : l'editeur de niveaux ne re-extrait que le niveau modifie
+  // (--config-override '{"levels_to_extract_override": ["VI1.DGO"]}')
+  if (json.contains("levels_to_extract_override")) {
+    config.levels_to_extract =
+        json.at("levels_to_extract_override").get<std::vector<std::string>>();
+  }
   config.levels_extract = json.at("levels_extract").get<bool>();
   if (json.contains("save_texture_pngs")) {
     config.save_texture_pngs = json.at("save_texture_pngs").get<bool>();
