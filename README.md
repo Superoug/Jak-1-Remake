@@ -28,6 +28,18 @@ Silicon via Rosetta).
 Réglages en jeu : **Options → Graphismes → Remake** (nuit, lampes, soleil, ombres, rayons,
 bloom, rendu remake…).
 
+## Captures
+
+<img width="1920" height="1080" alt="01 - Village de Sandover (jour)" src="https://github.com/user-attachments/assets/0515f8f0-9946-44dc-814d-ccf4193a70f0" />
+
+<img width="1920" height="1080" alt="04 - Plage des Sentinelles (nuit)" src="https://github.com/user-attachments/assets/e5722e9f-d5ea-4eef-b41f-a95e7c0ebc3d" />
+
+<img width="1920" height="1080" alt="09 - Cratere volcanique (jour)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
+
+
+
+
+
 ## Ce qui change par rapport au jeu d'origine
 
 - Éclairage reconstruit : Ombres dynamiques, lumières, reflet...
