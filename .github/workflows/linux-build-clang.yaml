@@ -58,7 +58,7 @@ jobs:
         run: ./test.sh
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: opengoal-linux-${{ inputs.cachePrefix }}
           if-no-files-found: error
