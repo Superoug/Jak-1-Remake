@@ -39,6 +39,10 @@ Celles-ci sont prises directement en jeu. Aucune retouche.
 
 <img width="1920" height="1080" alt="09 - Cratere volcanique (jour)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
 
+<img width="1920" height="1080" alt="13 - Plage au bord de l&#39;eau (jour)" src="https://github.com/user-attachments/assets/d5873977-e818-446c-8d34-b1ab04676493" />
+
+<img width="1920" height="1080" alt="14 - Jak devant la cabane de Samos" src="https://github.com/user-attachments/assets/73b4fec6-60f8-4bd9-b910-d21ab0755aea" />
+
 
 ## Ce qui change par rapport au jeu d'origine
 
