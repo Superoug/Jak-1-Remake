@@ -7,9 +7,7 @@ moderne… sans remodeler quoi que ce soit : le travail des artistes d'origine e
 
 > **Il faut posséder le jeu original.** Ce dépôt ne contient AUCUN fichier du jeu : ni
 > niveaux, ni modèles, ni textures, ni sons. Tout est reconstruit sur l'ordinateur du joueur, à
-> partir de SA copie du jeu (ISO PS2), par le lanceur OpenGOAL. Même les textures HD sont
-> calculées à l'installation depuis les originaux du joueur (agrandissement « fidèle » : rien
-> n'est inventé).
+> partir de SA copie du jeu (ISO PS2), par le lanceur OpenGOAL.
 
 ## Installer (joueurs)
 
@@ -32,14 +30,11 @@ bloom, rendu remake…).
 
 ## Ce qui change par rapport au jeu d'origine
 
-- Éclairage reconstruit : soleil qui suit le ciel, ombres portées, lampes et sources
-  émissives (lave, éco, précurseurs), nuits bleutées, halos.
-- Herbe dense semée sur les sols d'herbe, buissons qui ondulent et réagissent aux pas.
+- Éclairage reconstruit : Ombres dynamiques, lumières, reflet...
+- Herbe dense, buissons qui ondulent, réagissent aux pas et au vent.
 - Eau : reflets, brume sous-marine, cascades lisibles.
-- Textures HD **fidèles** (Lanczos tuilé borné au voisinage d'origine), calculées chez vous.
-- Rendu remake : exposition, épaule des hautes lumières, contraste, saturation maîtrisée.
-- Performances : tri de visibilité de l'herbe et des ombres, lampes par tuiles d'écran, post en
-  deux passes — 60 images/s visées partout.
+- Textures HD **fidèles**
+- Performances : ce projet vise les 60 images/s sur tous support.
 
 ## Développeurs
 
@@ -47,10 +42,5 @@ Ce dépôt est basé sur [OG-Mod-Base](https://github.com/OpenGOAL-Mods/OG-Mod-B
 dérivé de [jak-project](https://github.com/open-goal/jak-project), licence ISC). Les
 modifications du remake sont signalées dans le code par `PC-REMAKE`. Les versions sont
 produites par l'action GitHub **Cut Mod Release** (binaires Windows, Linux, macOS Intel).
-
-Options du décompilateur ajoutées (`decompiler/config/jak1/jak1_config.jsonc`) :
-- `pc_faithful_hd_textures` : textures HD calculées à l'extraction (vrai) ;
-- `pc_faithful_hd_models` : aussi pour personnages, objets et herbe (faux = textures PS2
-  d'origine, le rendu validé).
 
 Le README d'origine d'OG-Mod-Base est dans [`docs/MOD-BASE-README.md`](docs/MOD-BASE-README.md).
