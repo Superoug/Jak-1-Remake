@@ -46,11 +46,11 @@ Celles-ci sont prises directement en jeu. Aucune retouche.
 
 ## Ce qui change par rapport au jeu d'origine
 
-- Éclairage reconstruit : Ombres dynamiques, lumières, reflet...
+- Éclairage reconstruit : Ombres dynamiques, lumières, reflet.
 - Herbe dense, buissons qui ondulent, réagissent aux pas et au vent.
-- Eau : reflets, brume sous-marine, cascades lisibles.
+- Eau : reflets, rayon de soleil.
 - Textures HD **fidèles**
-- Performances : ce projet vise les 60 images/s sur tous support.
+- Performances : ce projet vise les 60 images/s sur tous supports.
 
 ## Téléchargement
 
