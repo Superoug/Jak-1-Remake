@@ -1,5 +1,7 @@
 # Jak 1 Remake — mod OpenGOAL pour Jak and Daxter
 
+🇬🇧 [English version](README_EN.md)
+
 Un remake visuel de **Jak and Daxter: The Precursor Legacy** sous forme de **mod pour le
 lanceur officiel [OpenGOAL](https://opengoal.dev)** : éclairage moderne (soleil, ombres,
 lampes, lueurs), herbe dense, eau et cascades retravaillées, textures HD fidèles, étalonnage
