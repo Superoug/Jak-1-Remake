@@ -15,6 +15,11 @@
 
 #include "third-party/imgui/imgui.h"
 
+// Windows (MSVC, clang-cl) ne definit M_PI qu'avec _USE_MATH_DEFINES.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace {
 
 // PC-REMAKE: decide whether a surface is metal, so the engine's reflection

@@ -16,6 +16,11 @@
 #include "decompiler/level_extractor/extract_common.h"
 #include "decompiler/level_extractor/level_editor.h"
 
+// Windows (MSVC, clang-cl) ne definit M_PI qu'avec _USE_MATH_DEFINES.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace decompiler {
 using namespace level_tools;
 
