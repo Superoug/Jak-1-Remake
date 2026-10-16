@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceName": "Jak 1 Remake",
+  "lastUpdated": "2026-10-16T09:47:47Z",
+  "mods": {
+    "jak1-remake": {
+      "displayName": "Jak 1 Remake",
+      "description": "Remake visuel de Jak and Daxter (bêta) : éclairage moderne, ombres, herbe dense, eau, textures HD fidèles calculées depuis VOTRE jeu. Le jeu original est requis.",
+      "authors": [
+        "Superoug"
+      ],
+      "tags": [
+        "visual",
+        "remake",
+        "graphics",
+        "beta"
+      ],
+      "supportedGames": [
+        "jak1"
+      ],
+      "websiteUrl": "https://github.com/Superoug/Jak-1-Remake",
+      "versions": [
+        {
+          "version": "0.0.2",
+          "publishedDate": "2026-10-16T09:47:47Z",
+          "supportedGames": [
+            "jak1"
+          ],
+          "settings": {
+            "decompConfigOverride": "",
+            "shareVanillaSaves": false
+          },
+          "assets": {
+            "windows": "https://github.com/Superoug/Jak-1-Remake/releases/download/v0.0.2/windows-v0.0.2.zip",
+            "linux": "https://github.com/Superoug/Jak-1-Remake/releases/download/v0.0.2/linux-v0.0.2.tar.gz",
+            "macos": "https://github.com/Superoug/Jak-1-Remake/releases/download/v0.0.2/macos-intel-v0.0.2.tar.gz"
+          }
+        }
+      ]
+    }
+  },
+  "texturePacks": {}
+}
