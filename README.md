@@ -1,72 +1,72 @@
-# Jak 1 Remake — mod OpenGOAL pour Jak and Daxter
+# Jak 1 Remake — OpenGOAL mod for Jak and Daxter
 
-🇬🇧 [English version](README_EN.md)
+🇫🇷 [Version française](README_FR.md)
 
-Un remake visuel de **Jak and Daxter: The Precursor Legacy** sous forme de **mod pour le
-lanceur officiel [OpenGOAL](https://opengoal.dev)** : éclairage moderne (soleil, ombres,
-lampes, lueurs), herbe dense, eau retravaillées, textures HD fidèles.
-
-
-> **Il faut posséder le jeu original.** Ce dépôt ne contient AUCUN fichier du jeu : ni
-> niveaux, ni modèles, ni textures, ni sons. Tout est reconstruit sur l'ordinateur du joueur, à
-> partir de SA copie du jeu (ISO PS2), par le lanceur OpenGOAL.
-
-Tous les droits sur OpenGOAL sont réservés à leurs propriétaires respectifs
-
-## Installer (joueurs)
-
-1. Installer le [lanceur OpenGOAL](https://opengoal.dev) (v2.4.10 ou plus récent) et faire
-   l'installation normale de **Jak 1** avec votre ISO.
-2. Dans le lanceur : **Réglages → Mods → Ajouter une source**, et coller l'adresse de la source
-   de mods de ce projet (voir la page des versions du dépôt).
-3. Ouvrir la page des mods de Jak 1, choisir **Jak 1 Remake**, puis **Installer**. Le lanceur
-   télécharge le mod, le reconstruit depuis votre jeu (quelques minutes) et l'ajoute à la liste.
-
-Sans source de mods : télécharger l'archive de votre système sur la page des versions du
-dépôt (`windows-….zip`, `linux-….tar.gz` ou `macos-intel-….tar.gz`), puis dans le lanceur :
-page de **Jak 1 → Features → Mods → Ajouter depuis un fichier**, et choisir l'archive.
-
-Plateformes : Windows, Linux (dont Steam Deck en mode bureau) et macOS (Intel, et Apple
-Silicon via Rosetta).
-
-Réglages en jeu : **Options → Graphismes → Remake** (nuit, lampes, soleil, ombres, rayons,
-bloom, rendu remake…).
-
-## Captures
-Celles-ci sont prises directement en jeu. Aucune retouche. 
-
-<img width="1920" height="1080" alt="01 - Village de Sandover (jour)" src="https://github.com/user-attachments/assets/0515f8f0-9946-44dc-814d-ccf4193a70f0" />
-
-<img width="1920" height="1080" alt="04 - Plage des Sentinelles (nuit)" src="https://github.com/user-attachments/assets/e5722e9f-d5ea-4eef-b41f-a95e7c0ebc3d" />
-
-<img width="1920" height="1080" alt="09 - Cratere volcanique (jour)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
-
-<img width="1920" height="1080" alt="13 - Plage au bord de l&#39;eau (jour)" src="https://github.com/user-attachments/assets/d5873977-e818-446c-8d34-b1ab04676493" />
-
-<img width="1920" height="1080" alt="14 - Jak devant la cabane de Samos" src="https://github.com/user-attachments/assets/73b4fec6-60f8-4bd9-b910-d21ab0755aea" />
+A visual remake of **Jak and Daxter: The Precursor Legacy** as a **mod for the official
+[OpenGOAL](https://opengoal.dev) launcher**: modern lighting (sun, shadows, lamps, glows),
+dense grass, reworked water, faithful HD textures.
 
 
-## Ce qui change par rapport au jeu d'origine
+> **You must own the original game.** This repository contains NO game files: no levels,
+> no models, no textures, no sounds. Everything is rebuilt on the player's computer, from
+> THEIR copy of the game (PS2 ISO), by the OpenGOAL launcher.
 
-- Éclairage reconstruit : Ombres dynamiques, lumières, reflet.
-- Herbe dense, buissons qui ondulent, réagissent aux pas et au vent.
-- Eau : reflets, rayon de soleil.
-- Textures HD **fidèles**
-- Performances : ce projet vise les 60 images/s sur tous supports.
+All rights to OpenGOAL are reserved to their respective owners.
 
-## Téléchargement
+## Installation (players)
 
-Ce mod est fini à environ 40%. Il reste énormément de travail et de bugs à corriger.
+1. Install the [OpenGOAL launcher](https://opengoal.dev) (v2.4.10 or newer) and do the
+   regular **Jak 1** installation with your ISO.
+2. In the launcher: **Settings → Mods → Add**, and paste this project's mod source address
+   (see the repository's releases page).
+3. Open the Jak 1 mods page, select **Jak 1 Remake**, then **Install**. The launcher
+   downloads the mod, rebuilds it from your game (a few minutes) and adds it to the list.
+
+Without a mod source: download the archive for your system from the repository's releases
+page (`windows-….zip`, `linux-….tar.gz` or `macos-intel-….tar.gz`), then in the launcher:
+**Jak 1 → Features → Mods → Add from File**, and pick the archive.
+
+Platforms: Windows, Linux (including Steam Deck in desktop mode) and macOS (Intel, and Apple
+Silicon through Rosetta).
+
+In-game settings: **Options → Graphics → Remake** (night intensity, lamps, sun, shadows, sun
+rays, bloom, remake look…).
+
+## Screenshots
+These are taken directly in-game. No retouching.
+
+<img width="1920" height="1080" alt="01 - Sandover Village (day)" src="https://github.com/user-attachments/assets/0515f8f0-9946-44dc-814d-ccf4193a70f0" />
+
+<img width="1920" height="1080" alt="04 - Sentinel Beach (night)" src="https://github.com/user-attachments/assets/e5722e9f-d5ea-4eef-b41f-a95e7c0ebc3d" />
+
+<img width="1920" height="1080" alt="09 - Volcanic Crater (day)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
+
+<img width="1920" height="1080" alt="13 - Beach at the water's edge (day)" src="https://github.com/user-attachments/assets/d5873977-e818-446c-8d34-b1ab04676493" />
+
+<img width="1920" height="1080" alt="14 - Jak in front of Samos' hut" src="https://github.com/user-attachments/assets/73b4fec6-60f8-4bd9-b910-d21ab0755aea" />
+
+
+## What changes compared to the original game
+
+- Rebuilt lighting: dynamic shadows, lights, reflections.
+- Dense grass, swaying bushes that react to footsteps and wind.
+- Water: reflections, sun rays.
+- **Faithful** HD textures.
+- Performance: this project aims for 60 frames per second on every platform.
+
+## Download
+
+This mod is about 40% complete. There is still a lot of work to do and many bugs to fix.
 
 https://github.com/Superoug/Jak-1-Remake/releases
 
-## Développeurs
+## Developers
 
-Ce dépôt est basé sur [OG-Mod-Base](https://github.com/OpenGOAL-Mods/OG-Mod-Base) (lui-même
-dérivé de [jak-project](https://github.com/open-goal/jak-project), licence ISC). Les
-modifications du remake sont signalées dans le code par `PC-REMAKE`. Les versions sont
-produites par l'action GitHub **Cut Mod Release** (binaires Windows, Linux, macOS Intel).
+This repository is based on [OG-Mod-Base](https://github.com/OpenGOAL-Mods/OG-Mod-Base)
+(itself derived from [jak-project](https://github.com/open-goal/jak-project), ISC license).
+The remake's changes are marked in the code with `PC-REMAKE`. Releases are produced by the
+**Cut Mod Release** GitHub Action (Windows, Linux and macOS Intel binaries).
 
-Le README d'origine d'OG-Mod-Base est dans [`docs/MOD-BASE-README.md`](docs/MOD-BASE-README.md).
+The original OG-Mod-Base README is in [`docs/MOD-BASE-README.md`](docs/MOD-BASE-README.md).
 
-Ce projet est rendu possible grâce à Claude. Merci de votre compréhension.
+This project is made possible thanks to Claude. Thank you for your understanding.
