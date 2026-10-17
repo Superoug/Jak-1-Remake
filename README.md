@@ -4,8 +4,8 @@
 
 Un remake visuel de **Jak and Daxter: The Precursor Legacy** sous forme de **mod pour le
 lanceur officiel [OpenGOAL](https://opengoal.dev)** : éclairage moderne (soleil, ombres,
-lampes, lueurs), herbe dense, eau et cascades retravaillées, textures HD fidèles, étalonnage
-moderne… sans remodeler quoi que ce soit : le travail des artistes d'origine est conservé.
+lampes, lueurs), herbe dense, eau retravaillées, textures HD fidèles.
+
 
 > **Il faut posséder le jeu original.** Ce dépôt ne contient AUCUN fichier du jeu : ni
 > niveaux, ni modèles, ni textures, ni sons. Tout est reconstruit sur l'ordinateur du joueur, à
