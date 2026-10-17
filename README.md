@@ -57,7 +57,7 @@ Celles-ci sont prises directement en jeu. Aucune retouche.
 ## Téléchargement
 
 Ce mod est fini à environ 40%. Il reste énormément de travail et de bugs à corriger.
-Une première bêta du mod va bientôt sortir.
+https://github.com/Superoug/Jak-1-Remake/releases
 
 ## Développeurs
 
