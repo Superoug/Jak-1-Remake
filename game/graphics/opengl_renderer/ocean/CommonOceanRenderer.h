@@ -17,6 +17,10 @@ class CommonOceanRenderer {
   // ocean-near (après Jak) — surface blendée, GEQUAL, sans écriture de
   // profondeur ; le dépôt d'alpha du reflet et l'envmap restent d'origine.
   void flush_mid_transparent(SharedRenderState* render_state, ScopedProfilerNode& prof);
+  // 17/10 : textures du large retenues quand elles sont fraiches (bucket du large). Au bucket
+  // ocean-near, l'emplacement VRAM de la texture des vagues (8160) peut deja porter une texture
+  // du niveau (Rocher du Geyser) : la mer lisait la mauvaise texture et rendait du noir.
+  void capture_mid_textures(SharedRenderState* render_state);
 
  private:
   void handle_near_vertex_gif_data_fan(const u8* data, u32 offset, u32 loop);
@@ -51,6 +55,8 @@ class CommonOceanRenderer {
   u32 m_next_free_index[NUM_BUCKETS] = {0};
 
   u32 m_envmap_tex = 0;
+  std::optional<u64> m_mid_ocean_tex;   // voir capture_mid_textures
+  std::optional<u64> m_mid_envmap_tex;
 
   struct {
     GLuint vertex_buffer, index_buffer[NUM_BUCKETS], vao;

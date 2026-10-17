@@ -30,6 +30,10 @@ struct FaithfulUpscale {
 // nullopt = pas d'agrandissement (texture deja grande)
 std::optional<FaithfulUpscale> faithful_upscale(const u32* rgba, int w, int h, int max_side = 1024);
 
+// iris des yeux : agrandissement dedie (contour lisse, couleurs d'origine) — voir le .cpp
+bool faithful_iris_texture(const std::string& tex_name);
+std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int h);
+
 // textures a taille IMPOSEE par le moteur (ciel, nuages, yeux) : jamais agrandies
 bool faithful_upscale_frozen(const std::string& tex_name);
 

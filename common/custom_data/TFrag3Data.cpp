@@ -784,12 +784,24 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     // (22/09 : normales des COINS, deja lissees avec angle)
     math::Vector3f na = unpack_unit(va.nor);
     math::Vector3f nb = unpack_unit(vb.nor);
-    if (na.length() > 0.5f && nb.length() > 0.5f) {
+    // 17/10 (FISSURES dans les rochers) : le deplacement se calcule avec la normale
+    // SOUDEE de chaque position (moyenne de toutes ses faces), pas avec celle du coin.
+    // Aux aretes vives, les deux cotes d'une arete portent des sommets DUPLIQUES
+    // (meme position, normales differentes) : chacun bombait son milieu dans sa
+    // propre direction -> deux milieux a deux endroits, un jour entre les faces ou
+    // l'on voyait le fond. Avec la normale soudee, les deux milieux coincident ; la
+    // normale d'eclairage du milieu reste celle du coin (arete vive a l'ombrage).
+    // (original : deplacement avec na / nb ci-dessus)
+    // QA_FISSURES_AVANT=1 : ancien calcul (A/B de controle)
+    static const bool qa_old_crease = getenv("QA_FISSURES_AVANT") != nullptr;
+    const math::Vector3f wa = qa_old_crease ? na : normal_of(va);
+    const math::Vector3f wb = qa_old_crease ? nb : normal_of(vb);
+    if (wa.length() > 0.5f && wb.length() > 0.5f) {
       math::Vector3f mp(m.x, m.y, m.z);
       math::Vector3f pa(va.x, va.y, va.z);
       math::Vector3f pb(vb.x, vb.y, vb.z);
-      math::Vector3f da = na * (na.dot(pa - mp));
-      math::Vector3f db = nb * (nb.dot(pb - mp));
+      math::Vector3f da = wa * (wa.dot(pa - mp));
+      math::Vector3f db = wb * (wb.dot(pb - mp));
       math::Vector3f disp = (da + db) * 0.5f * strength;
       // safety clamp: never move a midpoint more than a third of the edge
       float edge_len = (pb - pa).length();
@@ -2059,11 +2071,50 @@ void MercModelGroup::replace_demo_models() {
 // authored vertex normals. Skips eye draws (dedicated texture system) and any
 // effect with modifiable draws (blendshape faces stream vertices at runtime).
 // Rounds jars, baskets, machines, NPCs — every prop in the level.
+// 17/10 : les logos de l'ecran titre (Naughty Dog, Jak and Daxter : modeles
+// logo-* et ndi-* du niveau title) gardent leur forme d'origine. Ce sont des
+// lettres extrudees a aretes vives : l'arrondi bombait les parois creuses du
+// logo Naughty Dog, qui passaient devant les lettres (trainees bleues).
+static bool merc_model_keeps_original_shape(const std::string& name) {
+  return name.rfind("logo-", 0) == 0 || name.rfind("ndi-", 0) == 0;
+}
+
 void MercModelGroup::subdivide_phong() {
   std::vector<u32> new_indices;
   new_indices.reserve(indices.size() * 5);
 
   std::unordered_map<u64, u32> edge_mid;
+
+  // 17/10 (FISSURES) : normale SOUDEE par position (somme des normales des sommets qui
+  // partagent la position). Aux aretes vives, les sommets sont dupliques avec des normales
+  // differentes : chaque cote bombait son milieu dans sa direction -> jour entre les faces.
+  // Le deplacement utilise la normale soudee, identique des deux cotes.
+  static const bool qa_old_crease = getenv("QA_FISSURES_AVANT") != nullptr;
+  auto qpos = [](const MercVertex& v) -> u64 {
+    auto q = [](float f) -> u64 { return (u64)(u32)(s32)std::lround(f * 64.f) & 0x1fffff; };
+    return (q(v.x) << 42) | (q(v.y) << 21) | q(v.z);
+  };
+  std::unordered_map<u64, math::Vector3f> welded_n;
+  if (!qa_old_crease) {
+    welded_n.reserve(vertices.size());
+    for (const auto& v : vertices) {
+      math::Vector3f n(v.nx, v.ny, v.nz);
+      float l = n.length();
+      if (l > 1e-5f) {
+        auto& acc = welded_n.try_emplace(qpos(v), 0.f, 0.f, 0.f).first->second;
+        acc += n / l;
+      }
+    }
+  }
+  auto welded_normal = [&](const MercVertex& v) -> math::Vector3f {
+    if (!qa_old_crease) {
+      auto it = welded_n.find(qpos(v));
+      if (it != welded_n.end()) {
+        return it->second;
+      }
+    }
+    return math::Vector3f(v.nx, v.ny, v.nz);
+  };
 
   auto midpoint = [&](u32 ia, u32 ib) -> u32 {
     u64 key = ia < ib ? ((u64)ia << 32) | ib : ((u64)ib << 32) | ia;
@@ -2078,9 +2129,10 @@ void MercModelGroup::subdivide_phong() {
     m.y = 0.5f * (va.y + vb.y);
     m.z = 0.5f * (va.z + vb.z);
     // Phong displacement using the authored normals
+    // (17/10 : soudees par position ; original : na(va.nx, ...), nb(vb.nx, ...))
     {
-      math::Vector3f na(va.nx, va.ny, va.nz);
-      math::Vector3f nb(vb.nx, vb.ny, vb.nz);
+      math::Vector3f na = welded_normal(va);
+      math::Vector3f nb = welded_normal(vb);
       float la = na.length(), lb = nb.length();
       if (la > 1e-5f && lb > 1e-5f) {
         na = na / la;
@@ -2128,6 +2180,9 @@ void MercModelGroup::subdivide_phong() {
   };
 
   for (auto& model : models) {
+    if (merc_model_keeps_original_shape(model.name)) {
+      continue;
+    }
     for (auto& effect : model.effects) {
       if (effect.has_mod_draw) {
         continue;  // blendshape-streamed vertices: leave untouched
@@ -2211,7 +2266,8 @@ void MercModelGroup::subdivide_phong() {
   for (auto& model : models) {
     for (auto& effect : model.effects) {
       for (auto& draw : effect.all_draws) {
-        bool untouched = (draw.eye_id != 0xff) || effect.has_mod_draw;
+        bool untouched = (draw.eye_id != 0xff) || effect.has_mod_draw ||
+                         merc_model_keeps_original_shape(model.name);
         if (untouched) {
           draw.first_index += old_base;
         }

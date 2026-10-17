@@ -14,6 +14,12 @@ struct GrassSeedTri {
   math::Vector3f a, b, c;
 };
 
+// PC-REMAKE 17/10 : zones ou l'herbe AUTOMATIQUE du remake (touffes clonees + tapis) n'est
+// pas semee : autour des piles d'energie, des orifices d'eco... (sinon elle cachait leurs
+// animations et recouvrait leur socle). x y z en unites du jeu, w = rayon (unites du jeu).
+// Posees par extract_level juste avant extract_shrub (meme fil).
+void set_grass_keep_clear(const std::vector<math::Vector4f>& zones);
+
 /// <summary>
 /// Extract shrubs from the level
 /// </summary>

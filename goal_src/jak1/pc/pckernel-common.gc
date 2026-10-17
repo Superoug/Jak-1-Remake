@@ -195,7 +195,10 @@
     (set! (-> *remake-gfx* shadows) (-> obj remake-shadows))
     (set! (-> *remake-gfx* godrays) (-> obj remake-godrays))
     (set! (-> *remake-gfx* bloom) (-> obj remake-bloom))
-    (set! (-> *remake-gfx* sun-visible) (-> obj remake-sun-visible?))
+    ;; 17/10 : toujours le soleil visible du ciel (= tables des artistes) ; l'ancien angle
+    ;; synthetique donnait des ombres a contre-sens. Option retiree du menu.
+    ;; (original : (set! (-> *remake-gfx* sun-visible) (-> obj remake-sun-visible?)))
+    (set! (-> *remake-gfx* sun-visible) #t)
     (set! (-> *remake-gfx* detail) (-> obj remake-detail))
     (set! (-> *remake-gfx* grade) (-> obj remake-grade)))
   (update-discord-rpc obj)

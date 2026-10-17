@@ -19,6 +19,8 @@
         "jak1"
       ],
       "websiteUrl": "https://github.com/Superoug/Jak-1-Remake",
+      "thumbnailArtUrl": "https://raw.githubusercontent.com/Superoug/Jak-1-Remake/main/mod-source/thumbnail.webp",
+      "coverArtUrl": "https://raw.githubusercontent.com/Superoug/Jak-1-Remake/main/mod-source/cover.webp",
       "versions": [
         {
           "version": "0.0.2",

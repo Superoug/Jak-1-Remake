@@ -22,6 +22,7 @@ uniform int gfx_hack_no_tex;
 // PC-REMAKE sun shadows
 in vec4 sun_light_pos;
 in vec3 w_nor;
+flat in float v_foliage;
 uniform vec3 sun_dir_w;  // direction normalisée VERS la surface (des ombres)
 uniform sampler2DShadow sun_shadow_tex;
 uniform float sun_shadow_strength;
@@ -166,7 +167,8 @@ void main() {
     // 21/09 : alpha 0.75 = surface EMISSIVE (lave, braises, lueurs) — le post la
     // traite en SOURCE, pas en receveur (ni soleil, ni lampes, ni occlusion :
     // le lac de lave du village volcan s'eclairait lui-meme jusqu'au blanc)
-    float tag = (emissive_boost > 0.001) ? 0.75 : 1.0;
+    // 17/10 : alpha 0.95 = feuillage (voir tie_wind.frag)
+    float tag = (emissive_boost > 0.001) ? 0.75 : ((v_foliage > 0.5) ? 0.95 : 1.0);
     out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, tag) : vec4(0.0);
   }
 }

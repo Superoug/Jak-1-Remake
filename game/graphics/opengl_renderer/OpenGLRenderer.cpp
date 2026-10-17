@@ -2532,6 +2532,19 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           lg::error("[QA] post_processing : echec de compilation, ancien shader garde");
         }
       }
+      // [QA] 17/10 : meme chose pour la couleur de l'eau — `touch /tmp/pc_reload_ocean`
+      // (l'ocean relit ses uniformes a chaque image, aucun etat a reconstruire).
+      if (FILE* rf = fopen("/tmp/pc_reload_ocean", "r")) {
+        fclose(rf);
+        remove("/tmp/pc_reload_ocean");
+        Shader fresh("ocean_common", render_state->version);
+        if (fresh.okay()) {
+          render_state->shaders[ShaderId::OCEAN_COMMON] = fresh;
+          lg::info("[QA] ocean_common recharge");
+        } else {
+          lg::error("[QA] ocean_common : echec de compilation, ancien shader garde");
+        }
+      }
     }
   }
   // 14/10 : programmes de la version en DEUX PASSES (construits une fois, et a chaque
@@ -2834,6 +2847,11 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     float wg[4] = {g_water_glitter[0], g_water_glitter[1], g_water_glitter[2],
                    (float)(m_render_state.frame_idx % 216000) / 60.f};
     POST_U(4fv, "water_glitter", 1, wg);
+    // 17/10 : la surface de l'eau a deja pose sa brume cette image (CommonOceanRenderer)
+    {
+      extern u64 g_water_murk_frame;
+      POST_U(1f, "water_murk_ocean", g_water_murk_frame == m_render_state.frame_idx ? 1.f : 0.f);
+    }
     // [QA-GLITTER] 25/08 : preuve de la COURSE entre threads — main.gc desarme
     // chaque frame GOAL, draw-ocean re-arme ; si le rendu lit ENTRE les deux,
     // la frame se peint sans aucun effet d'eau (l'eau disparaissait). Compte

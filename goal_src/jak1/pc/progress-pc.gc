@@ -785,7 +785,9 @@
             :param1 0.0
             :param2 100.0
             :slider-step-size 5.0)
-       (new 'static 'game-option :option-type (game-option-type on-off) :name (text-id remake-sun-visible) :scale #t)
+       ;; 17/10 : option « soleil des artistes » retiree du menu (toujours active, voir
+       ;; pckernel-common.gc). Ancienne entree :
+       ;; (new 'static 'game-option :option-type (game-option-type on-off) :name (text-id remake-sun-visible) :scale #t)
        (new 'static
             'game-option
             :option-type (game-option-type slider)
@@ -2292,9 +2294,10 @@
   (set! (-> *remake-options-pc* 5 value-to-modify) (&-> *pc-settings* remake-shadows))
   (set! (-> *remake-options-pc* 6 value-to-modify) (&-> *pc-settings* remake-godrays))
   (set! (-> *remake-options-pc* 7 value-to-modify) (&-> *pc-settings* remake-bloom))
-  (set! (-> *remake-options-pc* 8 value-to-modify) (&-> *pc-settings* remake-sun-visible?))
-  (set! (-> *remake-options-pc* 9 value-to-modify) (&-> *pc-settings* remake-detail))
-  (set! (-> *remake-options-pc* 10 value-to-modify) (&-> *pc-settings* remake-grade))
+  ;; 17/10 : l'entree 8 (soleil des artistes) a quitte le menu ; les suivantes remontent d'un cran
+  ;; (original : 8 -> remake-sun-visible?, 9 -> remake-detail, 10 -> remake-grade)
+  (set! (-> *remake-options-pc* 8 value-to-modify) (&-> *pc-settings* remake-detail))
+  (set! (-> *remake-options-pc* 9 value-to-modify) (&-> *pc-settings* remake-grade))
   (set! (-> *sound-options-pc* 0 value-to-modify) (&-> *pc-settings* memcard-volume-sfx))
   (set! (-> *sound-options-pc* 1 value-to-modify) (&-> *pc-settings* memcard-volume-music))
   (set! (-> *sound-options-pc* 2 value-to-modify) (&-> *pc-settings* memcard-volume-dialog))

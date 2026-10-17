@@ -303,6 +303,26 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   // grass carpet tunes its density and tuft size per level and was reading an
   // empty string here.
   level_data.level_name = bsp_header.name;
+  // PC-REMAKE 17/10 : zones sans herbe automatique autour de certains objets (rayon en m)
+  {
+    static const std::unordered_map<std::string, float> kKeepClear = {
+        {"fuel-cell", 2.5f},     // piles d'energie (animation d'apparition et de collecte)
+        {"ecovent", 3.5f},       // orifices d'eco et leur socle
+        {"ventblue", 3.5f},
+        {"ventred", 3.5f},
+        {"ventyellow", 3.5f},
+        {"orb-cache-top", 2.5f},  // caches a orbes (socle)
+    };
+    std::vector<math::Vector4f> zones;
+    for (const auto& da : bsp_header.actors.drawable_actors) {
+      auto it = kKeepClear.find(da.actor.etype);
+      if (it != kKeepClear.end()) {
+        zones.emplace_back(da.actor.trans.data[0], da.actor.trans.data[1], da.actor.trans.data[2],
+                           it->second * 4096.f);
+      }
+    }
+    set_grass_keep_clear(zones);
+  }
   for (auto& [shrub_tree, shrub_name] : deferred_shrubs) {
     extract_shrub(shrub_tree, shrub_name, bsp_header.texture_remap_table, tex_db, {}, level_data,
                   false, db.version(), grass_seed_tris);

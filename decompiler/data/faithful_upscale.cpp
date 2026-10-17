@@ -223,6 +223,162 @@ Plane channel(const u32* rgba, int w, int h, int c) {
 
 }  // namespace
 
+// PC-REMAKE 17/10 : IRIS DES YEUX. Les iris sont des dessins de 16 px (bam-iris-16x16)
+// agrandis enormement a l'ecran. AdvMAME2x n'arrondit un contour que si les couleurs
+// voisines sont EXACTEMENT egales : sur les degrades d'un iris il ne lissait rien et
+// rendait des blocs 4x4 (yeux pixelises). Ici : la silhouette de l'iris (ce qui n'est
+// pas le blanc de l'oeil) est agrandie puis lissee avant d'etre redecoupee net, et les
+// couleurs d'origine, prolongees sous le contour, sont agrandies en Lanczos. Le dessin
+// (couleurs, liseré sombre, reflet) est celui d'origine ; seuls les escaliers disparaissent.
+bool faithful_iris_texture(const std::string& tex_name) {
+  // (les portes en iris des precurseurs, « irisdoor », ne sont pas des yeux)
+  return tex_name.find("iris") != std::string::npos &&
+         tex_name.find("door") == std::string::npos;
+}
+
+std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int h) {
+  if (w <= 0 || h <= 0 || std::max(w, h) > 32) {
+    return faithful_upscale(rgba, w, h);  // pas un petit iris : agrandissement normal
+  }
+  const int factor = 128 / std::max(w, h);
+  const int ow = w * factor;
+  const int oh = h * factor;
+  const size_t n = (size_t)w * h;
+  auto lum_of = [](u32 p) {
+    return 0.299 * (p & 0xff) + 0.587 * ((p >> 8) & 0xff) + 0.114 * ((p >> 16) & 0xff);
+  };
+  // le blanc de l'oeil = le texel le plus clair
+  size_t white_i = 0;
+  for (size_t i = 1; i < n; i++) {
+    if (lum_of(rgba[i]) > lum_of(rgba[white_i])) {
+      white_i = i;
+    }
+  }
+  const double ref = lum_of(rgba[white_i]);
+  // couverture de l'iris (0 sur le blanc, 1 dans l'iris, partielle sur les texels de bord)
+  std::vector<double> cov(n);
+  std::vector<bool> solid(n);
+  Plane col[3];
+  for (int c = 0; c < 3; c++) {
+    col[c] = channel(rgba, w, h, c);
+  }
+  for (size_t i = 0; i < n; i++) {
+    cov[i] = std::clamp((ref - 0.05 * 255.0 - lum_of(rgba[i])) / (0.30 * 255.0), 0.0, 1.0);
+    solid[i] = cov[i] > 0.85;
+  }
+  // couleurs de l'iris prolongees dans le blanc (pas de melange blanc au contour)
+  for (int it = 0; it < 8; it++) {
+    std::vector<bool> next = solid;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        const size_t i = (size_t)y * w + x;
+        if (solid[i]) {
+          continue;
+        }
+        double acc[3] = {0, 0, 0};
+        int cnt = 0;
+        for (int dy = -1; dy <= 1; dy++) {
+          for (int dx = -1; dx <= 1; dx++) {
+            const int sx = x + dx, sy = y + dy;
+            if (sx < 0 || sy < 0 || sx >= w || sy >= h || !solid[(size_t)sy * w + sx]) {
+              continue;
+            }
+            for (int c = 0; c < 3; c++) {
+              acc[c] += col[c].at(sx, sy);
+            }
+            cnt++;
+          }
+        }
+        if (cnt > 0) {
+          for (int c = 0; c < 3; c++) {
+            col[c].at(x, y) = acc[c] / cnt;
+          }
+          next[i] = true;
+        }
+      }
+    }
+    solid = next;
+  }
+  Plane big[3];
+  for (int c = 0; c < 3; c++) {
+    big[c] = resize(col[c], ow, oh, false);
+  }
+  // silhouette : agrandissement bilineaire puis flou gaussien (sigma 0,9 texel d'origine)
+  std::vector<double> cu((size_t)ow * oh);
+  for (int y = 0; y < oh; y++) {
+    for (int x = 0; x < ow; x++) {
+      const double fx = std::clamp((x + 0.5) / factor - 0.5, 0.0, w - 1.0);
+      const double fy = std::clamp((y + 0.5) / factor - 0.5, 0.0, h - 1.0);
+      const int x0 = (int)fx, y0 = (int)fy;
+      const int x1 = std::min(x0 + 1, w - 1), y1 = std::min(y0 + 1, h - 1);
+      const double ax = fx - x0, ay = fy - y0;
+      const double top = cov[(size_t)y0 * w + x0] * (1 - ax) + cov[(size_t)y0 * w + x1] * ax;
+      const double bot = cov[(size_t)y1 * w + x0] * (1 - ax) + cov[(size_t)y1 * w + x1] * ax;
+      cu[(size_t)y * ow + x] = top * (1 - ay) + bot * ay;
+    }
+  }
+  // flou gaussien separable (bords prolonges)
+  auto gauss = [ow, oh](std::vector<double>& img, double sigma) {
+    const int r = (int)(3 * sigma) + 1;
+    std::vector<double> g(2 * r + 1);
+    double sum = 0;
+    for (int k = -r; k <= r; k++) {
+      g[k + r] = std::exp(-(k * k) / (2 * sigma * sigma));
+      sum += g[k + r];
+    }
+    for (auto& v : g) {
+      v /= sum;
+    }
+    std::vector<double> tmp(img.size());
+    for (int y = 0; y < oh; y++) {
+      for (int x = 0; x < ow; x++) {
+        double a = 0;
+        for (int k = -r; k <= r; k++) {
+          a += g[k + r] * img[(size_t)y * ow + std::clamp(x + k, 0, ow - 1)];
+        }
+        tmp[(size_t)y * ow + x] = a;
+      }
+    }
+    for (int y = 0; y < oh; y++) {
+      for (int x = 0; x < ow; x++) {
+        double a = 0;
+        for (int k = -r; k <= r; k++) {
+          a += g[k + r] * tmp[(size_t)std::clamp(y + k, 0, oh - 1) * ow + x];
+        }
+        img[(size_t)y * ow + x] = a;
+      }
+    }
+  };
+  // silhouette arrondie (0,9 texel d'origine) ; couleurs adoucies (0,5 texel) : le liseré
+  // d'origine alterne texels sombres et clairs, qui faisaient des « dents » sur le contour
+  gauss(cu, 0.9 * factor);
+  for (int c = 0; c < 3; c++) {
+    gauss(big[c].v, 0.5 * factor);
+  }
+  FaithfulUpscale res;
+  res.w = ow;
+  res.h = oh;
+  res.rgba.resize((size_t)ow * oh);
+  const u32 white = rgba[white_i];
+  for (int y = 0; y < oh; y++) {
+    for (int x = 0; x < ow; x++) {
+      const size_t i = (size_t)y * ow + x;
+      double t = std::clamp((cu[i] - 0.5) / 0.08 + 0.5, 0.0, 1.0);
+      t = t * t * (3 - 2 * t);
+      u32 v = 0;
+      for (int c = 0; c < 3; c++) {
+        const double wc = (white >> (8 * c)) & 0xff;
+        v |= (u32)clip8(big[c].at(x, y) * t + wc * (1 - t)) << (8 * c);
+      }
+      // alpha : celui du texel d'origine (constant sur un iris)
+      const int sx = std::min(x / factor, w - 1), sy = std::min(y / factor, h - 1);
+      v |= rgba[(size_t)sy * w + sx] & 0xff000000u;
+      res.rgba[i] = v;
+    }
+  }
+  return res;
+}
+
 bool faithful_upscale_frozen(const std::string& tex_name) {
   return tex_name.find("sky") != std::string::npos || tex_name.find("cloud") != std::string::npos ||
          tex_name.find("eye") != std::string::npos;

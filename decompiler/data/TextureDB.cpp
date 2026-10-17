@@ -223,7 +223,10 @@ ResolvedTextureData TextureDB::resolve_texture(u32 id, bool allow_faithful) cons
         return it->second;
       }
     }
-    if (auto up = faithful_upscale(result.rgba.data(), result.w, result.h)) {
+    auto up = faithful_iris_texture(tex.name)
+                  ? faithful_iris_upscale(result.rgba.data(), result.w, result.h)
+                  : faithful_upscale(result.rgba.data(), result.w, result.h);
+    if (up) {
       const auto& tpage_name = tpage_names.at(tex.page);
       if (tpage_name == "title-vis-pris" && tex.name == "trademark") {
         // TM du logo : son RGB d'origine est un rebut violet/noir (seul l'alpha a un

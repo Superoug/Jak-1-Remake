@@ -646,6 +646,13 @@ void transplant_leaning_palms(tfrag3::Level& lev) {
 }
 
 void apply_material_reflections(tfrag3::Level& lev) {
+  // 17/10 : rien dans le niveau TITRE. Ses modeles sont les logos (Naughty Dog,
+  // Jak and Daxter) : la matiere grise des parois du logo Naughty Dog passait
+  // pour du metal (analyse des pixels) et recevait le reflet du ciel, visible a
+  // travers les lettres en trainees bleues au demarrage.
+  if (lev.level_name == "title") {
+    return;
+  }
   auto& models = lev.merc_data.models;
 
   // an envmap texture the game already uses for reflective materials

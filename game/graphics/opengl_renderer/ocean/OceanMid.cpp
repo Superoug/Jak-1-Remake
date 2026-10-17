@@ -185,6 +185,8 @@ void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProf
   // m_common_ocean_renderer.flush_mid(render_state, prof);
   m_flush_pending = true;
   g_ocean_mid_deferred = this;
+  // 17/10 : retenir les textures MAINTENANT (fraiches) pour le dessin differe
+  m_common_ocean_renderer.capture_mid_textures(render_state);
   qa_mid_frames++;
   if (qa_mid_frames >= 300) {
     lg::info(

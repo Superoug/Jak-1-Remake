@@ -74,7 +74,8 @@ void main() {
         }
       }
     }
-    out_normal = vec4(n * 0.5 + 0.5, 1.0);
+    // 17/10 : alpha 0.95 = feuillage (voir tie_wind.frag) ; bois/rochers gardent 1.0
+    out_normal = vec4(n * 0.5 + 0.5, (shrub_facet > 0.5) ? 1.0 : 0.95);
   }
   // PC-REMAKE 22/09 : ALPHA AFFUTE pour l'alpha-to-coverage (MSAA). Les alphas
   // doux des textures (feuillage, herbe) devenaient une COUVERTURE partielle =

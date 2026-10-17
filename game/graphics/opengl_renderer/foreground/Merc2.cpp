@@ -12,6 +12,14 @@
 
 #include "third-party/imgui/imgui.h"
 
+namespace {
+// PC-REMAKE 17/10 : voir eye_tex dans la boucle de dessin.
+void pc_eye_texture_linear() {
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+}
+}  // namespace
+
 void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
 
 /* Merc 2 renderer:
@@ -1499,6 +1507,9 @@ void Merc2::do_draws(const Draw* draw_array,
       fog_on = true;
     }
     bool use_mipmaps_for_filtering = true;
+    // PC-REMAKE 17/10 : texture d'oeil = rendu 256 px agrandi a l'ecran ; le mode
+    // « sans filtrage » de la PS2 la lisait au plus proche voisin (yeux pixelises).
+    const bool eye_tex = (draw.texture & 0xffffff00) == 0xefffff00;
     if (draw.texture != last_tex) {
       if (draw.texture < (int)lev->textures.size() && draw.texture >= 0) {
         glBindTexture(GL_TEXTURE_2D, lev->textures.at(draw.texture));
@@ -1563,6 +1574,9 @@ void Merc2::do_draws(const Draw* draw_array,
       mode.set_alpha_blend(DrawMode::AlphaBlend::SRC_DST_SRC_DST);
       mode.set_ab(true);
       setup_opengl_from_draw_mode(mode, GL_TEXTURE0, use_mipmaps_for_filtering);
+      if (eye_tex) {
+        pc_eye_texture_linear();
+      }
 
       prof.add_draw_call(2);
       prof.add_tri(draw.num_triangles * 2);
@@ -1578,6 +1592,9 @@ void Merc2::do_draws(const Draw* draw_array,
       qa_glerr_check("merc2 draw #2 (ligne 1573)");  // [QA-GLERR] 14/10
       // draw a
       setup_opengl_from_draw_mode(draw.mode, GL_TEXTURE0, use_mipmaps_for_filtering);
+      if (eye_tex) {
+        pc_eye_texture_linear();
+      }
       math::Vector4f l1_dir_f_off(l1_dir.x(), l1_dir.y(), l1_dir.z(), -1);
       set_uniform(uniforms.light_direction[1], l1_dir_f_off);
       glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
@@ -1588,6 +1605,9 @@ void Merc2::do_draws(const Draw* draw_array,
 
     } else {
       setup_opengl_from_draw_mode(draw.mode, GL_TEXTURE0, use_mipmaps_for_filtering);
+      if (eye_tex) {
+        pc_eye_texture_linear();
+      }
       prof.add_draw_call();
       prof.add_tri(draw.num_triangles);
       glBindBufferRange(GL_UNIFORM_BUFFER, 1, m_bones_buffer,

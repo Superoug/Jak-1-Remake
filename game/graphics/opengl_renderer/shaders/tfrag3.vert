@@ -30,6 +30,7 @@ out vec4 sun_light_pos;
 // normale monde vers le fragment : biais d'ombre proportionnel à la pente
 // (les falaises frémissaient sous le soleil fluide — 17/08)
 out vec3 w_nor;
+flat out float v_foliage;  // 17/10 : 1 = feuille marquee (s > 50), voir tfrag3.frag
 // 21/09 : distance camera->sommet (unites jeu) pour le fondu du detail des sols
 out float v_dist;
 out vec3 v_pos_w;  // position monde (grain procedural des sols, ancre au monde)
@@ -54,8 +55,10 @@ void main() {
   // feuilles marquées (s > 50) : houle douce en espace monde, tronc immobile
   vec3 pos_w = position_in;
   vec3 tc_in = tex_coord_in;
+  v_foliage = 0.0;
   if (tc_in.x > 50.0) {
     tc_in.x -= 100.0;
+    v_foliage = 1.0;
     // Palmiers fondus dans le terrain : MÊME recette que les palmiers TIE
     // validés — battement feuille à feuille le long de la NORMALE (phases
     // courtes entre feuilles) + houle de couronne légère. Amplitude pilotée

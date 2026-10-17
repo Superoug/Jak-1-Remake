@@ -1522,6 +1522,47 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
 }
 }  // namespace
 
+namespace {
+thread_local std::vector<math::Vector4f> g_grass_keep_clear;
+
+void clear_auto_grass_near_actors(std::vector<ShrubProtoInfo>& protos, const std::string& level) {
+  if (g_grass_keep_clear.empty()) {
+    return;
+  }
+  constexpr float kMeter = 4096.f;
+  int removed = 0;
+  for (auto& proto : protos) {
+    auto& v = proto.instances;
+    const size_t before = v.size();
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [&](const ShrubInstanceInfo& inst) {
+                             if (inst.src != 1 && inst.src != 2) {
+                               return false;  // touffes des artistes : jamais retirees
+                             }
+                             for (const auto& z : g_grass_keep_clear) {
+                               const float dx = inst.mat[3][0] - z.x();
+                               const float dz = inst.mat[3][2] - z.z();
+                               const float dy = inst.mat[3][1] - z.y();
+                               if (dx * dx + dz * dz < z.w() * z.w() && std::abs(dy) < 6.f * kMeter) {
+                                 return true;
+                               }
+                             }
+                             return false;
+                           }),
+            v.end());
+    removed += (int)(before - v.size());
+  }
+  if (removed) {
+    lg::info("PC-REMAKE herbe [{}] : {} touffes automatiques retirees autour des objets", level,
+             removed);
+  }
+}
+}  // namespace
+
+void set_grass_keep_clear(const std::vector<math::Vector4f>& zones) {
+  g_grass_keep_clear = zones;
+}
+
 // ============================================================================
 // PC-REMAKE 13/10 : EDITEUR DE NIVEAUX (voir level_editor.h)
 // ============================================================================
@@ -1869,6 +1910,9 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
 
   // PC-REMAKE: continuous grass carpet on grass-material ground.
   seed_grass_carpet(proto_info, densify_flags, grass_seed_tris, out, &tree->time_of_day);
+
+  // PC-REMAKE 17/10 : pas d'herbe automatique sur les piles d'energie, orifices d'eco...
+  clear_auto_grass_near_actors(proto_info, out.level_name);
 
   // PC-REMAKE 13/10 : modifications de l'editeur de niveaux + export pour l'app
   editor_apply_and_export_shrubs(proto_info, out.level_name, tex_db);

@@ -70,6 +70,9 @@ uniform vec4 night_fx;
 // PC-REMAKE : scintillement de l'eau — x = niveau de la mer (unités monde),
 // y = force jour, z = force nuit, w = temps (s)
 uniform vec4 water_glitter;
+// 17/10 : 1 = la surface de l'eau a pose la brume (ocean_common.frag) — le post ne la
+// repose pas au-dessus de l'eau (il la garde pour la camera sous l'eau)
+uniform float water_murk_ocean;
 // xyz = normalized direction TOWARDS the sun (world), w = 1 when it is up
 uniform vec4 sun_dir;
 
@@ -120,6 +123,14 @@ const vec2 kRing6[6] = vec2[6](vec2(1.00000000, 0.00000000), vec2(0.50000000, 0.
 const vec2 kRing10[10] = vec2[10](vec2(0.95105652, 0.30901699), vec2(0.58778525, 0.80901699), vec2(0.00000000, 1.00000000), vec2(-0.58778525, 0.80901699), vec2(-0.95105652, 0.30901699), vec2(-0.95105652, -0.30901699), vec2(-0.58778525, -0.80901699), vec2(-0.00000000, -1.00000000), vec2(0.58778525, -0.80901699), vec2(0.95105652, -0.30901699));
 const vec2 kOct8[8] = vec2[8](vec2(1.00000000, 0.00000000), vec2(0.70710690, 0.70710667), vec2(0.00000033, 1.00000000), vec2(-0.70710643, 0.70710713), vec2(-1.00000000, 0.00000065), vec2(-0.70710736, -0.70710620), vec2(-0.00000098, -1.00000000), vec2(0.70710597, -0.70710759));
 const vec2 kSsao8[8] = vec2[8](vec2(0.32631457, 0.12656540), vec2(0.30336061, 0.68779238), vec2(-0.18205318, 0.46937466), vec2(-0.82818694, 0.36528355), vec2(-0.61243474, -0.23754098), vec2(-0.16489631, -0.37386024), vec2(0.29302880, -0.75549481), vec2(0.51425480, -0.22681926));
+
+// 17/10 : couleur de l'eau vue a travers une colonne de col_m metres (brume sous-marine)
+vec3 sea_murk(float col_m) {
+  float day_w = clamp(1.0 - night_fx.x, 0.0, 1.0);
+  vec3 murk_shallow = mix(vec3(0.03, 0.12, 0.22), vec3(0.16, 0.52, 0.54), day_w);
+  vec3 murk_deep = mix(vec3(0.015, 0.075, 0.16), vec3(0.11, 0.42, 0.47), day_w);
+  return mix(murk_shallow, murk_deep, clamp(col_m / 9.0, 0.0, 1.0));
+}
 
 vec3 world_from_depth(vec2 uv, float d) {
   vec4 ndc = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
@@ -330,11 +341,14 @@ void main() {
     // (geometrique, plate par facette) ne reste qu'en repli : sprites, eau,
     // shrubs, rendu PS2 direct.
     bool got_gbuffer_n = false;
+    bool foliage_px = false;
     if (has_normal_tex > 0.5) {
       vec4 gn = texture(normal_tex, tex_coord);
       if (gn.a > 0.6 && gn.a < 0.9) {
         emissive_px = 1.0;
       }
+      // 17/10 : alpha 0.95 = feuillage (tie_wind, shrub, feuilles tfrag)
+      foliage_px = gn.a > 0.92 && gn.a < 0.98;
       if (gn.a > 0.5) {
         vec3 tn = gn.rgb * 2.0 - 1.0;
         float tl = length(tn);
@@ -353,7 +367,10 @@ void main() {
       // (c'etait le cas des pans sombres du sable de la plage : N.V entre -0.15
       // et 0, jamais retournes -> sol eclaire comme s'il regardait le bas).
       // (original : < -0.15)
-      if (dot(N, cam_trans.xyz - P) < 0.0) {
+      // 17/10 : sauf le FEUILLAGE (feuilles fines, double face) : retourner sa normale
+      // assombrissait d'un coup toutes les feuilles situees au-dessus de la camera — une
+      // ligne nette a hauteur des yeux sur les couronnes des palmiers, a l'horizon.
+      if (!foliage_px && dot(N, cam_trans.xyz - P) < 0.0) {
         N = -N;
       }
     } else {
@@ -813,17 +830,20 @@ void main() {
         // camera immergee : du regard jusqu'au pixel (ou a la sortie de l'eau)
         float t_exit = (t_surf > 0.0 && t_surf < 1.0) ? t_surf : 1.0;
         col_m = pix_dist * t_exit / 4096.0;
-      } else if (t_surf > 0.0 && t_surf < 1.04) {
+      } else if (t_surf > 0.0 && t_surf < 1.04 && water_murk_ocean < 0.5) {
         // camera en l'air : seul le segment sous la surface compte
+        // (17/10 : sauf si la surface de l'eau a deja pose la brume ;
+        //  original : } else if (t_surf > 0.0 && t_surf < 1.04) {)
         col_m = pix_dist * max(0.0, 1.0 - min(t_surf, 1.0)) / 4096.0;
       }
+      // 17/10 (v0.0.3) : couleurs passees du bleu roi au TURQUOISE des artistes (mesure de la
+      // surface d'origine : ~0.15 0.47 0.51 en plein jour). La brume reste appliquee a toutes
+      // les distances : elle cache le fond marin et le vide au-dela (essai de fondu au loin
+      // retire — il montrait le fond, son bord et du noir a l'horizon).
+      // (original : murk_shallow = mix(vec3(0.05, 0.18, 0.38), vec3(0.12, 0.48, 0.88), day_w);
+      //             murk_deep = mix(vec3(0.015, 0.07, 0.18), vec3(0.03, 0.22, 0.55), day_w);)
       if (col_m > 0.02) {
-        float day_w = clamp(1.0 - night_fx.x, 0.0, 1.0);
-        vec3 murk_shallow = mix(vec3(0.05, 0.18, 0.38), vec3(0.12, 0.48, 0.88), day_w);
-        vec3 murk_deep = mix(vec3(0.015, 0.07, 0.18), vec3(0.03, 0.22, 0.55), day_w);
-        vec3 murk = mix(murk_shallow, murk_deep, clamp(col_m / 9.0, 0.0, 1.0));
-        float f = 1.0 - exp(-col_m * 0.50);
-        c = mix(c, murk, clamp(f, 0.0, 0.94));
+        c = mix(c, sea_murk(col_m), clamp(1.0 - exp(-col_m * 0.50), 0.0, 0.94));
       }
       // le rayon traverse la surface entre la caméra et la géométrie touchée
       // (petite marge au-delà de 1.0 : la surface au ras de la géométrie)
@@ -911,6 +931,22 @@ void main() {
     // stars and the moon are the bright pixels: let them survive
     sky_night += vec3(0.9, 0.95, 1.0) * pow(clamp(lum - 0.55, 0.0, 1.0), 1.5) * 1.8;
     c = mix(c, sky_night, night);
+  }
+
+  // 17/10 : LA MER JUSQU'A L'HORIZON. Au-dela du fond marin il n'y a plus de geometrie : la
+  // surface de la mer (transparente, sans profondeur) se pose sur le CIEL et ces pixels
+  // echappaient a la brume ci-dessus — une ligne nette la ou s'arretait le fond, puis une
+  // bande plus claire jusqu'a l'horizon. Ils recoivent la brume d'une eau tres profonde :
+  // une seule mer, continue jusqu'a l'horizon.
+  // (17/10 : inutile quand la surface pose la brume elle-meme — le vide derriere l'eau y
+  //  compte comme une eau tres profonde ; original sans la condition water_murk_ocean)
+  if (sky_pixel && (water_glitter.y > 0.001 || water_glitter.z > 0.001) &&
+      cam_trans.y > water_glitter.x && water_murk_ocean < 0.5) {
+    // direction du regard (profondeur inversee : 1 = proche, 0 = loin)
+    vec3 Dv = world_from_depth(tex_coord, 0.5) - world_from_depth(tex_coord, 0.99);
+    if (Dv.y < 0.0) {
+      c = mix(c, sea_murk(100.0), 0.94);
+    }
   }
 
 #ifdef POST_PASS1

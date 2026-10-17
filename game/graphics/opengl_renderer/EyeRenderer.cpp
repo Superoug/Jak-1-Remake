@@ -480,6 +480,21 @@ int add_clear_draw_to_buffer(int idx, float* data) {
   return idx;
 }
 
+namespace {
+// PC-REMAKE 17/10 : iris, pupille et paupiere sont de petites textures (16 a 128 px)
+// agrandies dans la texture de l'oeil. Le filtrage etait regle AVANT de lier ces
+// textures, donc sur la texture liee a ce moment-la, pas forcement sur elles. On le
+// regle sur chaque texture liee. (Les escaliers de l'iris venaient surtout de son
+// agrandissement a l'installation : voir faithful_iris_upscale.)
+void bind_eye_source(u64 gl_tex) {
+  glBindTexture(GL_TEXTURE_2D, gl_tex);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+}
+}  // namespace
+
 void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
                           SharedRenderState* render_state) {
   if (draws.empty()) {
@@ -542,7 +557,7 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
     // background
     if (draw.iris_tex) {
       glDisable(GL_BLEND);
-      glBindTexture(GL_TEXTURE_2D, draw.iris_gl_tex);
+      bind_eye_source(draw.iris_gl_tex);
       glDrawArrays(GL_TRIANGLE_STRIP, buffer_idx / 4, 4);
     }
     buffer_idx += 4 * 4;
@@ -553,7 +568,7 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
       // set Z
       // set texture
       glDisable(GL_BLEND);
-      glBindTexture(GL_TEXTURE_2D, draw.iris_gl_tex);
+      bind_eye_source(draw.iris_gl_tex);
       glDrawArrays(GL_TRIANGLE_STRIP, buffer_idx / 4, 4);
     }
     buffer_idx += 4 * 4;
@@ -562,14 +577,14 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
       glEnable(GL_BLEND);
       glBlendEquation(GL_FUNC_ADD);
       glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-      glBindTexture(GL_TEXTURE_2D, draw.pupil_gl_tex);
+      bind_eye_source(draw.pupil_gl_tex);
       glDrawArrays(GL_TRIANGLE_STRIP, buffer_idx / 4, 4);
     }
     buffer_idx += 4 * 4;
 
     if (draw.lid_tex) {
       glDisable(GL_BLEND);
-      glBindTexture(GL_TEXTURE_2D, draw.lid_gl_tex);
+      bind_eye_source(draw.lid_gl_tex);
       glDrawArrays(GL_TRIANGLE_STRIP, buffer_idx / 4, 4);
     }
     buffer_idx += 4 * 4;

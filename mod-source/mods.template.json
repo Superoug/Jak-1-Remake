@@ -6,16 +6,31 @@
     "jak1-remake": {
       "displayName": "Jak 1 Remake",
       "description": "Remake visuel de Jak and Daxter : eclairage moderne, ombres, herbe dense, eau, textures HD fideles calculees depuis VOTRE jeu, etalonnage moderne. Le jeu original est requis.",
-      "authors": ["__AUTEUR__"],
-      "tags": ["visual", "remake", "graphics"],
-      "supportedGames": ["jak1"],
+      "authors": [
+        "__AUTEUR__"
+      ],
+      "tags": [
+        "visual",
+        "remake",
+        "graphics"
+      ],
+      "supportedGames": [
+        "jak1"
+      ],
       "websiteUrl": "https://github.com/__OWNER__/__REPO__",
+      "thumbnailArtUrl": "https://raw.githubusercontent.com/__OWNER__/__REPO__/main/mod-source/thumbnail.webp",
+      "coverArtUrl": "https://raw.githubusercontent.com/__OWNER__/__REPO__/main/mod-source/cover.webp",
       "versions": [
         {
           "version": "__VERSION__",
           "publishedDate": "__DATE__",
-          "supportedGames": ["jak1"],
-          "settings": { "decompConfigOverride": "", "shareVanillaSaves": false },
+          "supportedGames": [
+            "jak1"
+          ],
+          "settings": {
+            "decompConfigOverride": "",
+            "shareVanillaSaves": false
+          },
           "assets": {
             "windows": "https://github.com/__OWNER__/__REPO__/releases/download/v__VERSION__/windows-v__VERSION__.zip",
             "linux": "https://github.com/__OWNER__/__REPO__/releases/download/v__VERSION__/linux-v__VERSION__.tar.gz",

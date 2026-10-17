@@ -44,5 +44,8 @@ void main() {
   }
 
   color.rgb = mix(color.rgb, fog_color.rgb, clamp(fogginess * fog_color.a, 0, 1));
-  out_normal = vec4(normalize(w_nor) * 0.5 + 0.5, 1.0);
+  // 17/10 : alpha 0.95 = FEUILLAGE (le post ne retourne pas sa normale vers la camera :
+  // une feuille vue d'en dessous restait sinon plus sombre au-dessus de l'horizon,
+  // d'ou une ligne nette a hauteur des yeux sur les couronnes des palmiers)
+  out_normal = vec4(normalize(w_nor) * 0.5 + 0.5, 0.95);
 }
