@@ -18,8 +18,12 @@ Tous les droits sur OpenGOAL sont réservés à leurs propriétaires respectifs.
 1. Installer le [lanceur OpenGOAL](https://opengoal.dev) (v2.4.10 ou plus récent) et faire
    l'installation normale de **Jak 1** avec votre ISO.
 2. Dans le lanceur : **Réglages → Mods → Ajouter une source**, et coller l'adresse de la source
-   de mods de ce projet (voir la page des versions du dépôt).
-3. Ouvrir la page des mods de Jak 1, choisir **Jak 1 Remake**, puis **Installer**. Le lanceur
+   de mods de ce projet.
+
+   https://github.com/Superoug/Jak-1-Remake/blob/main/mod-source/mods.json
+
+   
+4. Ouvrir la page des mods de Jak 1, choisir **Jak 1 Remake**, puis **Installer**. Le lanceur
    télécharge le mod, le reconstruit depuis votre jeu (quelques minutes) et l'ajoute à la liste.
 
 Sans source de mods : télécharger l'archive de votre système sur la page des versions du
