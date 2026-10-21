@@ -43,9 +43,9 @@ These are taken directly in-game. No retouching.
 
 <img width="1920" height="1080" alt="09 - Volcanic Crater (day)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
 
-<img width="1920" height="1080" alt="13 - Beach at the water's edge (day)" src="https://github.com/user-attachments/assets/d5873977-e818-446c-8d34-b1ab04676493" />
+<img width="960" height="624" alt="Capture d’écran 2026-10-21 à 13 36 21" src="https://github.com/user-attachments/assets/84256de8-73e3-4730-9111-54988a44e965" />
 
-<img width="1920" height="1080" alt="14 - Jak in front of Samos' hut" src="https://github.com/user-attachments/assets/73b4fec6-60f8-4bd9-b910-d21ab0755aea" />
+
 
 
 ## What changes compared to the original game
