@@ -16,6 +16,9 @@ uniform mat4 pc_camera;
 // PC-REMAKE grass interaction: xyz = player world pos (1m = 4096 units),
 // w = push strength 0..1. Zero strength disables the effect entirely.
 uniform vec4 grass_push;
+// 20/10 : CINEMATIQUES (pile d'energie, scenes) : l'herbe autour de Jak se couche au sol pour
+// ne plus masquer la scene. xyz = pieds de Jak, w = dose 0..1 (fondu cote jeu).
+uniform vec4 grass_clear;
 // PC-REMAKE ambient wind: x = time (seconds), y = amplitude (world units at
 // blade tip), zw unused. Gives every tuft a gentle, phase-shifted sway.
 uniform vec4 grass_wind;
@@ -80,6 +83,22 @@ void main() {
       float amount = grass_push.w * fall * height_w * PUSH_AMOUNT;
       world_pos.xz += dir * amount;
       world_pos.y -= 0.35 * amount;                        // slight squash
+    }
+  }
+
+  if (grass_clear.w > 0.001) {
+    const float CLEAR_IN = 4096.0 * 3.5;   // couchee a plat
+    const float CLEAR_OUT = 4096.0 * 7.0;  // fondu : intacte au-dela
+    vec2 to_c = world_pos.xz - grass_clear.xz;
+    float dc = length(to_c);
+    float dyc = world_pos.y - grass_clear.y;
+    if (dc < CLEAR_OUT && dyc > -4096.0 * 3.0 && dyc < 4096.0 * 6.0) {
+      float k = grass_clear.w * (1.0 - smoothstep(CLEAR_IN, CLEAR_OUT, dc));
+      // hauteur au-dessus du sol de Jak : les brins se couchent vers l'exterieur
+      float above = max(dyc + 4096.0 * 0.3, 0.0);
+      vec2 dir_c = dc > 1.0 ? to_c / dc : vec2(0.0, 1.0);
+      world_pos.y -= above * 0.85 * k;
+      world_pos.xz += dir_c * (above * 0.5 * k);
     }
   }
 

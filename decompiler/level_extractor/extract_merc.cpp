@@ -786,24 +786,26 @@ s32 find_or_add_texture_to_level(tfrag3::Level& out,
       }
     } else {
       idx_in_level_texture = out.textures.size();
-      // PC-REMAKE 14/10 : pas de HD calculee pour les modeles (rendu valide = textures
-      // PS2 d'origine), sauf la liste blanche (merc_texture_replacements.txt : le TM du
-      // logo) ou si pc_faithful_hd_models. Un fichier de remplacement s'applique
-      // toujours (correction officielle #4405).
-      const auto& merc_tpage = tex_db.tpage_names.at(tex_it->second.page);
-      const bool allow_hd = tex_db.faithful_hd_models ||
-                            merc_replacement_allowed(merc_tpage, tex_it->second.name);
-      auto resolved = tex_db.resolve_texture(pc_combo_tex_id, allow_hd);
       auto& new_tex = out.textures.emplace_back();
       new_tex.combo_id = pc_combo_tex_id;
-      new_tex.w = resolved.w;
-      new_tex.h = resolved.h;
+      new_tex.w = tex_it->second.w;
+      new_tex.h = tex_it->second.h;
       new_tex.debug_name = tex_it->second.name;
-      new_tex.debug_tpage_name = merc_tpage;
-      new_tex.data = std::move(resolved.rgba);
-      if (allow_hd && !tex_db.faithful_hd_models) {
-        lg::info("merc {} : HD autorisee pour {}/{}", debug_name, new_tex.debug_tpage_name,
-                 new_tex.debug_name);
+      new_tex.debug_tpage_name = tex_db.tpage_names.at(tex_it->second.page);
+      new_tex.data = tex_it->second.rgba_bytes;
+      // 21/10 : les PERSONNAGES (tfrag3::pc_is_character_model) prennent leurs textures HD
+      // fideles ; les objets gardent les textures PS2 validees (sauf liste blanche)
+      // (pelage : texture d'origine, plus douce — agrandie, ses traits de poils marbraient le
+      // visage de Daxter ; le detail vient de la fourrure en couches du rendu)
+      const bool personnage = tfrag3::pc_is_character_model(debug_name) &&
+                              new_tex.debug_name.find("fur") == std::string::npos;
+      if (merc_replacement_allowed(new_tex.debug_tpage_name, new_tex.debug_name) || personnage) {
+        auto resolved = tex_db.resolve_texture(pc_combo_tex_id);
+        new_tex.w = resolved.w;
+        new_tex.h = resolved.h;
+        new_tex.data = std::move(resolved.rgba);
+        lg::info("merc {} : remplacement autorise pour {}/{}", debug_name,
+                 new_tex.debug_tpage_name, new_tex.debug_name);
       }
     }
   }

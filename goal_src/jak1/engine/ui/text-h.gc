@@ -796,7 +796,7 @@
   (input-opts-controller-led-reflect-heat #x1617)
   (input-opts-controller-pressure-sensitivity #x1618)
   (input-opts-analog-sensitivity #x1619)
-  ;; PC-REMAKE 21/09 : menu « Remake » (Réglages → Graphismes)
+  ;; PC-REMAKE 21/09 : menu Remake (Réglages → Graphismes)
   (remake-options #x161a)
   (remake-night #x161b)
   (remake-lamp-power #x161c)

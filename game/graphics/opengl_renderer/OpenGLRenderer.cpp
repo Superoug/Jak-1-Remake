@@ -1536,8 +1536,8 @@ void OpenGLRenderer::setup_frame(const RenderOptions& settings) {
     // Note: could rely on sky renderer to clear depth and color, but this causes problems with
     // letterboxing
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    // PC-REMAKE 21/09 : le G-buffer de normales s'efface a 0 (alpha 0 = « pas de
-    // normale ici », le post retombe alors sur sa reconstruction par profondeur)
+    // PC-REMAKE 21/09 : le G-buffer de normales s'efface a 0 (alpha 0 = pas de
+    // normale ici, le post retombe alors sur sa reconstruction par profondeur)
     g_pc_normal_target_ok = m_fbo_state.render_fbo->normal_tex_id.has_value();
     if (g_pc_normal_target_ok) {
       const GLenum both[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
@@ -2082,7 +2082,7 @@ GLuint pc_prehud_texture() {
 }
 
 // ===================================================================
-// PC-REMAKE 12/10 : BLOOM LARGE (« rendu remake » — sur les images de reference,
+// PC-REMAKE 12/10 : BLOOM LARGE (rendu remake — dans les rendus modernes,
 // le portail, les spirales vertes, la lave rayonnent d'un grand halo
 // doux ; notre bloom d'origine ne portait qu'a 6-14 pixels). Chaine de mips
 // 1/2 -> 1/32 : reduction 13 points (tri de ce qui rayonne + Karis au premier
@@ -2258,6 +2258,8 @@ GLuint pc_bloom_run(GameVersion version,
     glUniform4f(glGetUniformLocation(pd, "bloom_p"), i == 0 ? 1.f : 0.f, has_depth ? 1.f : 0.f,
                 has_normals ? 1.f : 0.f, has_pre);
     glUniform2f(glGetUniformLocation(pd, "src_texel"), 1.f / src->w, 1.f / src->h);
+    // 20/10 : part de nuit (0..1) — la nuit, les lumieres rayonnent davantage
+    glUniform1f(pc_uniform_loc(pd, "bloom_night"), std::clamp(g_night_fx[0], 0.f, 1.f));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     src = &dst;
   }
@@ -2293,6 +2295,99 @@ GLuint pc_bloom_run(GameVersion version,
   glViewport(vp[0], vp[1], vp[2], vp[3]);
   glUseProgram(prev_prog);
   return g_bloom_lv[0].tex;
+}
+
+// PC-REMAKE 20/10 : RAYONS DE SOLEIL (jungle) au quart de la resolution + flou separable —
+// le calcul par pixel du post (16 pas, gigue) donnait une image granuleuse. A appeler dans
+// le post, profondeur liee sur l'unite 15 et VAO plein ecran lie. Rend la texture (R = dose
+// avant epaule) ou 0. Etat restaure comme pc_bloom_run (unite 0 a relier par l'appelant).
+BloomTarget g_shaft_a, g_shaft_b;
+GLuint pc_shaft_run(GameVersion version, bool reload, const float* cam_pos, int full_w, int full_h) {
+  extern float g_shaft_amt;
+  if (g_shaft_amt <= 0.001f || !g_sun_shadow.ready || !g_sun_shadow.enabled() ||
+      !g_world_from_clip_ok) {
+    return 0;
+  }
+  static Shader* s_ray = nullptr;
+  static Shader* s_blur = nullptr;
+  if (reload || !s_ray) {
+    delete s_ray;
+    delete s_blur;
+    s_ray = new Shader("shafts", version);
+    s_blur = new Shader("shafts_blur", version);
+  }
+  if (!s_ray->okay() || !s_blur->okay()) {
+    return 0;
+  }
+  const int w = std::max(1, full_w / 4), h = std::max(1, full_h / 4);
+  bloom_ensure(g_shaft_a, w, h, true);
+  bloom_ensure(g_shaft_b, w, h, true);
+
+  GLint vp[4];
+  glGetIntegerv(GL_VIEWPORT, vp);
+  GLint prev_fbo = 0, prev_prog = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  if (scissor) {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  glDisable(GL_BLEND);
+
+  // direction vers le soleil (meme calcul que le post)
+  float sd[4] = {0.f, 1.f, 0.f, 0.f};
+  {
+    float sx = g_sun_shadow_params[0], sy = g_sun_shadow_params[1], sz = g_sun_shadow_params[2];
+    float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (len > 1e-4f) {
+      sd[0] = -sx / len;
+      sd[1] = -sy / len;
+      sd[2] = -sz / len;
+      sd[3] = sd[1] > 0.02f ? 1.f : 0.f;
+    }
+  }
+
+  // 1. rayons au quart de resolution
+  glActiveTexture(GL_TEXTURE14);
+  glBindTexture(GL_TEXTURE_2D, g_sun_shadow.read_tex());
+  glActiveTexture(GL_TEXTURE0);
+  s_ray->activate();
+  const GLuint pr = s_ray->id();
+  glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
+  glUniform1i(pc_uniform_loc(pr, "sun_shadow_tex"), 14);
+  glUniformMatrix4fv(pc_uniform_loc(pr, "sun_light_vp"), 1, GL_FALSE, g_sun_shadow.read_vp());
+  glUniformMatrix4fv(pc_uniform_loc(pr, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+  glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
+  glUniform4fv(pc_uniform_loc(pr, "sun_dir"), 1, sd);
+  glUniform1f(pc_uniform_loc(pr, "shaft_indoor"), std::clamp(g_grade_amt2[3], 0.f, 1.f));
+  glBindFramebuffer(GL_FRAMEBUFFER, g_shaft_a.fbo);
+  glViewport(0, 0, w, h);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  // 2. flou gaussien horizontal puis vertical
+  s_blur->activate();
+  const GLuint pb = s_blur->id();
+  glUniform1i(pc_uniform_loc(pb, "src_tex"), 0);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_shaft_b.fbo);
+  glBindTexture(GL_TEXTURE_2D, g_shaft_a.tex);
+  glUniform2f(pc_uniform_loc(pb, "blur_step"), 1.f / w, 0.f);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_shaft_a.fbo);
+  glBindTexture(GL_TEXTURE_2D, g_shaft_b.tex);
+  glUniform2f(pc_uniform_loc(pb, "blur_step"), 0.f, 1.f / h);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  if (blend) {
+    glEnable(GL_BLEND);
+  }
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+  glViewport(vp[0], vp[1], vp[2], vp[3]);
+  glUseProgram(prev_prog);
+  return g_shaft_a.tex;
 }
 namespace {
 
@@ -2532,6 +2627,39 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           lg::error("[QA] post_processing : echec de compilation, ancien shader garde");
         }
       }
+      // [QA] 20/10 : sol de neige deformable — `touch /tmp/pc_reload_snow`
+      if (FILE* rf = fopen("/tmp/pc_reload_snow", "r")) {
+        fclose(rf);
+        remove("/tmp/pc_reload_snow");
+        Shader fresh("tfrag3_snow", render_state->version, "", "tfrag3");
+        if (fresh.okay()) {
+          render_state->shaders[ShaderId::TFRAG3_SNOW] = fresh;
+          lg::info("[QA] tfrag3_snow recharge");
+        } else {
+          lg::error("[QA] tfrag3_snow : echec de compilation, ancien shader garde");
+        }
+      }
+      // [QA] 21/10 : personnages remodeles — `touch /tmp/pc_reload_perso`
+      if (FILE* rf = fopen("/tmp/pc_reload_perso", "r")) {
+        fclose(rf);
+        remove("/tmp/pc_reload_perso");
+        Shader m2("merc2", render_state->version);
+        Shader t2("merc2_tess", render_state->version, "", "merc2");
+        Shader e2("emerc_tess", render_state->version, "", "emerc");
+        Shader f2("merc2_fur", render_state->version, "FUR", "merc2");
+        Shader em("emerc", render_state->version);
+        if (m2.okay() && t2.okay() && e2.okay() && f2.okay() && em.okay()) {
+          render_state->shaders[ShaderId::EMERC] = em;
+          render_state->shaders[ShaderId::MERC2] = m2;
+          render_state->shaders[ShaderId::MERC2_TESS] = t2;
+          render_state->shaders[ShaderId::EMERC_TESS] = e2;
+          render_state->shaders[ShaderId::MERC2_FUR] = f2;
+          g_pc_merc_shaders_seq++;
+          lg::info("[QA] shaders des personnages recharges");
+        } else {
+          lg::error("[QA] shaders des personnages : echec de compilation, anciens gardes");
+        }
+      }
       // [QA] 17/10 : meme chose pour la couleur de l'eau — `touch /tmp/pc_reload_ocean`
       // (l'ocean relit ses uniformes a chaque image, aucun etat a reconstruire).
       if (FILE* rf = fopen("/tmp/pc_reload_ocean", "r")) {
@@ -2633,6 +2761,16 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
         sd[1] = -sy / len;
         sd[2] = -sz / len;
         sd[3] = sd[1] > 0.02f ? 1.f : 0.f;  // light must travel downwards
+      }
+      // 20/10 : soleil transmis POUR LES RAYONS SEULEMENT (cabane, force d'ombre 0) : ni
+      // relumiere, ni disque, ni rayons d'ecran — comme avant dans la cabane
+      {
+        extern float g_shaft_amt;
+        if (g_sun_shadow_params[3] <= 0.001f && g_shaft_amt > 0.001f) {
+          sd[3] = 0.f;
+          sun_screen[2] = 0.f;
+          sun_screen[3] = 0.f;
+        }
       }
       POST_U(4fv, "sun_dir", 1, sd);
     }
@@ -2843,6 +2981,29 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     }
     float night_fx[4] = {g_night_fx[0], g_night_fx[1], g_night_fx[2], (float)lamp_n};
     POST_U(4fv, "night_fx", 1, night_fx);
+    // 20/10 : faisceaux d'eco (lumiere en tube, voir post_processing.frag)
+    {
+      const int nb = std::min(pc_remake_beam_count(), kMaxRemakeBeams);
+      if (nb > 0) {
+        POST_U(4fv, "beam_seg", nb * 2, pc_remake_beams());
+      }
+      POST_U(1f, "beam_n", (float)nb);
+    }
+    // 20/10 : rayons de soleil volumetriques (jungle) — la carte d'ombres du soleil est lue par
+    // le post (unite 14, sampler2DShadow toujours pose sur 14 : jamais deux types sur une unite)
+    {
+      extern float g_shaft_amt;
+      // (cabane : force d'ombre 0 mais carte rendue pour les rayons — voir enabled())
+      const bool shafts = g_shaft_amt > 0.001f && g_sun_shadow.ready && g_sun_shadow.enabled();
+      POST_U(1i, "sun_shadow_tex", 14);
+      POST_U(1f, "shaft_amt", shafts ? g_shaft_amt : 0.f);
+      if (shafts) {
+        glActiveTexture(GL_TEXTURE14);
+        glBindTexture(GL_TEXTURE_2D, g_sun_shadow.read_tex());
+        glActiveTexture(GL_TEXTURE0);
+        POST_U(Matrix4fv, "sun_light_vp", 1, GL_FALSE, g_sun_shadow.read_vp());
+      }
+    }
     // scintillement de l'eau : niveau de la mer + forces jour/nuit + temps
     float wg[4] = {g_water_glitter[0], g_water_glitter[1], g_water_glitter[2],
                    (float)(m_render_state.frame_idx % 216000) / 60.f};
@@ -3042,6 +3203,30 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glActiveTexture(GL_TEXTURE0);
     POST_U(1i, "hud_ref_tex", 10);
     POST_U(1f, "has_hud_ref", href ? 1.f : 0.f);
+    // 20/10 : rayons de soleil au quart de resolution, adoucis -> unite 8
+    GLuint stex = bloom_has_depth
+                      ? pc_shaft_run(render_state->version, post_reloaded,
+                                     m_render_state.camera_pos.data(),
+                                     m_fbo_state.render_fbo->width, m_fbo_state.render_fbo->height)
+                      : 0;
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, stex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
+    POST_U(1i, "shaft_tex", 8);
+    POST_U(1f, "has_shaft_tex", stex ? 1.f : 0.f);
+    // 20/10 : traces dans la neige -> unite 7
+    pc_snow_trail_frame(render_state->frame_idx);
+    GLuint snow_tex = pc_snow_trail_tex();
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_2D, snow_tex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
+    POST_U(1i, "snow_trail_tex", 7);
+    POST_U(4f, "snow_trail", snow_tex ? 1.f : 0.f, g_snow_step[0], g_snow_step[2],
+           (float)(render_state->frame_idx % 216000) / 60.f);
+    POST_U(1f, "snow_geom", g_snow_geom_drawn ? 1.f : 0.f);
+    g_snow_geom_drawn = false;
   }
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

@@ -12,7 +12,7 @@ class OceanMid {
   void run_jak2(DmaFollower& dma, SharedRenderState* render_state, ScopedProfilerNode& prof);
   // PC-REMAKE EAU TRANSPARENTE (25/08) : le flush du mid est différé au bucket
   // ocean-near (après Jak) et dessiné en transparent sans écriture de
-  // profondeur — l'équivalent PC du duo « trou caméra + voile near » PS2.
+  // profondeur — l'équivalent PC du duo trou caméra + voile near PS2.
   void flush_deferred(SharedRenderState* render_state, ScopedProfilerNode& prof);
 
  private:

@@ -317,8 +317,8 @@
         (else
          ;; 18/08 : NE PAS appeler load-state-want-force-vis ici — quand la
          ;; plage n'est pas chargee, le moteur imprime une erreur A CHAQUE
-         ;; IMAGE, ce qui noyait le canal de debogage (« Runtime is not
-         ;; responding »). Le retrait silencieux se fait dans update! de
+         ;; IMAGE, ce qui noyait le canal de debogage (Runtime is not
+         ;; responding). Le retrait silencieux se fait dans update! de
          ;; load-state (level.gc), qui manipule le champ directement.
          (set! *remake-beach-vis-forced* #f)))))
   ;; PC-REMAKE : scintillement de l'eau — DÉSARMEMENT par défaut chaque frame

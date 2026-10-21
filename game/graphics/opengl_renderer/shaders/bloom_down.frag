@@ -1,5 +1,5 @@
 #version 410 core
-// PC-REMAKE 12/10 — BLOOM LARGE (« rendu remake »), passe de REDUCTION.
+// PC-REMAKE 12/10 — BLOOM LARGE (rendu remake), passe de REDUCTION.
 // Filtre 13 points (Jimenez 2014) : chaque niveau = la moitie du precedent. Le
 // premier niveau trie ce qui RAYONNE vraiment :
 //  - surfaces emissives (lave, ecos, cristaux — alpha 0.6-0.9 du G-buffer) :
@@ -21,6 +21,7 @@ uniform sampler2D normal_tex;  // unite 13 : G-buffer (alpha = drapeaux)
 uniform sampler2D pre_tex;     // unite 12 : scene AVANT les sprites (particules absentes)
 uniform vec4 bloom_p;          // x = premier niveau, y = profondeur, z = normales, w = pre_tex
 uniform vec2 src_texel;        // 1 / taille de la source
+uniform float bloom_night;     // 20/10 : part de nuit (0..1)
 
 float luma(vec3 c) {
   return dot(c, vec3(0.299, 0.587, 0.114));
@@ -65,6 +66,10 @@ vec3 bright(vec2 uv) {
   // (original : max(c - vec3(0.86), vec3(0.0)) * ...)
   float lc = dot(c, vec3(0.299, 0.587, 0.114));
   vec3 r = (lc > 1e-4 ? c * (max(lc - 0.86, 0.0) / lc) : vec3(0.0)) * 0.8 * (1.0 - em) * (1.0 - part);
+  // 20/10 : la nuit, les surfaces emissives et les particules colorees (faisceau d'eco,
+  // ecos) rayonnent davantage ; le decor ordinaire (r) ne change pas
+  e *= 1.0 + 1.2 * bloom_night;
+  p *= 1.0 + 3.0 * bloom_night;  // v2 (v1 : 1.5)
   return (e + p + r) * (1.0 - sky);
 }
 

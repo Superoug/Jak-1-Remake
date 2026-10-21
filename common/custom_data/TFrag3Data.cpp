@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <unordered_map>
 
@@ -538,7 +539,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
                           float strength) {
   const auto& old_indices = indices_ref;
   // PC-REMAKE 22/09 : COULEUR DES MILIEUX. Les sommets du decor portent un INDEX
-  // dans la palette « heure du jour » ; un milieu d'arete prenait l'index de
+  // dans la palette heure du jour ; un milieu d'arete prenait l'index de
   // l'extremite A -> a chaque triangle subdivise, une moitie prenait la couleur
   // de A, l'autre celle de B : les ombres/lumieres PEINTES par les artistes
   // (degrades par sommet) devenaient des pans plats a bords droits (bugs de
@@ -555,7 +556,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
   // l'envers de la convention GL (k pair = (a,b,c), k impair = (b,a,c)). Sans
   // culling ca ne se voyait pas a l'affichage, mais les normales de la passe 1
   // (produits vectoriels) pointaient vers le BAS ; le post les retournait par
-  // son garde-fou « face a la camera » sauf en incidence rasante -> plaques de
+  // son garde-fou face a la camera sauf en incidence rasante -> plaques de
   // normales fausses au sol (vue QA : polygones bleu nuit).
   auto for_each_tri = [&](size_t begin, size_t count, auto&& fn) {
     size_t end = begin + count;
@@ -670,7 +671,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
   // normale depuis la profondeur (facettes, lignes de niveau au loin). Les
   // sommets des draws feuillage (skip) recoivent une normale VERTICALE : des
   // lamelles fines n'ont pas de normale de surface qui ait un sens, et le
-  // « vers le haut » eclaire un feuillage comme une canopee. On ne touche pas
+  // vers le haut eclaire un feuillage comme une canopee. On ne touche pas
   // aux normales deja presentes (TIE envmap : les vraies normales des artistes).
   auto pack_unit = [](const math::Vector3f& n) -> u32 {
     return pack_to_gl_normal((s16)std::lround(n.x() * 511.f), (s16)std::lround(n.y() * 511.f),
@@ -1096,6 +1097,204 @@ void MercModelGroup::serialize(Serializer& ser) {
   if (!ser.is_saving() && g_tfrag_phong_subdiv) {
     subdivide_phong();
     replace_demo_models();
+  }
+  if (!ser.is_saving()) {
+    pc_prepare_characters();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PC-REMAKE 21/10 : PERSONNAGES REMODELES
+// Groupes d'animation des etres vivants du jeu : Jak et ses variantes, Daxter, les PNJ, les
+// animaux et tous les ennemis et boss. Le nom d'un modele est <groupe>-lod0, <groupe>-lod1,
+// <groupe>-<variante>-lod0... : un groupe correspond s'il est suivi d'un tiret.
+namespace {
+const char* const kPcCharacterGroups[] = {
+    // Jak et Daxter
+    "eichar", "sidekick", "jak-white", "billy-sidekick",
+    // PNJ
+    "assistant", "bird-lady", "bluesage", "redsage", "yellowsage", "sage", "evilbro", "evilsis",
+    "explorer", "farmer", "fisher", "gambler", "geologist", "mayor", "minershort", "minertall",
+    "sculptor", "warrior", "billy", "oracle", "muse", "farthy-snack",
+    // animaux
+    "yakow", "flutflut", "pelican", "seagull", "sharkey", "junglefish", "villa-starfish",
+    // ennemis et boss
+    "aphid-lurker", "babak", "baby-spider", "mother-spider", "balloonlurker", "bonelurker",
+    "bully", "double-lurker", "driller-lurker", "flying-lurker", "gnawer", "green-eco-lurker",
+    "hopper", "junglesnake", "kermit", "lightning-mole", "lurkercrab", "lurkerpuppy",
+    "lurkerworm", "plunger-lurker", "puffer", "quicksandlurker", "ram", "ram-boss", "snow-bunny",
+    "swamp-bat", "swamp-rat", "yeti", "ice-cube", "plant-boss", "ogreboss", "robotboss", "robber",
+    "citb-bunny", "evilplant", "happy-plant", "dark-plant",
+};
+}  // namespace
+
+bool pc_is_character_model(const std::string& name) {
+  for (const char* g : kPcCharacterGroups) {
+    const size_t n = strlen(g);
+    if (name.size() > n && name.compare(0, n, g) == 0 && name[n] == '-') {
+      return true;
+    }
+  }
+  return false;
+}
+
+u32 pc_pack_weld_normal(float x, float y, float z, bool sharp) {
+  const float l = std::abs(x) + std::abs(y) + std::abs(z);
+  if (l < 1e-6f) {
+    return 0;
+  }
+  float px = x / l, py = y / l;
+  if (z < 0.f) {
+    const float ox = (1.f - std::abs(py)) * (px >= 0.f ? 1.f : -1.f);
+    const float oy = (1.f - std::abs(px)) * (py >= 0.f ? 1.f : -1.f);
+    px = ox;
+    py = oy;
+  }
+  auto q = [](float v) -> u32 {
+    return (u32)std::clamp((int)std::lround((v * 0.5f + 0.5f) * 32767.f), 0, 32767);
+  };
+  return 1u | (sharp ? 2u : 0u) | (q(px) << 2) | (q(py) << 17);
+}
+
+void MercModelGroup::pc_prepare_characters() {
+  int n_models = 0;
+  size_t n_converted = 0;
+  // une bande (strip, coupee par UINT32_MAX) -> liste de triangles ajoutee en fin de tampon
+  auto to_list = [&](MercDraw& d) {
+    if (d.no_strip) {
+      return;
+    }
+    const u32 first = (u32)indices.size();
+    u32 a = UINT32_MAX, b = UINT32_MAX, tris = 0;
+    bool parity = false;
+    for (u32 i = 0; i < d.index_count; i++) {
+      const u32 c = indices[d.first_index + i];
+      if (c == UINT32_MAX) {
+        a = b = UINT32_MAX;
+        parity = false;
+        continue;
+      }
+      if (a != UINT32_MAX && b != UINT32_MAX && a != b && b != c && a != c) {
+        if (parity) {
+          indices.insert(indices.end(), {b, a, c});
+        } else {
+          indices.insert(indices.end(), {a, b, c});
+        }
+        tris++;
+      }
+      if (a != UINT32_MAX || b != UINT32_MAX) {
+        parity = !parity;
+      }
+      a = b;
+      b = c;
+    }
+    d.first_index = first;
+    d.index_count = (u32)indices.size() - first;
+    d.num_triangles = tris;
+    d.no_strip = true;
+    n_converted++;
+  };
+
+  auto qpos = [](float x, float y, float z) -> u64 {
+    auto q = [](float f) -> u64 { return (u64)(u32)(s32)std::lround(f * 64.f) & 0x1fffff; };
+    return (q(x) << 42) | (q(y) << 21) | q(z);
+  };
+
+  for (auto& model : models) {
+    model.pc_character = pc_is_character_model(model.name);
+    if (!model.pc_character) {
+      continue;
+    }
+    n_models++;
+    for (auto& effect : model.effects) {
+      for (auto& d : effect.all_draws) {
+        to_list(d);
+      }
+      for (auto& d : effect.mod.fix_draw) {
+        to_list(d);
+      }
+      for (auto& d : effect.mod.mod_draw) {
+        to_list(d);
+      }
+    }
+
+    // NORMALE SOUDEE : moyenne, par position, des normales de toutes les pieces du modele
+    // (sommets fixes et sommets des visages animes). Le decoupage courbe les aretes avec elle :
+    // deux pieces qui se touchent suivent la meme courbe, sans jour. Une position dont les
+    // normales divergent de plus de 50 degres est une arete vive : elle reste droite.
+    std::vector<u32> used;
+    for (auto& effect : model.effects) {
+      for (auto* list : {&effect.all_draws, &effect.mod.fix_draw}) {
+        for (auto& d : *list) {
+          for (u32 i = 0; i < d.index_count; i++) {
+            const u32 v = indices[d.first_index + i];
+            if (v != UINT32_MAX && v < vertices.size()) {
+              used.push_back(v);
+            }
+          }
+        }
+      }
+    }
+    std::sort(used.begin(), used.end());
+    used.erase(std::unique(used.begin(), used.end()), used.end());
+
+    struct Acc {
+      math::Vector3f n{0.f, 0.f, 0.f};
+      std::vector<math::Vector3f> each;
+    };
+    std::unordered_map<u64, Acc> acc;
+    auto add = [&](const MercVertex& v) {
+      math::Vector3f n(v.nx, v.ny, v.nz);
+      const float l = n.length();
+      if (l < 1e-5f) {
+        return;
+      }
+      n /= l;
+      auto& a = acc[qpos(v.x, v.y, v.z)];
+      a.n += n;
+      a.each.push_back(n);
+    };
+    for (u32 v : used) {
+      add(vertices[v]);
+    }
+    for (auto& effect : model.effects) {
+      for (auto& v : effect.mod.vertices) {
+        add(v);
+      }
+    }
+    const float cos_vif = std::cos(50.f * 3.14159265f / 180.f);
+    auto pack = [&](MercVertex& v) {
+      u32 bits = 0;
+      auto it = acc.find(qpos(v.x, v.y, v.z));
+      if (it != acc.end()) {
+        math::Vector3f n = it->second.n;
+        const float l = n.length();
+        if (l > 1e-5f) {
+          n /= l;
+          bool sharp = false;
+          for (auto& e : it->second.each) {
+            if (e.dot(n) < cos_vif) {
+              sharp = true;
+              break;
+            }
+          }
+          bits = pc_pack_weld_normal(n.x(), n.y(), n.z(), sharp);
+        }
+      }
+      memcpy(&v.pad0, &bits, 4);
+    };
+    for (u32 v : used) {
+      pack(vertices[v]);
+    }
+    for (auto& effect : model.effects) {
+      for (auto& v : effect.mod.vertices) {
+        pack(v);
+      }
+    }
+  }
+  if (n_models) {
+    lg::info("PC-REMAKE personnages : {} modeles prepares au decoupage ({} dessins convertis)",
+             n_models, n_converted);
   }
 }
 
@@ -2075,8 +2274,12 @@ void MercModelGroup::replace_demo_models() {
 // logo-* et ndi-* du niveau title) gardent leur forme d'origine. Ce sont des
 // lettres extrudees a aretes vives : l'arrondi bombait les parois creuses du
 // logo Naughty Dog, qui passaient devant les lettres (trainees bleues).
+// 21/10 : les plateformes a eco bleu (plat-eco, citb-plat-eco, plat-eco-finalboss...) aussi : leur
+// symbole bleu est une piece posee juste au-dessus du plateau ; arrondi, le plateau bombait et
+// passait par-dessus le symbole (symbole a moitie masque)
 static bool merc_model_keeps_original_shape(const std::string& name) {
-  return name.rfind("logo-", 0) == 0 || name.rfind("ndi-", 0) == 0;
+  return name.rfind("logo-", 0) == 0 || name.rfind("ndi-", 0) == 0 ||
+         name.find("plat-eco") != std::string::npos;
 }
 
 void MercModelGroup::subdivide_phong() {

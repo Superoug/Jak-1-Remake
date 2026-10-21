@@ -201,7 +201,7 @@
    (memcard-volume-music             float)
    (memcard-volume-dialog            float)
    (memcard-vibration?               symbol)
-   ;; PC-REMAKE 21/09 : réglages du menu « Remake » (source de vérité : lus/écrits
+   ;; PC-REMAKE 21/09 : réglages du menu Remake (source de vérité : lus/écrits
    ;; dans pc-settings.gc ici, recopiés chaque image dans *remake-gfx* par `update`).
    ;; PIÈGE : pckernel.o se charge AVANT time-of-day.o (game.gd) — écrire dans
    ;; *remake-gfx* pendant la lecture du fichier au boot = SIGBUS (plantage 21/09 17h32).

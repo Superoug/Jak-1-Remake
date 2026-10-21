@@ -558,9 +558,8 @@
 (defun ambient-type-ocean-near-off ((arg0 drawable-ambient) (arg1 vector))
   ;; PC-REMAKE (17/08) : NEUTRALISÉ — ces marqueurs d'époque éteignaient l'eau
   ;; PROCHE par zones (optimisation PS2, invisible dans l'eau trouble de 2001).
-  ;; Dans notre mer claire, chaque zone marquée devenait le « trou plat à bords
-  ;; de grille » autour du joueur (l'enquête du jour : compteurs flush_near à 0
-  ;; sommet). Le PC n'a pas besoin de cette économie — l'eau proche vit partout.
+  ;; Dans la mer claire du remake, chaque zone marquée devenait un trou plat à
+  ;; bords de grille autour du joueur (compteurs flush_near à 0 sommet). Le PC n'a pas besoin de cette économie — l'eau proche vit partout.
   0
   (none))
 

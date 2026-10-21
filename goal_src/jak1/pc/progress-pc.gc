@@ -785,7 +785,7 @@
             :param1 0.0
             :param2 100.0
             :slider-step-size 5.0)
-       ;; 17/10 : option « soleil des artistes » retiree du menu (toujours active, voir
+       ;; 17/10 : option soleil des artistes retiree du menu (toujours active, voir
        ;; pckernel-common.gc). Ancienne entree :
        ;; (new 'static 'game-option :option-type (game-option-type on-off) :name (text-id remake-sun-visible) :scale #t)
        (new 'static

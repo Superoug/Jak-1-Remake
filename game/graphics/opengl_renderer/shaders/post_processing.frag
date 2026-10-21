@@ -50,7 +50,7 @@ uniform sampler2D bloom_tex;
 uniform float has_bloom_tex;
 // 12/10 : la meme scene SANS HUD (prise avant les sprites d'interface) : un pixel
 // qui en differe appartient au HUD et garde sa couleur d'origine (ni relumiere,
-// ni nuit, ni etalonnage — « APPUIE SUR O » n'est plus orange dans la hutte)
+// ni nuit, ni etalonnage — APPUIE SUR O n'est plus orange dans la hutte)
 uniform sampler2D hud_ref_tex;
 // PERF 14/10 : POST EN DEUX PASSES. Le shader entier (1 300 lignes) est limite par
 // l'occupation du GPU (registres) : compile deux fois par le C++, POST_PASS1 calcule
@@ -84,6 +84,91 @@ uniform mat4 clip_from_world;  // the forward transform, for screen-space ray ma
 uniform vec4 cam_trans;
 
 #define MAX_LAMPS 48
+// 20/10 : faisceaux d'eco (2 extremites monde par faisceau) — lumiere en tube la nuit
+uniform vec4 beam_seg[24];
+uniform float beam_n;
+// 20/10 : rayons de soleil volumetriques (jungle) — carte d'ombres du soleil (unite 14)
+uniform sampler2DShadow sun_shadow_tex;
+uniform mat4 sun_light_vp;
+uniform float shaft_amt;
+// 20/10 : traces dans la neige (unite 7) — R relief (m), G hauteur du sol (m), B instant (s) ;
+// snow_trail = (active, x et z de Jak en unites du jeu, instant courant en s)
+uniform sampler2D snow_trail_tex;
+uniform vec4 snow_trail;
+uniform float snow_geom;  // 1 = le sol est vraiment creuse (geometrie decoupee) : pas de parallaxe
+// ---- TRACE DANS LA NEIGE : profil du sillon (meme code dans tfrag3_snow.tese et
+// post_processing.frag). La carte (unite 7) garde, par texel de 10 cm : R = distance au chemin
+// de Jak (m), G = hauteur de ses pieds, B = instant du passage, A = profondeur tassee.
+const float SNOW_N = 1024.0;  // texels de la carte (fenetre de 102,4 m)
+const float SNOW_TW = 0.10 * SNOW_N;
+float snow_hash(ivec2 i) {
+  uint h = uint(i.x) * 374761393u + uint(i.y) * 668265263u;
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  return float((h ^ (h >> 16u)) & 0xffffffu) / 16777216.0;
+}
+float snow_vnoise(vec2 p) {
+  vec2 fl = floor(p);
+  ivec2 i = ivec2(fl);
+  vec2 f = p - fl;
+  f = f * f * (3.0 - 2.0 * f);
+  float a = snow_hash(i), b = snow_hash(i + ivec2(1, 0));
+  float c = snow_hash(i + ivec2(0, 1)), d = snow_hash(i + ivec2(1, 1));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+// epaisseur : la neige epaisse (surface au-dessus des pieds de Jak) se tasse davantage
+float snow_thick(float dyg) {
+  return clamp(dyg / 0.35, 1.0, 3.5);
+}
+// relief (m) au point pm (m) de la surface d'origine : < 0 sillon, > 0 bourrelet, 0 hors trace.
+// Filtrage bilineaire fait a la main (texture flottante non filtree par le pilote Apple) ;
+// lineaire pur : une distance s'interpole exactement (le lissage en S faisait onduler la paroi).
+float snow_relief(vec3 pm, float now) {
+  vec2 px = pm.xz / SNOW_TW * SNOW_N - 0.5;
+  vec2 fl = floor(px);
+  vec2 f = px - fl;
+  ivec2 i0 = ivec2(fl);
+  float dist = 0.0, depth = 0.0, fill = 0.0, feet = 0.0, wv = 0.0;
+  for (int k = 0; k < 4; k++) {
+    vec4 t = texelFetch(snow_trail_tex, (i0 + ivec2(k & 1, k >> 1)) & 1023, 0);
+    float w = ((k & 1) == 1 ? f.x : 1.0 - f.x) * ((k >> 1) == 1 ? f.y : 1.0 - f.y);
+    dist += w * t.r;
+    depth += w * t.a;
+    if (t.b > -1e5) {
+      float age = now - t.b;
+      if (age < 0.0) age += 3600.0;
+      fill += w * (1.0 - smoothstep(120.0, 240.0, age));  // la neige recomble en 2 a 4 min
+      feet += w * t.g;
+      wv += w;
+    }
+  }
+  // hors de portee du sillon le plus large (r 0,7 m x 1,95, bord irregulier compris)
+  if (wv < 1e-3 || fill < 1e-3 || dist > 1.7) return 0.0;
+  float dyg = pm.y - feet / wv;
+  if (dyg < -1.5 || dyg > 2.6) return 0.0;
+  float thick = snow_thick(dyg);
+  // largeur : x1 en neige fine, jusqu'a x1,75 en neige epaisse ; bord irregulier (bruit lisse
+  // fixe dans le monde, pas de dents de scie)
+  float r = 0.40 * (1.0 + 0.30 * (thick - 1.0));
+  // (v1 : octave a 9 /m — dents de 11 cm sur le bord, effet pixelise sur les parois)
+  float jag = (snow_vnoise(pm.xz * 1.3) - 0.5) * 0.22 + (snow_vnoise(pm.xz * 3.5) - 0.5) * 0.10;
+  float d = dist * (1.0 + jag);
+  if (d > 1.95 * r) return 0.0;
+  // profondeur : en neige epaisse, le sillon descend jusqu'aux pieds de Jak (ses jambes ne
+  // disparaissent plus dans une neige intacte) ; en neige fine, tassement x epaisseur
+  // (v1 : tassement x epaisseur seul — 40 cm au centre des etendues, Jak enfonce de 1 m)
+  float dp = min(max(depth * (1.0 + 0.6 * (thick - 1.0)), dyg * smoothstep(0.0, 0.08, depth)),
+                 max(dyg, 0.0) + 0.2);
+  // fond plat, paroi en S, puis bourrelet de neige repoussee
+  float h = -dp * (1.0 - smoothstep(0.35 * r, 1.05 * r, d));
+  if (d > 0.8 * r) {
+    float t = clamp((d - 0.8 * r) / (1.1 * r), 0.0, 1.0);
+    h += 0.28 * depth * sqrt(thick) * sin(3.14159 * t) * smoothstep(0.8 * r, 1.1 * r, d);
+  }
+  return h * fill;
+}
+// 20/10 v3 : rayons au quart de resolution, adoucis (unite 8)
+uniform sampler2D shaft_tex;
+uniform float has_shaft_tex;
 uniform vec4 lamp_pos[MAX_LAMPS];    // xyz = world position, w = radius
 uniform vec4 lamp_color[MAX_LAMPS];  // rgb = colour, w = intensity
 // PERF 14/10 : position ecran des lampes, calculee une fois par image par le C++
@@ -426,7 +511,7 @@ void main() {
     // 13/10 (herbe trop transparente) : l'herbe au
     // soleil (vert vif, canal vert ~0.95) depassait le seuil PAR CANAL et toute
     // la prairie rayonnait : la lueur comblait les creux entre les brins
-    // (contraste local divise par 2, mesure) -> aspect laiteux, « transparent ».
+    // (contraste local divise par 2, mesure) -> aspect laiteux, transparent.
     // Desormais seuil sur la LUMINANCE et poids reduit pour les couleurs vives :
     // les lumieres claires (lampes, reflets, ciel, metal) brillent toujours.
     // (original : acc += max(vec3(0.0), s - vec3(thresh)) * poids;)
@@ -488,8 +573,8 @@ void main() {
   // PARTICULES (13/10, texture absente derriere l'eau qui tombe,
   // cascade de la plage) : une particule n'ecrit ni profondeur ni
   // normale — le post relumait la cascade (voile blanc de centaines de sprites)
-  // avec les facettes de la FALAISE derriere elle : de la « roche blanche sans
-  // texture ». Couverture des particules = ecart entre la scene d'avant sprites
+  // avec les facettes de la FALAISE derriere elle (roche blanche sans
+  // texture). Couverture des particules = ecart entre la scene d'avant sprites
   // (scene_tex) et celle d'avant HUD (hud_ref_tex) ; sur ces pixels l'eclairage
   // devient UNIFORME (meme mecanisme que le champ proche) : jour, nuit et lampes
   // restent, les facettes, l'occlusion et les ombres de contact disparaissent.
@@ -503,11 +588,11 @@ void main() {
     vec3 dd = abs(with_sprites - pre_sprites);
     near_flat = max(near_flat, smoothstep(0.04, 0.30, max(dd.r, max(dd.g, dd.b))));
   }
-  // FONDU CHAMP LOINTAIN (21/09, « treillis du lointain » ouvert depuis le 26/08,
+  // FONDU CHAMP LOINTAIN (21/09, treillis sur les collines lointaines,
   // cause PROUVEE par mesure : relumiere solaire x3 et ambiante hemispherique
   // x2.2 d'energie haute frequence sur les collines lointaines, SSAO/spec/god
   // rays innocents). Au loin, la profondeur perd sa precision et la normale
-  // reconstruite dessine des lignes de niveau (« empreintes digitales »). Le
+  // reconstruite dessine des lignes de niveau (empreintes digitales). Le
   // modele directionnel s'efface donc entre 180 et 320 m — comme near_flat,
   // il rend la main aux couleurs des artistes sans toucher a l'exposition.
   // (piste non verifiee 21/09 : avec une vraie normale du G-buffer le fondu
@@ -621,14 +706,14 @@ void main() {
     //
     // Principe : l'image du jeu est l'albedo eclaire plein jour. On ne
     // l'assombrit plus pour ensuite la re-multiplier (multiplier du noir
-    // redonne du noir — c'etait le « terni »). On compose UN facteur
+    // redonne du noir — d'ou l'image ternie). On compose UN facteur
     // d'eclairage lineaire, applique UNE fois :
     //
     //     c_final = c * ( ambiant(heure) + somme(lampes) )
     //
     // La nuit, l'ambiant est un clair de lune bleu sombre ; une lampe a
     // pleine force REDONNE a la surface ses couleurs de jour, teintees par la
-    // couleur de la lampe — c'est la definition d'« eclairer reellement ».
+    // couleur de la lampe : elle eclaire reellement.
     // Une lampe d'eco verte rend l'herbe vert-vif, une bleue rend tout
     // bleute : physique, sans astuce de teinte.
     // ============================================================
@@ -636,7 +721,7 @@ void main() {
     // 21/09 : NIVEAU INTERIEUR (ground_color.w, pose par time-of-day.gc : grottes,
     // cite engloutie, temple, citadelle). Pas de soleil la-dedans : les luminaires
     // du decor (tubes chauds, lueurs precurseur, cristaux, plaques d'eco) brillent
-    // a pleine force a toute heure — de « jour » ils etaient a 30 %.
+    // a pleine force a toute heure — de jour ils etaient a 30 %.
     float interior = clamp(ground_color.w, 0.0, 1.0);
     float lamp_hour = max(night, interior);
     {
@@ -778,6 +863,33 @@ void main() {
             vec3 H = normalize(L + V);
             L_sum += lamp_color[i].rgb * pow(max(dot(N, H), 0.0), 24.0) * fall * 0.35 *
                      presence * (1.0 - near_flat);
+          }
+        }
+      }
+
+      // ---- 2b. 20/10 : les FAISCEAUX D'ECO eclairent (la nuit) ----
+      // Lumiere en tube : distance du pixel au segment, portee ~32 m, bleu eco. Eclaire tours,
+      // canopee et sol le long du rayon, comme une vraie source continue.
+      if (beam_n > 0.5 && night > 0.02) {
+        int nbm = int(beam_n);
+        for (int bi = 0; bi < 12; bi++) {
+          if (bi >= nbm) {
+            break;
+          }
+          vec3 ba = beam_seg[2 * bi].xyz;
+          vec3 bb = beam_seg[2 * bi + 1].xyz;
+          vec3 ab = bb - ba;
+          float bt = clamp(dot(P - ba, ab) / max(dot(ab, ab), 1.0), 0.0, 1.0);
+          vec3 bl = ba + ab * bt - P;
+          float bd = length(bl);
+          float br = 4096.0 * 32.0;
+          if (bd < br) {
+            float bf = pow(1.0 - bd / br, 1.5);
+            float bdiff = mix(0.35, 1.0, clamp(dot(N, bl / max(bd, 1.0)), 0.0, 1.0));
+            bdiff = mix(bdiff, 0.6, near_flat);
+            vec3 bc = vec3(0.18, 0.45, 1.0) * (bf * bdiff * 2.4 * night);
+            L_sum += bc;
+            L_eco_add += bc * 0.4;  // depot colore modere : les murs restent bleus, pas blancs
           }
         }
       }
@@ -946,6 +1058,201 @@ void main() {
     vec3 Dv = world_from_depth(tex_coord, 0.5) - world_from_depth(tex_coord, 0.99);
     if (Dv.y < 0.0) {
       c = mix(c, sea_murk(100.0), 0.94);
+    }
+  }
+
+  // 20/10 : LA NUIT, LES LUMIERES BRILLENT. (1) Surfaces emissives (anneaux bleus des
+  // tours de la jungle, lueurs precurseur, cristaux) : eclat renforce avec la nuit.
+  // (2) Particules qui AJOUTENT une lumiere COLOREE (faisceau d'eco, ecos, etincelles) :
+  // leur apport (scene avant HUD - scene avant sprites) est redonne, renforce ; la fumee
+  // (qui assombrit) et la vapeur blanche (peu saturee) n'en recoivent pas.
+  {
+    float nb = clamp(night_fx.x, 0.0, 1.0);
+    if (nb > 0.001) {
+      c *= 1.0 + 0.6 * nb * emissive_px;
+      if (has_scene_tex > 0.5 && has_hud_ref > 0.5) {
+        ivec2 ipn = ivec2(tex_coord * vec2(textureSize(scene_tex, 0)));
+        vec3 add = max(texelFetch(hud_ref_tex, ipn, 0).rgb - texelFetch(scene_tex, ipn, 0).rgb,
+                       vec3(0.0));
+        float amax = max(add.r, max(add.g, add.b));
+        float asat = amax > 1e-4 ? (amax - min(add.r, min(add.g, add.b))) / amax : 0.0;
+        // v2 : coeur plus clair (une lumiere vive tire vers le blanc), dose relevee
+        // (v1 : c += add * 1.2 * nb * smoothstep(0.25, 0.60, asat);)
+        float gp = nb * smoothstep(0.25, 0.60, asat);
+        c += (add * 1.6 + vec3(luma(add)) * 0.9) * gp;
+      }
+    }
+  }
+
+  // 20/10 : TRACES DANS LA NEIGE (neige qui se tasse). Quand le sol de neige est vraiment
+  // creuse (snow_geom : geometrie decoupee, tfrag3_snow.tese), le post ne fait plus que la neige
+  // tassee du fond (plus dense : plus sombre, bleutee) et l'ombre du bord dans le creux. Sinon
+  // (carte graphique sans decoupage), parallaxe : le regard descend dans le sillon et la normale
+  // suit la pente. Les traces se comblent en 2 a 4 minutes.
+  // (v2 : relief pre-calcule dans la carte, bord en dents de scie, parallaxe seule)
+  if (!sky_pixel && snow_trail.x > 0.5 && N.y > (snow_geom > 0.5 ? 0.0 : 0.45)) {
+    const float SM = 4096.0;
+    vec3 pm = P / SM;
+    if (length(pm.xz - snow_trail.yz / SM) < 49.0) {
+      float now = snow_trail.w;
+      vec3 q = pm;
+      float py0 = pm.y;  // hauteur de la surface d'origine (avant tassement)
+      float h;
+      if (snow_geom > 0.5) {
+        // P est deja au fond du creux : surface d'origine = P.y - relief (2 iterations)
+        float h0 = snow_relief(pm, now);
+        h = snow_relief(vec3(pm.x, pm.y - h0, pm.z), now);
+        py0 = pm.y - h;
+      } else {
+        // parallaxe : le regard (camera -> P) continue sous la surface jusqu'au fond
+        vec3 vd = normalize(pm - cam_trans.xyz / SM);
+        float hq = snow_relief(pm, now);
+        if (hq < -0.005 && vd.y < -0.05) {
+          float tmax = min(1.2 / -vd.y, 5.0);
+          float tprev = 0.0;
+          for (int k = 1; k <= 20; k++) {
+            float t = tmax * float(k) / 20.0;
+            vec3 qq = pm + vd * t;
+            if (qq.y - pm.y <= snow_relief(vec3(qq.x, pm.y, qq.z), now)) {
+              float ta = tprev, tb = t;
+              for (int r = 0; r < 6; r++) {
+                float tm = 0.5 * (ta + tb);
+                vec3 qm = pm + vd * tm;
+                if (qm.y - pm.y <= snow_relief(vec3(qm.x, pm.y, qm.z), now)) tb = tm; else ta = tm;
+              }
+              q = pm + vd * tb;
+              break;
+            }
+            tprev = t;
+          }
+        }
+        h = snow_relief(vec3(q.x, pm.y, q.z), now);
+      }
+      if (h != 0.0) {
+        vec3 Ls = sun_dir.w > 0.5 ? sun_dir.xyz : normalize(vec3(0.35, 0.86, -0.36));
+        float lit = 1.0;
+        if (snow_geom < 0.5) {
+          // normale du relief au point vu (la geometrie decoupee l'a deja dans le G-buffer)
+          const float e = 0.06;
+          vec3 qb = vec3(q.x, pm.y, q.z);
+          float hx = snow_relief(qb + vec3(e, 0.0, 0.0), now) - snow_relief(qb - vec3(e, 0.0, 0.0), now);
+          float hz = snow_relief(qb + vec3(0.0, 0.0, e), now) - snow_relief(qb - vec3(0.0, 0.0, e), now);
+          vec3 tn = normalize(N + vec3(-hx, 0.0, -hz) / (2.0 * e));
+          float l0 = max(dot(N, Ls), 0.0) * 0.75 + 0.25;
+          float l1 = max(dot(tn, Ls), 0.0) * 0.75 + 0.25;
+          lit = clamp(l1 / max(l0, 0.05), 0.45, 1.4);
+        }
+        // ombre du bord dans le creux : du point vu vers le soleil, le relief cache-t-il ?
+        float shadow = 0.0;
+        if (h < -0.01) {
+          vec3 sp = vec3(q.x, py0 + h, q.z);
+          for (int k = 1; k <= 8; k++) {
+            vec3 s2 = sp + Ls * (max(0.08, -h / 5.0) * float(k));  // pas allonge si creux profond
+            // ombre douce : penetration du rayon dans le relief (pas de bandes)
+            float pen = snow_relief(vec3(s2.x, py0, s2.z), now) - (s2.y - py0);
+            shadow = max(shadow, clamp(pen / 0.06, 0.0, 1.0) * (1.0 - float(k - 1) / 8.0));
+          }
+        }
+        c *= lit * mix(1.0, 0.62, shadow);
+        // neige tassee (plus dense : plus sombre, bleutee) ; bourrelet de poudreuse plus clair
+        float trough = clamp(-h / 0.35, 0.0, 1.0);
+        float bump = clamp(h / 0.08, 0.0, 1.0);
+        c *= mix(vec3(1.0), vec3(0.74, 0.82, 0.95), trough);
+        c *= 1.0 + 0.10 * bump;
+      }
+    }
+  }
+
+  // 20/10 : RAYONS DE SOLEIL A TRAVERS LE FEUILLAGE (jungle, de jour). v3 : calcules au QUART
+  // de la resolution puis adoucis (shafts.frag + shafts_blur.frag, OpenGLRenderer
+  // pc_shaft_run) — la v2, calculee ici pixel par pixel (16 pas avec gigue), donnait une image
+  // granuleuse. Ici : la dose adoucie, avec une epaule (face au soleil, pas de voile).
+  if (shaft_amt > 0.001 && has_shaft_tex > 0.5) {
+    float sadd = texture(shaft_tex, tex_coord).r;
+    c += vec3(1.0, 0.90, 0.68) * (sadd / (1.0 + 2.0 * sadd)) * shaft_amt;
+  }
+  // 20/10 : TACHES DE SOLEIL dans la cabane de Samos (toit ouvert) : la ou la carte d'ombres
+  // dit que le soleil arrive (par le toit, la porte, la fenetre), le sol et les murs recoivent
+  // une lumiere chaude. Ailleurs dans la piece, rien ne change (pas d'ombres portees dedans).
+  if (!sky_pixel && shaft_amt > 0.001 && grade_amt2.w > 0.01) {
+    vec3 sp = (sun_light_vp * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+    if (sp.x > 0.0 && sp.x < 1.0 && sp.y > 0.0 && sp.y < 1.0 && sp.z < 1.0) {
+      float sndl = max(dot(N, sun_dir.xyz), 0.0);
+      float sbias = 0.002 + 0.006 * (1.0 - sndl);
+      float slitp = 0.0;
+      vec2 spx = 1.0 / vec2(textureSize(sun_shadow_tex, 0));
+      for (int sy = -1; sy <= 1; sy++) {
+        for (int sx = -1; sx <= 1; sx++) {
+          slitp += texture(sun_shadow_tex, vec3(sp.xy + vec2(sx, sy) * spx * 2.0, sp.z - sbias));
+        }
+      }
+      slitp /= 9.0;
+      // tache franche : le soleil qui entre par les ouvertures du toit et la fenetre
+      c += c * vec3(1.0, 0.84, 0.56) * (slitp * sndl * 3.2 * clamp(grade_amt2.w, 0.0, 1.0));
+    }
+  }
+
+  // 20/10 : FAISCEAU DE LUMIERE MIS EN SCENE dans la cabane de Samos (etage). Le toit est ferme
+  // dans le modele : le vrai soleil n'y entre presque pas. Un cone de lumiere chaude descend du
+  // haut de la coupole vers le plancher (effet artistique, de jour) : l'air du cone brille, avec
+  // un leger mouvement, et ce qu'il touche (plancher, Jak) recoit sa lumiere.
+  {
+    float hb = clamp(grade_amt2.w, 0.0, 1.0) * clamp(1.0 - 1.4 * night_fx.x, 0.0, 1.0);
+    if (hb > 0.001) {
+      const float M = 4096.0;
+      // 20/10 v3 : le faisceau tombe de l'OUVERTURE DU TOIT au-dessus de l'arbre (bord du trou
+      // mesure vers (-123, 60, 205) m) et descend a gauche de l'arbre
+      // (v1 : vec3(-126.0, 63.0, 214.0), plafond ; v2 : vec3(-134.6, 50.8, 216.2), fenetre ronde)
+      vec3 b0 = vec3(-123.5, 61.5, 204.5) * M;  // ouverture du toit
+      vec3 b1 = vec3(-129.0, 46.2, 201.5) * M;  // plancher, a gauche de l'arbre
+      vec3 bax = b1 - b0;
+      float blen = length(bax);
+      vec3 bdir = bax / blen;
+      float r0 = 0.75 * M, r1 = 1.5 * M;
+      // 1. lumiere RECUE par la surface (dans le cone, et un peu sous la tache)
+      if (!sky_pixel) {
+        float sp = clamp(dot(P - b0, bdir) / blen, 0.0, 1.06);
+        float dp = length(P - (b0 + bdir * (sp * blen)));
+        float rp = mix(r0, r1, sp);
+        float inside = exp(-(dp * dp) / (rp * rp) * 1.6);
+        float facing = mix(0.35, 1.0, max(dot(N, -bdir), 0.0));
+        c += c * vec3(1.0, 0.86, 0.60) * (inside * facing * 1.0 * hb);
+      }
+      // 2. l'air du cone brille (le regard de la camera jusqu'a la surface)
+      vec3 ro = cam_trans.xyz;
+      vec3 rd;
+      float rl;
+      if (sky_pixel) {
+        rd = normalize(world_from_depth(tex_coord, 0.5) - world_from_depth(tex_coord, 0.99));
+        rl = 40.0 * M;
+      } else {
+        vec3 rv = P - ro;
+        rl = length(rv);
+        rd = rv / max(rl, 1.0);
+      }
+      // points les plus proches entre le regard [0, rl] et l'axe [0, blen]
+      vec3 w0 = ro - b0;
+      float bb = dot(rd, bdir);
+      float dd = dot(rd, w0), ee = dot(bdir, w0);
+      float den = max(1.0 - bb * bb, 1e-4);
+      float tr = clamp((bb * ee - dd) / den, 0.0, rl);
+      float ta = clamp(dot(ro + rd * tr - b0, bdir), 0.0, blen);
+      tr = clamp(dot(b0 + bdir * ta - ro, rd), 0.0, rl);
+      vec3 pa = b0 + bdir * ta;
+      float dist = length(ro + rd * tr - pa);
+      float sa = ta / blen;
+      float ra = mix(r0, r1, sa);
+      // bord net mais doux (lumiere solide), coeur un peu plus clair
+      float core = 1.0 - smoothstep(0.55, 1.15, dist / ra);
+      core *= 0.75 + 0.25 * exp(-(dist * dist) / (ra * ra) * 4.0);
+      // longueur traversee (regard de biais = plus de lumiere), fondu aux deux bouts
+      float cross_len = 1.0 / max(sqrt(den), 0.35);
+      float ends = smoothstep(0.0, 0.05, sa) * (1.0 - smoothstep(0.85, 1.0, sa) * 0.6);
+      float t = water_glitter.w;
+      // poussiere en suspension : bandes douces qui descendent lentement dans le faisceau
+      float shimmer = 0.80 + 0.20 * sin(sa * 23.0 + t * 0.9) * sin(sa * 9.0 - t * 0.5 + dist / M * 2.0);
+      float glow = core * ends * shimmer * min(cross_len, 1.7);
+      c += vec3(1.0, 0.88, 0.62) * (glow * 0.9 * hb);
     }
   }
 
@@ -1121,8 +1428,7 @@ void main() {
           // coeur eclatant sur la boule + aura de sa couleur, a toute heure
           glow_em += lamp_color[i].rgb * (core * 0.55 + halo * 2.6) * inten_h * vis * halo_fade;
         } else if (em_h) {
-          // la lave RESPIRE : battement lent, déphasé par source — la
-          // sensation « jeu moderne »
+          // la lave RESPIRE : battement lent, déphasé par source
           float fw = water_glitter.w;
           float ph = lamp_orig[i] * 7.0;  // (original : float(i) * 7.0)
           float fl = 0.84 + 0.09 * sin(fw * 2.3 + ph) + 0.06 * sin(fw * 7.1 + ph * 1.7) +
@@ -1248,7 +1554,7 @@ void main() {
         float halo = pow(clamp(1.0 - d / 0.42, 0.0, 1.0), 3.0);
         flare += vec3(1.0, 0.82, 0.55) * halo * 0.35;
       }
-      // dose « legere » : le fantome le plus fort ajoute ~0,15 a gain 1
+      // dose legere : le fantome le plus fort ajoute ~0,15 a gain 1
       c += flare * gain * 0.50;
     }
   }
@@ -1303,7 +1609,7 @@ void main() {
   //   lumieres se compressent au lieu de clipper), 3. contraste en S autour du
   //   gris moyen (grade_fx.y), 4. saturation (grade_fx.z), 5. teinte ombres
   //   fraiches / hautes lumieres chaudes (grade_fx.w), 6. nettete locale.
-  // Tout est neutre a zero et pilote par le menu Remake (« RENDU REMAKE »).
+  // Tout est neutre a zero et pilote par le menu Remake (RENDU REMAKE).
   if (grade_fx.x > 0.001) {
     float amt = clamp(grade_fx.x, 0.0, 2.0);
     vec3 g = c;

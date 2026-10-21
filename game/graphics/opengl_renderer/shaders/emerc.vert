@@ -28,7 +28,7 @@ uniform vec4 sun_dir_view;
 // PC-REMAKE 13/10 : reflet et eclat calcules PAR PIXEL (voir emerc.frag)
 out vec3 v_nrm;
 out vec3 v_pos;
-out vec4 v_unp;    // position « deperspectivee » (vf09 du microcode)
+out vec4 v_unp;    // position deperspectivee (vf09 du microcode)
 out vec4 v_unpk;   // constantes de deperspective (vf23)
 
 struct MercMatrixData {

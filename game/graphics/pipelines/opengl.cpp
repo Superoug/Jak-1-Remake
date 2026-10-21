@@ -703,8 +703,15 @@ void GLDisplay::render() {
   g_gfx_data->debug_gui.finish_frame();
   if (Gfx::g_global_settings.framelimiter) {
     auto p = scoped_prof("frame-limiter");
+    // [QA] 20/10 : QA_FPS=<n> plafonne CETTE instance a n images/s (simuler une machine plus
+    // lente) sans changer la frequence visee par le jeu. Sans la variable : rien.
+    static const float qa_fps = [] {
+      const char* e = getenv("QA_FPS");
+      return e ? (float)atof(e) : 0.f;
+    }();
     g_gfx_data->frame_limiter.run(
-        Gfx::g_global_settings.target_fps, Gfx::g_global_settings.experimental_accurate_lag,
+        qa_fps > 1.f ? qa_fps : Gfx::g_global_settings.target_fps,
+        Gfx::g_global_settings.experimental_accurate_lag,
         Gfx::g_global_settings.sleep_in_frame_limiter, g_gfx_data->last_engine_time);
   }
 

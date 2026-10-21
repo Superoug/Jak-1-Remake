@@ -78,8 +78,8 @@ bool water_depth_capture(SharedRenderState* render_state) {
 
 CommonOceanRenderer::CommonOceanRenderer() {
   // PC-REMAKE : rayon du proche étendu de 34 m à ~220 m (le trou de transition
-  // complet) — l'ancien 4096*10 débordait dès le village (ASSERT « add more
-  // vertices »). ×16 : ~10 Mo, sans enjeu sur M1 Pro.
+  // complet) — l'ancien 4096*10 débordait dès le village (ASSERT add more
+  // vertices). ×16 : ~10 Mo, sans enjeu.
   m_vertices.resize(4096 * 160);
   for (auto& buf : m_indices) {
     buf.resize(4096 * 160);
@@ -460,7 +460,7 @@ void CommonOceanRenderer::capture_mid_textures(SharedRenderState* render_state) 
 //      l'alpha du shader est une VRAIE transparence (rampe rivage × distance) ;
 //   B. dépôt d'alpha (bucket shader 5) : écrit UNIQUEMENT l'alpha destination
 //      avec la formule d'origine PS2 (motif alphamod) pour doser le reflet —
-//      le même rôle que la passe « alpha » du near des artistes ;
+//      le même rôle que la passe alpha du near des artistes ;
 //   C. reflet envmap additif (bucket shader 4) : inchangé (DST_ALPHA, ONE).
 // Jamais d'écriture de profondeur ; GEQUAL comme le near — un rocher devant
 // masque l'eau, Jak immergé reçoit le voile.

@@ -103,7 +103,7 @@ void main() {
     color.a = clamp(fragment_color.a * 0.5 * T0.a * 1.2, 0.0, 1.0);
     color.rgb = mix(color.rgb, fog_color.rgb, clamp(fog_color.a * fog, 0, 1));
   } else if (bucket == 1) {
-    // passe de transparence (tuiles PROCHES) : même traitement « mer bleue »
+    // passe de transparence (tuiles PROCHES) : même traitement mer bleue
     // que le large — c'était la seule passe sans sea_blue, d'où la frontière
     // en grille autour du joueur (17/08)
     color = fragment_color * T0;

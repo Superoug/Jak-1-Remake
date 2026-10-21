@@ -231,7 +231,7 @@ Plane channel(const u32* rgba, int w, int h, int c) {
 // couleurs d'origine, prolongees sous le contour, sont agrandies en Lanczos. Le dessin
 // (couleurs, liseré sombre, reflet) est celui d'origine ; seuls les escaliers disparaissent.
 bool faithful_iris_texture(const std::string& tex_name) {
-  // (les portes en iris des precurseurs, « irisdoor », ne sont pas des yeux)
+  // (les portes en iris des precurseurs, irisdoor, ne sont pas des yeux)
   return tex_name.find("iris") != std::string::npos &&
          tex_name.find("door") == std::string::npos;
 }
@@ -350,7 +350,7 @@ std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int
     }
   };
   // silhouette arrondie (0,9 texel d'origine) ; couleurs adoucies (0,5 texel) : le liseré
-  // d'origine alterne texels sombres et clairs, qui faisaient des « dents » sur le contour
+  // d'origine alterne texels sombres et clairs, qui faisaient des dents sur le contour
   gauss(cu, 0.9 * factor);
   for (int c = 0; c < 3; c++) {
     gauss(big[c].v, 0.5 * factor);

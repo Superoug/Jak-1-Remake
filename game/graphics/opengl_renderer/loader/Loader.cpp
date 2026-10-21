@@ -343,7 +343,7 @@ void tag_tfrag_foliage(tfrag3::Level& lev) {
         }
       }
 
-      // PC-REMAKE : reconstruire le « squelette » de chaque couronne (la même
+      // PC-REMAKE : reconstruire le squelette de chaque couronne (la même
       // information que possèdent les palmiers TIE) — regrouper les feuilles
       // par couronne, puis graver dans rgba (libre en TFRAG) la position de
       // chaque sommet dans SA couronne : r = distance à l'axe, g = angle,
@@ -465,10 +465,8 @@ void transplant_leaning_palms(tfrag3::Level& lev) {
           continue;
         }
         const auto& tn = lev.textures.at(draw.tree_tex_id).debug_name;
-        // RÉVÉLATION du 17/08 (identification mesurée devant
-        // l'arbre) : les couronnes des grands penchés sont peintes avec
-        // « leafyground-hang », PAS « palm-leaf » — deux jours à chercher le
-        // mauvais nom de texture.
+        // 17/08 : les couronnes des grands penchés sont peintes avec
+        // leafyground-hang, PAS palm-leaf.
         if (tn.find("palm-leaf") == std::string::npos &&
             tn.find("leafyground-hang") == std::string::npos) {
           continue;

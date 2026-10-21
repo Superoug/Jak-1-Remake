@@ -14,6 +14,7 @@
 // vegetation vertices around the player. Same cross-thread pattern as
 // g_want_screenshot (worst case is one frame of slightly stale data).
 extern float g_grass_push[4];
+extern float g_grass_clear[4];  // 20/10 : herbe couchee pendant les cinematiques
 
 // PC-REMAKE: presentation post effects (bloom / saturation / warmth), written
 // by the GOAL binding pc-set-post-fx!, read by do_pcrtc_effects. All values
@@ -59,7 +60,7 @@ extern float g_palm_wind[4];
 // quand le niveau n'a pas d'océan.
 extern float g_water_glitter[4];
 // PROJECTEUR VIOLET : peint en magenta les draws désignés par le CONTENU du
-// fichier témoin /tmp/palm_debug — « idx:A-B » (plage d'index de textures du
+// fichier témoin /tmp/palm_debug — idx:A-B (plage d'index de textures du
 // niveau) ou une sous-chaîne de nom de texture. Fichier absent ou vide = rien.
 // Sert à identifier à chaud, sans redémarrage, quel draw porte un objet visé
 // (chasse aux palmiers penchés, 17/08).
@@ -67,7 +68,7 @@ extern float g_palm_debug;
 extern std::string g_palm_debug_spec;
 extern u32 g_palm_debug_seq;
 void update_palm_debug_flag();
-// PC-REMAKE 21/09 : « detail intrinseque » des sols (voir tfrag3.frag) — gain
+// PC-REMAKE 21/09 : detail intrinseque des sols (voir tfrag3.frag) — gain
 // global (fichier /tmp/pc_detail : un flottant, absent = 1.0, 0 = off) et
 // regle par nom de texture (1 = sol/roche, 0 = autre)
 extern float g_pc_detail_gain;
@@ -84,6 +85,25 @@ constexpr int kMaxRemakePending = 384; // collected before the nearest are picke
                                        // (128 → 384 : les lumières émissives
                                        // scannées par niveau s'y ajoutent)
 void pc_remake_lamps_begin_frame();
+// PC-REMAKE 20/10 : TRACES DANS LA NEIGE. Carte flottante torique (1024 x 1024 texels de 10 cm)
+// centree sur Jak : R = distance au chemin de Jak (m), G = hauteur des pieds (m), B = instant du
+// pas (s), A = profondeur tassee (m). Le profil du sillon est calcule par les shaders
+// (tfrag3_snow.tese, post_processing.frag). Mise a jour une fois par image ; 0 si inactive.
+extern float g_snow_step[4];
+void pc_snow_trail_frame(unsigned long long frame_idx);
+unsigned int pc_snow_trail_tex();
+// grille 128 x 128 (cases de 0,8 m) : instant du dernier pas qui touche chaque case
+unsigned int pc_snow_cells_tex();
+// le sol de neige a ete vraiment creuse cette image (passe decoupee de TFragment) : le post
+// ne simule plus le relief (parallaxe), il garde la teinte et l'ombre du sillon
+extern bool g_snow_geom_drawn;
+// 21/10 : incremente a chaque rechargement a chaud des shaders des personnages
+extern int g_pc_merc_shaders_seq;
+// PC-REMAKE 20/10 : faisceaux d'eco (segments monde) — lumiere en tube dans le post.
+constexpr int kMaxRemakeBeams = 12;
+void pc_remake_add_beam(float x0, float y0, float z0, float x1, float y1, float z1);
+int pc_remake_beam_count();
+const float* pc_remake_beams();  // 2 x vec4 par faisceau (extremites, w = 0)
 void pc_remake_remove_static_lamp(long long id);
 void pc_remake_add_lamp(float x, float y, float z, float radius, float r, float g, float b,
                         float intensity, int priority);
@@ -216,6 +236,9 @@ struct SunShadowMap {
   // invalide, le pilote Apple REJETTE tous les draws TFRAG3/SHRUB/MERC2 -> ecran
   // titre sans terrain, logo reduit a sa passe envmap (boot direct au titre).
   void bind_disabled(unsigned int program);
+  // 20/10 : carte et matrice telles que lues par les receveurs (rayons volumetriques du post)
+  unsigned int read_tex() const { return (pingpong_primed && !cache_mode) ? static_tex : tex; }
+  const float* read_vp() const { return (pingpong_primed && !cache_mode) ? receive_vp : light_vp; }
 
   // PC-REMAKE 14/10 : PASSE D'OMBRES DIFFEREE. Chaque arbre (terrain, objets, vent)
   // basculait vers la carte d'ombres puis revenait a l'image principale : une
@@ -310,6 +333,15 @@ DoubleDraw setup_opengl_from_draw_mode(DrawMode mode, u32 tex_unit, bool mipmap)
 void first_tfrag_draw_setup(const GoalBackgroundCameraData& settings,
                             SharedRenderState* render_state,
                             ShaderId shader);
+// 20/10 : SOL DE NEIGE DEFORMABLE. Textures du sol de neige — terrain (TFragment) ET
+// monticules de neige epaisse (TIE, poses par-dessus le terrain au centre des etendues)
+bool pc_is_snow_ground_texture(const std::string& name);
+// la passe decoupee (TFRAG3_SNOW) est-elle possible cette image ?
+bool pc_snow_tess_available(SharedRenderState* render_state);
+// prepare TFRAG3_SNOW (memes reglages que TFRAG3, carte des traces sur l'unite 7, patchs de 3
+// sommets) ; renvoie le programme. Dessiner ensuite les draws de neige en GL_PATCHES.
+GLuint pc_snow_tess_begin(const GoalBackgroundCameraData& camera, SharedRenderState* render_state);
+
 
 void interp_time_of_day(const math::Vector<s32, 4> itimes[4],
                         const tfrag3::PackedTimeOfDay& packed_colors,

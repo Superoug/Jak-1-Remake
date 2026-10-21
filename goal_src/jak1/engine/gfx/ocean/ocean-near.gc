@@ -580,7 +580,7 @@
         (+! s3-0 1))))
   ;; PC-REMAKE DEBUG : le rendu proche émet 0 sommet en jeu — on compte ce que
   ;; chaque portillon laisse passer (balayées / bit trans / index near / émises)
-  ;; 14/10 : enquete resolue (voir memoire ocean) — traces coupees, gardees pour memoire
+  ;; 14/10 : traces coupees, gardees en commentaire
   ;; (original : les deux format s'affichaient toutes les 256 images)
   (when (zero? (logand (-> *display* base-frame-counter) 255))
     (when #f

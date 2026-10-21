@@ -672,7 +672,7 @@
 
 (defmethod deactivate ((this eco-collectable))
   ;; PC-REMAKE 18/08 : eteint la lueur fixe de cet eco — sans ca elle restait
-  ;; allumee pour toujours apres le ramassage (bug de l'enquete du 18/08)
+  ;; allumee pour toujours apres le ramassage (18/08)
   (if (-> this entity) (pc-remove-eco-lamp! (the-as int (-> this entity))))
   ((method-of-type collectable deactivate) this)
   (none))

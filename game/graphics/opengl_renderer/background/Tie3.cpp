@@ -200,6 +200,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
       // principale pour les penchés), reclassification à chaud dans le rendu
       lod_tree[l_tree].tex_names = &lev_data->textures;
       lod_tree[l_tree].palm_debug_seq_built = 0;
+      lod_tree[l_tree].static_draw_snow.clear();  // 20/10 : reclasse au premier rendu
 
       // set up wind
       if (wind_idx_buffer_len > 0) {
@@ -255,7 +256,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
             if (draw.tree_tex_id >= 0 &&
                 draw.tree_tex_id < (int)lev_data->textures.size()) {
               const auto& tn = lev_data->textures[draw.tree_tex_id].debug_name;
-              // « beard » = la barbe de fibres des palmiers penchés : accrochée
+              // beard = la barbe de fibres des palmiers penchés : accrochée
               // au tronc, elle doit rester immobile avec lui (17/08)
               if (tn.find("trunk") != std::string::npos ||
                   tn.find("bark") != std::string::npos ||
@@ -265,7 +266,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
               }
               // NEUTRALISÉ 17/08 : la classification par texture attrapait AUSSI
               // les couronnes des palmiers TIE déjà validés (elles portent
-              // « palm-leaf ») → boost ×3 involontaire sur les bons arbres.
+              // palm-leaf) → boost ×3 involontaire sur les bons arbres.
               // La greffe étant révoquée (le violet a prouvé qu'elle ratait les
               // penchés), is_graft reste 0 partout.
               (void)tn;
@@ -723,6 +724,22 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     }
   }
 
+  // 20/10 : SOL DE NEIGE DEFORMABLE — au centre des etendues, la neige epaisse est faite de
+  // monticules TIE poses par-dessus le terrain : ils sont creuses comme le terrain (TFragment)
+  if (tree.draws && tree.tex_names && tree.static_draw_snow.size() != tree.draws->size()) {
+    tree.static_draw_snow.assign(tree.draws->size(), 0);
+    for (size_t i = 0; i < tree.draws->size(); i++) {
+      s32 ti = (*tree.draws)[i].tree_tex_id;
+      if (ti >= 0 && ti < (int)tree.tex_names->size() &&
+          pc_is_snow_ground_texture((*tree.tex_names)[ti].debug_name)) {
+        tree.static_draw_snow[i] = 1;
+      }
+    }
+  }
+  const bool snow_tess = !use_envmap && category == tfrag3::TieCategory::NORMAL &&
+                         tree.draw_mode == GL_TRIANGLES && pc_snow_tess_available(render_state);
+  std::vector<size_t> snow_draws;
+
   glBindVertexArray(tree.vao);
   glBindBuffer(GL_ARRAY_BUFFER, tree.vertex_buffer);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
@@ -744,6 +761,10 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     const auto& draw = tree.draws->operator[](draw_idx);
     const auto& multidraw_indices = tree.multidraw_offset_per_stripdraw[draw_idx];
     const auto& singledraw_indices = tree.draw_idx_temp[draw_idx];
+    if (snow_tess && draw_idx < tree.static_draw_snow.size() && tree.static_draw_snow[draw_idx]) {
+      snow_draws.push_back(draw_idx);
+      continue;
+    }
 
     if (render_state->no_multidraw) {
       if (singledraw_indices.second == 0) {
@@ -829,6 +850,39 @@ void Tie3::draw_matching_draws_for_tree(int idx,
   if (!use_envmap) {
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "palm_debug"),
                 0.f);
+  }
+  // 20/10 : monticules de neige, decoupes et creuses (programme TFRAG3_SNOW, patchs)
+  if (!snow_draws.empty()) {
+    const ShaderId sid = ShaderId::TFRAG3_SNOW;
+    const GLuint pid = pc_snow_tess_begin(settings.camera, render_state);
+    glUniform1f(pc_uniform_loc(pid, "detail_amt"), 0.f);
+    for (size_t draw_idx : snow_draws) {
+      const auto& draw = tree.draws->operator[](draw_idx);
+      const auto& multidraw_indices = tree.multidraw_offset_per_stripdraw[draw_idx];
+      const auto& singledraw_indices = tree.draw_idx_temp[draw_idx];
+      if (render_state->no_multidraw ? singledraw_indices.second == 0
+                                     : multidraw_indices.second == 0) {
+        continue;
+      }
+      if (draw.tree_tex_id >= 0) {
+        glBindTexture(GL_TEXTURE_2D, m_textures->at(draw.tree_tex_id));
+      } else {
+        glBindTexture(GL_TEXTURE_2D, m_anim_slot_array->at(-(draw.tree_tex_id + 1)));
+      }
+      setup_tfrag_shader(render_state, draw.mode, sid);
+      glUniform1i(pc_uniform_loc(pid, "decal"), draw.mode.get_decal() ? 1 : 0);
+      prof.add_draw_call();
+      if (render_state->no_multidraw) {
+        glDrawElements(GL_PATCHES, singledraw_indices.second, GL_UNSIGNED_INT,
+                       (void*)(singledraw_indices.first * sizeof(u32)));
+      } else {
+        glMultiDrawElements(GL_PATCHES, &tree.multidraw_count_buffer[multidraw_indices.first],
+                            GL_UNSIGNED_INT,
+                            &tree.multidraw_index_offset_buffer[multidraw_indices.first],
+                            multidraw_indices.second);
+      }
+    }
+    render_state->shaders[ShaderId::TFRAG3].activate();
   }
   pc_normal_target(false);
 
@@ -932,7 +986,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
   glBindVertexArray(0);
 
   // [QA] 13/10 : `touch /tmp/qa_no_envmap` coupe a chaud la passe de reflet des
-  // objets precurseurs (A/B des « ronds noirs »). Inerte sans le fichier.
+  // objets precurseurs (A/B des ronds noirs). Inerte sans le fichier.
   static int qa_env_poll = 0;
   static bool qa_no_env = false;
   if ((qa_env_poll++ & 63) == 0) {
@@ -1344,7 +1398,7 @@ void Tie3::render_tree_wind(int idx,
     // PC-REMAKE: local vertical extent of this draw for the height-weighted wind
     // PERF 25/08 : les adresses d'uniforms sont mises en cache par programme —
     // on payait ~10 recherches par chaine PAR DRAW de vent (et un warn [QA]
-    // par 60 draws, enquete des palmiers reglee depuis)
+    // par 60 draws)
     const auto wind_prog = render_state->shaders[shader_id].id();
     struct WindUniformLocs {
       GLuint prog = 0;
@@ -1379,7 +1433,7 @@ void Tie3::render_tree_wind(int idx,
     // centre/rayon xz : phase par fronde (angle autour du tronc)
     const auto& xzc = tree.wind_draw_xzc.at(draw_idx);
     glUniform3f(s_locs.xzc, xzc.x(), xzc.y(), xzc.z());
-    // houle continue « comme l'herbe » : temps réel + phase par instance
+    // houle continue comme l'herbe : temps réel + phase par instance
     glUniform1f(s_locs.time, (float)(render_state->frame_idx % 216000) / 60.f);
     // échelles réglables en direct (pc-set-palm-wind!)
     glUniform2f(s_locs.palm_scales, g_palm_wind[0], g_palm_wind[1]);

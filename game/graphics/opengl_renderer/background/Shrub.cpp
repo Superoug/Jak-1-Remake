@@ -16,6 +16,7 @@ void Shrub::init_shaders(ShaderLibrary& shaders) {
   m_uniforms.decal = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "decal");
   // PC-REMAKE: grass bending around the player
   m_uniforms.grass_push = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "grass_push");
+  m_uniforms.grass_clear = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "grass_clear");
   m_uniforms.grass_wind = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "grass_wind");
   m_uniforms.shrub_facet = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "shrub_facet");
 }
@@ -121,7 +122,10 @@ void Shrub::update_load(const LevelData* loader_data) {
                                           "frond"};
         static const char* kVeg[] = {"grass", "plant", "leaf",  "leaves", "palm",   "fern",
                                      "bush",  "vine",  "reed",  "weed",   "flower",
-                                     "hay",   "wheat", "moss",  "bamboo", "shrub",  "riceplant"};
+                                     "hay",   "wheat", "moss",  "bamboo", "shrub",  "riceplant",
+                                     // 20/10 : riz des rizieres et quenouilles du village (dans l'eau,
+                                     // pres du fermier) : ils plient sous les pas comme l'herbe
+                                     "rice",  "cattail"};
         bool still = false;
         for (auto* w : kStill) {
           if (name.find(w) != std::string::npos) {
@@ -679,8 +683,12 @@ void Shrub::render_tree(int idx,
       if (vclass == 0) {
         float rigid[4] = {g_grass_push[0], g_grass_push[1], g_grass_push[2], 0.f};
         glUniform4fv(m_uniforms.grass_push, 1, rigid);
+        // 20/10 : galets, cordes, rochers : jamais couches
+        float rigid_clear[4] = {g_grass_clear[0], g_grass_clear[1], g_grass_clear[2], 0.f};
+        glUniform4fv(m_uniforms.grass_clear, 1, rigid_clear);
       } else {
         glUniform4fv(m_uniforms.grass_push, 1, g_grass_push);
+        glUniform4fv(m_uniforms.grass_clear, 1, g_grass_clear);
       }
     }
 

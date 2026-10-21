@@ -130,6 +130,7 @@ class TFragment : public BucketRenderer {
     // bâti une fois par arbre depuis le registre des textures qui brillent
     std::vector<float> draw_emissive;
     std::vector<float> draw_detail;  // 21/09 : detail intrinseque des sols (0/1)
+    std::vector<u8> draw_snow;       // 20/10 : sol de neige deformable (traces de Jak)
     const std::vector<tfrag3::Texture>* tex_names = nullptr;
     u32 palm_debug_seq_built = 0;
     const tfrag3::PackedTimeOfDay* colors = nullptr;

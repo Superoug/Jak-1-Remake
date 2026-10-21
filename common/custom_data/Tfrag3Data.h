@@ -625,6 +625,9 @@ struct MercModel {
   u32 st_vif_add;
   float xyz_scale;
   float st_magic;
+  // PC-REMAKE 21/10 : personnage (Jak, Daxter, PNJ, creatures, ennemis) — rendu remodele
+  // (decoupage sur la carte graphique, matieres, fourrure). Pas serialise : pose au chargement.
+  bool pc_character = false;
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
 };
@@ -641,7 +644,18 @@ struct MercModelGroup {
   // PC-REMAKE: fully remodeled demo props (barrel, scout-fly crate) — modern
   // parametric geometry fitted to the original bounding boxes.
   void replace_demo_models();
+  // PC-REMAKE 21/10 : prepare les personnages au decoupage sur la carte graphique (dessins en
+  // listes de triangles, normale soudee par position rangee dans pad0)
+  void pc_prepare_characters();
 };
+
+// PC-REMAKE 21/10 : les modeles merc qui sont des PERSONNAGES (nom du modele : groupe
+// d'animation + -lod0, -lod1...). Les objets (caisses, portes, plates-formes) gardent
+// leur rendu valide.
+bool pc_is_character_model(const std::string& model_name);
+// pad0 d'un MercVertex de personnage : bit 0 = valide, bit 1 = arete vive, bits 2-16 et 17-31 =
+// normale soudee (octaedre, 15 bits par axe)
+u32 pc_pack_weld_normal(float x, float y, float z, bool sharp);
 
 //
 

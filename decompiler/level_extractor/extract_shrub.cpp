@@ -422,7 +422,7 @@ void remake_pebble_proto(ShrubProtoInfo& proto, const std::string& name) {
     const float up = (ytop >= ybot) ? 1.f : -1.f;
     // vrai galet : ellipsoïde asymétrique (dessous plat enterré, dessus bombé),
     // émis en SOUPE DE TRIANGLES explicites (adc F,F,T par face) — les formes
-    // « triangle » persistaient à travers 3 maillages en rubans, on n'accorde
+    // triangle persistaient à travers 3 maillages en rubans, on n'accorde
     // plus aucune confiance à l'interprétation des strips en aval.
     const u32 hsh = pebble_hash((u32)qi * 977u + (u32)name.size() * 131u);
     const float ang0 = (hsh & 255) * (2.f * (float)M_PI / 256.f);
@@ -474,7 +474,7 @@ void remake_pebble_proto(ShrubProtoInfo& proto, const std::string& name) {
 }
 
 // PC-REMAKE (17/08, herbe du village à la place des
-// touffes noires) : les dômes « palmbush » de la PLAGE deviennent des
+// touffes noires) : les dômes palmbush de la PLAGE deviennent des
 // touffes d'herbe façon village — deux quads en croix par dôme source, UV sur
 // le rect st du quad (le créneau de texture est ré-habillé en herbe du village
 // côté texture_replacements). Soupe de triangles (adc F,F,T), comme les galets.
@@ -1210,7 +1210,7 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
   float scale_lo = 0.65f, scale_span = 0.35f;    // taille relative au modèle
   if (level_for_ground.level_name == "beach") {
     // 17/08 : la plage porte désormais la VRAIE herbe de Samos (transplantée) —
-    // mêmes densité et tailles que le village (le tapis de sa photo)
+    // mêmes densité et tailles que le village
     area_per_tuft = 2.5f * kMeter * kMeter;
     scale_lo = 0.65f;
     scale_span = 0.35f;
@@ -1349,7 +1349,7 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
     for (const auto& [cidx, lum] : cand_lum) {
       float e = 0.f;
       for (int p = 0; p < 8; p++) {
-        // v2 : 0.5 -> 0.25 (le diagnostic « couleur unique » a prouve que les
+        // v2 : 0.5 -> 0.25 (le diagnostic couleur unique a prouve que les
         // plaques venaient de l'ombre PEINTE sous les palmiers ; l'ombre en temps
         // reel du soleil la remplace et suit l'heure)
         // v3 : 0.25 -> 0.10 — l'ombre des palmiers et des falaises est desormais
@@ -1529,32 +1529,66 @@ void clear_auto_grass_near_actors(std::vector<ShrubProtoInfo>& protos, const std
   if (g_grass_keep_clear.empty()) {
     return;
   }
+  // 20/10 : plus de bord net (pas de trou visible). Autour de chaque objet (rayon
+  // r de la table) : herbe automatique retiree jusqu'a 0,8 r, puis de plus en plus presente
+  // et de plus en plus haute jusqu'a 2,6 r (tirage stable par position, touffes reduites
+  // jusqu'a moitie pres du centre). Touffes des artistes : jamais touchees.
+  // (17/10 : retrait net de tout dans le rayon r)
   constexpr float kMeter = 4096.f;
-  int removed = 0;
+  int removed = 0, shrunk = 0;
   for (auto& proto : protos) {
-    auto& v = proto.instances;
-    const size_t before = v.size();
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [&](const ShrubInstanceInfo& inst) {
-                             if (inst.src != 1 && inst.src != 2) {
-                               return false;  // touffes des artistes : jamais retirees
-                             }
-                             for (const auto& z : g_grass_keep_clear) {
-                               const float dx = inst.mat[3][0] - z.x();
-                               const float dz = inst.mat[3][2] - z.z();
-                               const float dy = inst.mat[3][1] - z.y();
-                               if (dx * dx + dz * dz < z.w() * z.w() && std::abs(dy) < 6.f * kMeter) {
-                                 return true;
-                               }
-                             }
-                             return false;
-                           }),
-            v.end());
-    removed += (int)(before - v.size());
+    std::vector<ShrubInstanceInfo> kept;
+    kept.reserve(proto.instances.size());
+    for (auto& inst : proto.instances) {
+      if (inst.src != 1 && inst.src != 2) {
+        kept.push_back(inst);  // touffes des artistes
+        continue;
+      }
+      bool drop = false;
+      float scale = 1.f;
+      for (const auto& z : g_grass_keep_clear) {
+        const float dx = inst.mat[3][0] - z.x();
+        const float dz = inst.mat[3][2] - z.z();
+        const float dy = inst.mat[3][1] - z.y();
+        if (std::abs(dy) >= 6.f * kMeter) {
+          continue;
+        }
+        const float d = std::sqrt(dx * dx + dz * dz);
+        const float inner = 0.8f * z.w(), outer = 2.6f * z.w();
+        if (d < inner) {
+          drop = true;
+          break;
+        }
+        if (d < outer) {
+          float t = (d - inner) / (outer - inner);
+          t = t * t * (3.f - 2.f * t);
+          u32 seed = (u32)(s32)inst.mat[3][0] * 2654435761u ^ (u32)(s32)inst.mat[3][2] * 40503u;
+          if (hash_to_unit_float(seed) > 0.25f + 0.75f * t) {
+            drop = true;
+            break;
+          }
+          scale = std::min(scale, 0.5f + 0.5f * t);
+        }
+      }
+      if (drop) {
+        removed++;
+        continue;
+      }
+      if (scale < 0.999f) {
+        for (int col = 0; col < 3; col++) {
+          for (int row = 0; row < 3; row++) {
+            inst.mat[col][row] *= scale;
+          }
+        }
+        shrunk++;
+      }
+      kept.push_back(inst);
+    }
+    proto.instances = std::move(kept);
   }
-  if (removed) {
-    lg::info("PC-REMAKE herbe [{}] : {} touffes automatiques retirees autour des objets", level,
-             removed);
+  if (removed || shrunk) {
+    lg::info("PC-REMAKE herbe [{}] : {} touffes automatiques retirees, {} raccourcies autour des objets",
+             level, removed, shrunk);
   }
 }
 }  // namespace

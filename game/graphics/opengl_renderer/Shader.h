@@ -8,10 +8,13 @@
 class Shader {
  public:
   static constexpr char shader_folder[] = "game/graphics/opengl_renderer/shaders/";
-  // 14/10 : frag_define (optionnel) = « #define <frag_define> » insere apres #version
+  // 14/10 : frag_define (optionnel) = #define <frag_define> insere apres #version
+  // 20/10 : frag_name (optionnel) = autre fichier .frag ; les fichiers <nom>.tesc / <nom>.tese
+  // presents = etapes de decoupage (tessellation) ajoutees au programme
   Shader(const std::string& shader_name,
          GameVersion version,
-         const std::string& frag_define = "");
+         const std::string& frag_define = "",
+         const std::string& frag_name = "");
   Shader() = default;
   void activate() const;
   bool okay() const { return m_is_okay; }
@@ -74,6 +77,10 @@ enum class ShaderId {
   OCEAN_ENVMAP_HAZE = 44,
   SHADOW_DEPTH = 45,  // PC-REMAKE: sun shadow map depth-only pass
   MERC_SHADOW = 46,   // PC-REMAKE: skinned characters/props casting into it
+  TFRAG3_SNOW = 47,   // PC-REMAKE 20/10 : sol de neige deformable (decoupage + traces)
+  MERC2_TESS = 48,    // PC-REMAKE 21/10 : personnages decoupes (surface courbe)
+  EMERC_TESS = 49,    // PC-REMAKE 21/10 : reflets des personnages decoupes
+  MERC2_FUR = 50,     // PC-REMAKE 21/10 : fourrure en couches des personnages
   MAX_SHADERS
 };
 

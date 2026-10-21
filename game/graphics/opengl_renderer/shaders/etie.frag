@@ -65,10 +65,14 @@ void main() {
     //vec4 T0 = texture(tex_T0, tex_coord);
     // coordonnee PAR SOMMET (comme le jeu) : par pixel, les normales des modeles
     // de 2001 (non partagees entre triangles) faisaient des facettes sombres
-    // (essai 13/10). Les « points » venaient de la teinte des milieux de
+    // (essai 13/10). Les points venaient de la teinte des milieux de
     // subdivision, corrigee dans Tfrag3Data.cpp.
     vec4 T0 = texture(tex_T0, tex_coord.xy);
     color = fragment_color * T0;
+    // 20/10 : reflets precurseur renforces (murs du temple de la jungle, objets) — la passe
+    // de reflet est additive : x2.2 pour les reflets faibles, avec une epaule pour les forts
+    // (les sols clairs viraient au blanc) (original : x1)
+    color.rgb *= 2.2 / (1.0 + 1.1 * dot(color.rgb, vec3(0.299, 0.587, 0.114)));
     // a l'ombre il reste le reflet du ciel (30 %)
     color.rgb *= 1.0 - 0.7 * env_sun_shadow();
   } else {

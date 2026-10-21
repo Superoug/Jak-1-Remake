@@ -43,6 +43,12 @@ uniform int ignore_alpha;
 uniform int decal_enable;
 
 uniform int gfx_hack_no_tex;
+// 21/10 : 1 = orbe de precurseur — reflet beaucoup plus fort, bord miroir, eclat net
+uniform int reflet_orbe;
+// reflet des orbes calcule dans le MONDE : normale merc -> monde (la meme matrice que le G-buffer
+// de normales), soleil en monde ; la vue est +position dans la convention des normales merc
+uniform mat3 world_nrm_from_merc;
+uniform vec4 sun_dir_world;  // vers le soleil, w = force
 
 
 void main() {
@@ -54,6 +60,9 @@ void main() {
     color.a = T0.a;
     color.rgb = T0.rgb * vtx_color;
     color *= 2;
+    // 20/10 : reflets precurseur renforces, comme le decor (etie.frag) : x2.2 avec une epaule
+    // pour les reflets forts (original : x1)
+    color.rgb *= 2.2 / (1.0 + 1.1 * dot(color.rgb, vec3(0.299, 0.587, 0.114)));
     // PC-REMAKE: specular sun highlight on metal — par pixel (13/10)
     // (original : * vtx_glint)
     float glint = 0.0;
@@ -64,6 +73,31 @@ void main() {
       glint = pow(max(dot(n, H), 0.0), 30.0) * sun_dir_view.w;
     }
     color.rgb += vec3(1.0, 0.97, 0.90) * glint * glint_strength;
+    if (reflet_orbe == 1) {
+      // ORBE : surface polie de metal precieux. Le ciel et le sol se refletent (ciel clair en
+      // haut, sol sombre en bas — le contraste fait le miroir), teintes par l'or de l'orbe, plus
+      // forts sur les bords (Fresnel), et un eclat du soleil net. La couleur propre de l'orbe
+      // est assombrie dans la passe de base (merc2.frag) pour que le reflet se lise.
+      // (la matrice ramene la normale merc retournee : le post la remet face a la camera)
+      vec3 Nw = -normalize(world_nrm_from_merc * n);
+      vec3 Vw = -normalize(world_nrm_from_merc * v_pos);  // vers la camera
+      float nv = clamp(abs(dot(Nw, Vw)), 0.0, 1.0);
+      float fres = 0.45 + 0.55 * pow(1.0 - nv, 3.0);
+      vec3 R = reflect(-Vw, Nw);
+      float h = R.y;
+      // horizon NET (c'est lui qui fait le miroir) : ciel clair au-dessus, sol sombre juste dessous
+      vec3 haut = mix(vec3(1.25, 1.18, 1.05), vec3(0.62, 0.78, 1.05), smoothstep(0.0, 0.6, h));
+      vec3 bas = mix(vec3(0.30, 0.24, 0.18), vec3(0.08, 0.06, 0.05), smoothstep(0.0, 0.5, -h));
+      vec3 ciel = mix(bas, haut, smoothstep(-0.025, 0.025, h));
+      float jour = 0.35 + 0.65 * clamp(glint_strength / 0.85, 0.0, 1.0);
+      vec3 or_ = vec3(1.0, 0.74, 0.45);
+      color.rgb *= 0.6;  // le reflet flou d'origine s'efface devant le vrai reflet
+      color.rgb += ciel * or_ * (fres * 1.25 * jour);
+      float nh = max(dot(Nw, normalize(sun_dir_world.xyz + Vw)), 0.0);
+      color.rgb += vec3(1.0, 0.96, 0.88) * (pow(nh, 200.0) * 3.0 + pow(nh, 30.0) * 0.3) *
+                   sun_dir_world.w * max(glint_strength, 0.25);
+
+    }
   } else {
     color.rgb = vtx_color;
     color.a = 1;

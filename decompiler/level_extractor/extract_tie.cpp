@@ -816,7 +816,7 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
 
     // PC-REMAKE (17/08, identification au projecteur violet) :
     // détection AUTOMATIQUE des palmiers penchés — tout proto resté immobile
-    // dont un draw porte la texture de couronne « palm-leaf-colorful » entre
+    // dont un draw porte la texture de couronne palm-leaf-colorful entre
     // dans le circuit du vent. Fini les noms devinés : c'est la texture, prouvée
     // à l'écran, qui désigne les protos. Le tronc (palmtree-trunk) et la barbe
     // (palmtree-beard) sont épinglés par le détachement par texture côté rendu.

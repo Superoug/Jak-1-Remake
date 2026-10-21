@@ -8,7 +8,8 @@
 
 Shader::Shader(const std::string& shader_name,
                GameVersion version,
-               const std::string& frag_define)
+               const std::string& frag_define,
+               const std::string& frag_name)
     : m_name(shader_name) {
   const std::string height_scale = version == GameVersion::Jak1 ? "1.0" : "0.5";
   const std::string scissor_height = version == GameVersion::Jak1 ? "448.0" : "416.0";
@@ -17,8 +18,21 @@ Shader::Shader(const std::string& shader_name,
   // read the shader source
   auto vert_src =
       file_util::read_text_file(file_util::get_file_path({shader_folder, shader_name + ".vert"}));
-  auto frag_src =
-      file_util::read_text_file(file_util::get_file_path({shader_folder, shader_name + ".frag"}));
+  auto frag_src = file_util::read_text_file(file_util::get_file_path(
+      {shader_folder, (frag_name.empty() ? shader_name : frag_name) + ".frag"}));
+  // 20/10 : etapes de decoupage optionnelles
+  const auto tesc_path = file_util::get_file_path({shader_folder, shader_name + ".tesc"});
+  const auto tese_path = file_util::get_file_path({shader_folder, shader_name + ".tese"});
+  const bool has_tess = file_util::file_exists(tesc_path) && file_util::file_exists(tese_path);
+  std::string tesc_src, tese_src;
+  if (has_tess) {
+    tesc_src = file_util::read_text_file(tesc_path);
+    tese_src = file_util::read_text_file(tese_path);
+    tese_src = std::regex_replace(tese_src, std::regex("HEIGHT_SCALE"), height_scale);
+    tese_src = std::regex_replace(tese_src, std::regex("SCISSOR_HEIGHT"), scissor_height);
+    tese_src = std::regex_replace(tese_src, std::regex("SCISSOR_ADJUST"),
+                                  "(" + scissor_adjust + ")");
+  }
 
   vert_src = std::regex_replace(vert_src, std::regex("HEIGHT_SCALE"), height_scale);
   vert_src = std::regex_replace(vert_src, std::regex("SCISSOR_HEIGHT"), scissor_height);
@@ -60,9 +74,32 @@ Shader::Shader(const std::string& shader_name,
     return;
   }
 
+  GLuint tess_shaders[2] = {0, 0};
+  if (has_tess) {
+    const GLenum kinds[2] = {GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER};
+    const std::string* srcs[2] = {&tesc_src, &tese_src};
+    for (int t = 0; t < 2; t++) {
+      tess_shaders[t] = glCreateShader(kinds[t]);
+      src = srcs[t]->c_str();
+      glShaderSource(tess_shaders[t], 1, &src, nullptr);
+      glCompileShader(tess_shaders[t]);
+      glGetShaderiv(tess_shaders[t], GL_COMPILE_STATUS, &compile_ok);
+      if (!compile_ok) {
+        glGetShaderInfoLog(tess_shaders[t], len, nullptr, err);
+        lg::error("Failed to compile tessellation shader {}:\n{}", shader_name.c_str(), err);
+        m_is_okay = false;
+        return;
+      }
+    }
+  }
+
   m_program = glCreateProgram();
   glAttachShader(m_program, m_vert_shader);
   glAttachShader(m_program, m_frag_shader);
+  if (has_tess) {
+    glAttachShader(m_program, tess_shaders[0]);
+    glAttachShader(m_program, tess_shaders[1]);
+  }
   glLinkProgram(m_program);
 
   glGetProgramiv(m_program, GL_LINK_STATUS, &compile_ok);
@@ -90,6 +127,10 @@ Shader::Shader(const std::string& shader_name,
 
   glDeleteShader(m_vert_shader);
   glDeleteShader(m_frag_shader);
+  if (has_tess) {
+    glDeleteShader(tess_shaders[0]);
+    glDeleteShader(tess_shaders[1]);
+  }
   m_is_okay = true;
 }
 
@@ -146,8 +187,29 @@ ShaderLibrary::ShaderLibrary(GameVersion version) {
   at(ShaderId::SLOW_TIME) = {"slow_time", version};
   at(ShaderId::OCEAN_ENVMAP) = {"ocean_envmap", version};
   at(ShaderId::OCEAN_ENVMAP_HAZE) = {"ocean_envmap_haze", version};
+  // 20/10 : sol de neige deformable — pixel de tfrag3.frag. Facultatif : si la carte graphique
+  // refuse le decoupage, la neige garde le rendu sans deformation (voir TFragment)
+  at(ShaderId::TFRAG3_SNOW) = {"tfrag3_snow", version, "", "tfrag3"};
+  if (!at(ShaderId::TFRAG3_SNOW).okay()) {
+    lg::warn("PC-REMAKE : sol de neige deformable indisponible (decoupage refuse)");
+  }
 
-  for (auto& shader : m_shaders) {
-    ASSERT_MSG(shader.okay(), "error compiling shader");
+  // 21/10 : personnages remodeles — facultatifs aussi : sans eux, le rendu actuel des
+  // personnages (Merc2 retombe sur MERC2 / EMERC)
+  at(ShaderId::MERC2_TESS) = {"merc2_tess", version, "", "merc2"};
+  at(ShaderId::EMERC_TESS) = {"emerc_tess", version, "", "emerc"};
+  at(ShaderId::MERC2_FUR) = {"merc2_fur", version, "FUR", "merc2"};
+  for (auto id : {ShaderId::MERC2_TESS, ShaderId::EMERC_TESS, ShaderId::MERC2_FUR}) {
+    if (!at(id).okay()) {
+      lg::warn("PC-REMAKE : personnages remodeles, shader {} indisponible", (int)id);
+    }
+  }
+
+  for (int i = 0; i < (int)ShaderId::MAX_SHADERS; i++) {
+    if (i == (int)ShaderId::TFRAG3_SNOW || i == (int)ShaderId::MERC2_TESS ||
+        i == (int)ShaderId::EMERC_TESS || i == (int)ShaderId::MERC2_FUR) {
+      continue;
+    }
+    ASSERT_MSG(m_shaders[i].okay(), "error compiling shader");
   }
 }

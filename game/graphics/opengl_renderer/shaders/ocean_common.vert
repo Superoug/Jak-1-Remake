@@ -29,8 +29,7 @@ void main() {
     fragment_color *= 2;
   } else if (bucket == 4) {
     // couche REFLET additive du large (blend DST_ALPHA,ONE) : alpha 0 est son
-    // état d'origine légitime — la fausse piste du 17/08 est documentée en
-    // mémoire (l'identification l'avait rendue faussement opaque)
+    // état d'origine légitime (le rendre opaque etait une fausse piste, 17/08)
     fragment_color.a = 0;
   }
 }

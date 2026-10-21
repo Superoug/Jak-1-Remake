@@ -879,8 +879,8 @@
     ;; when it's both on and cam is low
     ;; PC-REMAKE (18/08) : bloc transition DÉSACTIVÉ (le #f ci-dessous). Le trou
     ;; n'étant plus creusé, le large couvre tout ; les strips repassaient alors
-    ;; par-dessus avec leur échelle de texture à eux — le « motif grossier qui
-    ;; bouge » de la vidéo de test. Ils ne servaient qu'à coudre le trou.
+    ;; par-dessus avec leur échelle de texture à eux (motif grossier qui bouge).
+    ;; Ils ne servaient qu'à coudre le trou.
     (when (and #f (not (or *ocean-near-off* (< 196608.0 (fabs (-> *math-camera* trans y))))))
       (let ((a1-11 48)
             (a2-2 0)

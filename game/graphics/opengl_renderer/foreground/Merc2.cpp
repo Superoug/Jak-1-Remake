@@ -1,10 +1,14 @@
 #include "Merc2.h"
 
+#include <cctype>
 #include <cmath>
+#include <cstring>
+#include <set>
 
 #include "common/global_profiler/GlobalProfiler.h"
 #include "common/util/FileUtil.h"
 #include "common/util/fnv.h"
+#include "common/util/string_util.h"
 #include "common/util/simd_util.h"
 
 #include "game/graphics/opengl_renderer/EyeRenderer.h"
@@ -74,6 +78,150 @@ void Merc2::shadow_hook(void* shader_lib) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 21/10 v3 : CARTES DE DETAIL DES MATIERES — une hauteur 256 x 256 raccordable par famille de
+// matiere (merc2.frag F_*), generee au demarrage et filtree comme une vraie texture (mipmaps,
+// anisotrope) : le detail reste net de pres et se fond proprement au loin (pas de scintillement,
+// contrairement au bruit calcule par pixel). Couche = famille.
+namespace {
+constexpr int kDetailN = 256;
+constexpr int kDetailLayers = 17;
+
+u32 det_hash(int x, int y, int s) {
+  u32 h = (u32)x * 374761393u + (u32)y * 668265263u + (u32)s * 2246822519u;
+  h = (h ^ (h >> 13)) * 1274126177u;
+  return h ^ (h >> 16);
+}
+float det_rnd(int x, int y, int s) {
+  return (det_hash(x, y, s) & 0xffffff) / 16777216.f;
+}
+// bruit de valeur raccordable : px x py cellules sur la tuile (allonge si px != py ; au plus
+// une cellule pour 2 pixels, sinon le bruit se replie en grille)
+float det_bruit2(float x, float y, int px, int py, int s) {
+  const float fx = x * px / kDetailN, fy = y * py / kDetailN;
+  const int ix = (int)std::floor(fx), iy = (int)std::floor(fy);
+  float tx = fx - ix, ty = fy - iy;
+  tx = tx * tx * (3.f - 2.f * tx);
+  ty = ty * ty * (3.f - 2.f * ty);
+  auto wx = [px](int i) { return ((i % px) + px) % px; };
+  auto wy = [py](int i) { return ((i % py) + py) % py; };
+  const float a = det_rnd(wx(ix), wy(iy), s), b = det_rnd(wx(ix + 1), wy(iy), s);
+  const float c = det_rnd(wx(ix), wy(iy + 1), s), d = det_rnd(wx(ix + 1), wy(iy + 1), s);
+  return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+}
+float det_bruit(float x, float y, int p, int s) {
+  return det_bruit2(x, y, p, p, s);
+}
+// cellules (Worley) raccordables : distance au germe le plus proche (0..~1)
+float det_cellule(float x, float y, int p, int s, float* id = nullptr) {
+  const float fx = x * p / kDetailN, fy = y * p / kDetailN;
+  const int ix = (int)std::floor(fx), iy = (int)std::floor(fy);
+  float best = 9.f;
+  auto w = [p](int i) { return ((i % p) + p) % p; };
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      const int cx = ix + dx, cy = iy + dy;
+      const float gx = cx + 0.15f + 0.7f * det_rnd(w(cx), w(cy), s);
+      const float gy = cy + 0.15f + 0.7f * det_rnd(w(cx), w(cy), s + 7);
+      const float d = std::sqrt((gx - fx) * (gx - fx) + (gy - fy) * (gy - fy));
+      if (d < best) {
+        best = d;
+        if (id) {
+          *id = det_rnd(w(cx), w(cy), s + 13);
+        }
+      }
+    }
+  }
+  return best;
+}
+float det_hauteur(int famille, float x, float y) {
+  const float pi2 = 6.2831853f;
+  switch (famille) {
+    case 1: {  // peau : pores fins et grain doux
+      const float pores = 1.f - std::min(1.f, det_cellule(x, y, 48, 1) * 2.2f);
+      return 0.55f + 0.25f * det_bruit(x, y, 16, 2) - 0.35f * pores * pores;
+    }
+    case 2: {  // tissu : trame croisee (chaine et trame, dessus / dessous)
+      const float per = 16.f;
+      const int cx = (int)std::floor(x / per), cy = (int)std::floor(y / per);
+      const float u = x / per - cx, v = y / per - cy;
+      const bool dessus = ((cx + cy) & 1) == 0;
+      const float fil_x = 0.5f - 0.5f * std::cos(pi2 * v);  // fil horizontal
+      const float fil_y = 0.5f - 0.5f * std::cos(pi2 * u);
+      const float h = dessus ? std::max(fil_x * (0.6f + 0.4f * std::sin(3.14159f * u)), fil_y * 0.6f)
+                             : std::max(fil_y * (0.6f + 0.4f * std::sin(3.14159f * v)), fil_x * 0.6f);
+      return h * 0.85f + 0.15f * det_bruit(x, y, 32, 3);
+    }
+    case 3: {  // cuir : grain en petits galets, plis
+      float id = 0.f;
+      const float c = det_cellule(x, y, 24, 4, &id);
+      return 0.75f - 0.6f * c * c + 0.15f * id + 0.2f * det_bruit(x, y, 6, 5);
+    }
+    case 4:  // metal : brossage (traits longs selon x) et voile doux
+      return 0.5f + 0.35f * (det_bruit2(x, y, 4, 96, 6) - 0.5f) + 0.15f * det_bruit(x, y, 8, 7);
+    case 5:  // cheveux : meches fines (selon y)
+      return 0.5f + 0.4f * (det_bruit2(x, y, 96, 6, 8) - 0.5f) + 0.2f * (det_bruit2(x, y, 24, 3, 9) - 0.5f);
+    case 6:  // fourrure : poils couches (selon y) en touffes
+      return 0.4f + 0.4f * det_bruit2(x, y, 64, 12, 10) + 0.2f * det_bruit(x, y, 12, 11);
+    case 8: {  // plume : barbes paralleles et rachis
+      const float barbe = 0.5f + 0.5f * std::sin(pi2 * (x / 6.f + 0.3f * det_bruit(x, y, 8, 12)));
+      return 0.3f + 0.5f * barbe + 0.2f * det_bruit(x, y, 16, 13);
+    }
+    case 10:  // bois : fibres longues (selon y), sillons et noeuds
+      return 0.4f + 0.3f * det_bruit2(x, y, 48, 4, 14) + 0.2f * det_bruit2(x, y, 12, 2, 25) +
+             0.15f * (1.f - std::min(1.f, det_cellule(x, y, 3, 15) * 1.6f));
+    case 11: {  // ecaille : ecailles bombees
+      float id = 0.f;
+      const float c = det_cellule(x, y, 20, 16, &id);
+      return std::max(0.f, 1.f - c * 1.4f) * (0.8f + 0.2f * id);
+    }
+    case 12:  // vegetal : nervures et cellules
+      return 0.5f + 0.3f * det_bruit(x, y, 12, 17) - 0.3f * std::exp(-det_cellule(x, y, 10, 18) * 6.f);
+    case 13:  // pierre, glace : rugueux
+      return 0.25f * det_bruit(x, y, 4, 19) + 0.35f * det_bruit(x, y, 16, 20) +
+             0.4f * det_bruit(x, y, 48, 21);
+    case 14:  // corne, dents, ongles : stries de croissance
+      return 0.5f + 0.35f * std::sin(pi2 * (y / 10.f + 0.4f * det_bruit(x, y, 4, 22))) * 0.5f +
+             0.15f * det_bruit(x, y, 32, 23);
+    case 15:  // corde : torons tordus
+      return 0.5f + 0.5f * std::sin(pi2 * (x + y) / 24.f) * 0.8f + 0.1f * det_bruit(x, y, 32, 24);
+    default:
+      return 0.5f;
+  }
+}
+}  // namespace
+
+GLuint pc_make_detail_array() {
+  std::vector<u8> data((size_t)kDetailN * kDetailN * 4 * kDetailLayers);
+  for (int l = 0; l < kDetailLayers; l++) {
+    u8* out = &data[(size_t)l * kDetailN * kDetailN * 4];
+    for (int y = 0; y < kDetailN; y++) {
+      for (int x = 0; x < kDetailN; x++) {
+        const float h = std::clamp(det_hauteur(l, (float)x, (float)y), 0.f, 1.f);
+        const u8 v = (u8)std::lround(h * 255.f);
+        u8* p = &out[(y * kDetailN + x) * 4];
+        p[0] = p[1] = p[2] = v;
+        p[3] = 255;
+      }
+    }
+  }
+  GLuint tex;
+  glGenTextures(1, &tex);
+  glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+  glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, kDetailN, kDetailN, kDetailLayers, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, data.data());
+  glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  float aniso = 1.f;
+  glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &aniso);
+  glTexParameterf(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_ANISOTROPY, std::min(aniso, 8.f));
+  glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+  return tex;
+}
+
 Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
     : m_anim_slot_array(anim_slot_array) {
   // PC-REMAKE: let the sun shadow map pull characters and props in
@@ -126,9 +274,144 @@ Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
     x = true;
   }
 
+  init_shaders(shaders);
+  m_detail_tex = pc_make_detail_array();
+}
+
+// 21/10 : FAMILLE DE MATIERE d'une texture de personnage, d'apres son nom (merc2.frag F_*).
+// coquilles = fourrure opaque qui recoit les couches de poils (pas les franges trans, ni
+// les longues meches deja modelisees, ni les passages fourrure -> peau)
+u8 Merc2::texture_famille(const LevelData* lev, s32 texture, bool* coquilles) {
+  *coquilles = false;
+  if (!lev || !lev->level || texture < 0 || texture >= (s32)lev->level->textures.size()) {
+    return 0;
+  }
+  // 21/10 v2 : table revue texture par texture (shaders/personnages_matieres.txt :
+  // nom famille coquilles) ; les regles par mots-cles ne servent qu'aux textures absentes
+  static const std::unordered_map<std::string, std::pair<u8, bool>> table = [] {
+    std::unordered_map<std::string, std::pair<u8, bool>> t;
+    auto path = file_util::get_file_path({Shader::shader_folder, "personnages_matieres.txt"});
+    if (file_util::file_exists(path)) {
+      for (auto& ligne : str_util::split(file_util::read_text_file(path), '\n')) {
+        if (ligne.empty() || ligne[0] == '#') {
+          continue;
+        }
+        auto parts = str_util::split(ligne, ' ');
+        if (parts.size() >= 3) {
+          t[parts[0]] = {(u8)std::atoi(parts[1].c_str()), parts[2] == "1"};
+        }
+      }
+    }
+    lg::info("PC-REMAKE personnages : {} matieres de textures", t.size());
+    return t;
+  }();
+  auto& cache = m_tex_famille[lev->load_id];
+  if (cache.empty()) {
+    if (m_tex_famille.size() > 64) {
+      m_tex_famille.clear();
+      return texture_famille(lev, texture, coquilles);
+    }
+    cache.resize(lev->level->textures.size() * 2, 0);
+    for (size_t i = 0; i < lev->level->textures.size(); i++) {
+      std::string n = lev->level->textures[i].debug_name;
+      for (auto& c : n) {
+        c = (char)std::tolower((unsigned char)c);
+      }
+      auto has = [&](const char* k) { return n.find(k) != std::string::npos; };
+      // mots courts : seulement entre separateurs (ear ne doit pas trouver gear)
+      auto mot = [&](const char* k) {
+        const size_t l = strlen(k);
+        for (size_t p = n.find(k); p != std::string::npos; p = n.find(k, p + 1)) {
+          const bool g = p == 0 || !std::isalpha((unsigned char)n[p - 1]);
+          const bool d = p + l >= n.size() || !std::isalpha((unsigned char)n[p + l]);
+          if (g && d) {
+            return true;
+          }
+        }
+        return false;
+      };
+      u8 f = 0;
+      bool coq = false;
+      auto ti = table.find(lev->level->textures[i].debug_name);
+      if (ti != table.end()) {
+        f = ti->second.first;
+        coq = ti->second.second;
+      } else if (has("eyelid") || has("eyebrow") || has("brow")) {
+        f = 1;
+      } else if (has("eye") || has("iris") || has("pupil")) {
+        f = 7;
+      } else if (has("fur") && has("skin")) {
+        f = 1;
+      } else if (has("fur")) {
+        f = 6;
+        coq = !has("trans") && !has("long") && !has("end");
+      } else if (has("hair") || has("hilite")) {
+        f = 5;
+      } else if (has("feather") || has("feath")) {
+        f = 8;
+      } else if (has("skin") || has("flesh") || has("face") || has("finger") || has("dullwhite") ||
+                 mot("hand") || mot("lip") || mot("nose") || mot("cheek") || mot("toe") ||
+                 mot("foot") || mot("feet") || mot("ear") || mot("arm") || mot("leg")) {
+        f = 1;
+      } else if (has("leather") || has("belt") || has("strap") || has("boot") || has("glove") ||
+                 has("saddle") || has("pouch") || has("sandal") || has("shoe")) {
+        f = 3;
+      } else if (has("armor") || has("metal") || has("steel") || has("iron") || has("gold") ||
+                 has("brass") || has("buckle") || has("rivet") || has("chain") || has("nail") ||
+                 has("target") || has("blade") || has("ring")) {
+        f = 4;
+      } else if (has("wood") || has("bark") || has("logend") || mot("log") || has("stick") ||
+                 has("staff") || has("plank") || has("branch") || has("stump") || has("twig")) {
+        // 21/10 v2 : bois (rondin de Samos, batons, bateaux) — surface irreguliere et ecorce
+        f = 10;
+      } else if (has("shiny") || has("glass") || has("lens") || has("goggle")) {
+        f = 9;
+      } else if (has("cotton") || has("cloth") || has("coat") || has("wrap") || has("pants") ||
+                 has("shirt") || has("robe") || has("scarf") || has("sleeve") || has("sash") ||
+                 has("cape") || has("dress") || has("wool") || has("fabric") || has("canvas") ||
+                 has("tunic") || has("apron") || has("bandana") || has("hat")) {
+        f = 2;
+      }
+      cache[i * 2] = f;
+      cache[i * 2 + 1] = coq ? 1 : 0;
+    }
+  }
+  *coquilles = cache[texture * 2 + 1] != 0;
+  return cache[texture * 2];
+}
+
+// emplacements des uniformes de tous les programmes du rendu des personnages (au demarrage et
+// apres un rechargement a chaud des shaders : `touch /tmp/pc_reload_perso`)
+void Merc2::init_shaders(ShaderLibrary& shaders) {
   init_shader_common(shaders[ShaderId::MERC2], &m_merc_uniforms, true);
   init_shader_common(shaders[ShaderId::EMERC], &m_emerc_uniforms, false);
   m_emerc_uniforms.fade = pc_uniform_loc(shaders[ShaderId::EMERC].id(), "fade");
+  // 21/10 : PERSONNAGES REMODELES
+  auto remake_locs = [](Shader& sh, Uniforms* u) {
+    u->remake_perso = pc_uniform_loc(sh.id(), "remake_perso");
+    u->remake_famille = pc_uniform_loc(sh.id(), "remake_famille");
+  };
+  remake_locs(shaders[ShaderId::MERC2], &m_merc_uniforms);
+  for (auto sid : {ShaderId::MERC2, ShaderId::MERC2_TESS, ShaderId::MERC2_FUR}) {
+    if (shaders[sid].okay()) {
+      shaders[sid].activate();
+      glUniform1i(pc_uniform_loc(shaders[sid].id(), "remake_details"), 5);
+    }
+  }
+  remake_locs(shaders[ShaderId::EMERC], &m_emerc_uniforms);  // absentes : -1, sans effet
+  if (shaders[ShaderId::MERC2_TESS].okay()) {
+    init_shader_common(shaders[ShaderId::MERC2_TESS], &m_merc_tess_uniforms, true);
+    remake_locs(shaders[ShaderId::MERC2_TESS], &m_merc_tess_uniforms);
+  }
+  if (shaders[ShaderId::EMERC_TESS].okay()) {
+    init_shader_common(shaders[ShaderId::EMERC_TESS], &m_emerc_tess_uniforms, false);
+    m_emerc_tess_uniforms.fade = pc_uniform_loc(shaders[ShaderId::EMERC_TESS].id(), "fade");
+    remake_locs(shaders[ShaderId::EMERC_TESS], &m_emerc_tess_uniforms);
+  }
+  if (shaders[ShaderId::MERC2_FUR].okay()) {
+    init_shader_common(shaders[ShaderId::MERC2_FUR], &m_merc_fur_uniforms, true);
+    remake_locs(shaders[ShaderId::MERC2_FUR], &m_merc_fur_uniforms);
+  }
 }
 
 Merc2::~Merc2() {
@@ -227,6 +510,12 @@ void Merc2::model_mod_blerc_draws(int num_effects,
     const u32* i_data = effect.mod.blerc.int_data.data();
     const u32* i_data_end = i_data + effect.mod.blerc.int_data.size();
     blerc_avx(i_data, i_data_end, f_data, blerc_weights, m_mod_vtx_temp.data(), blerc_multiplier);
+    if (model->pc_character) {
+      // 21/10 : la normale soudee (pad0) ne vient pas des formes de blerc
+      for (size_t vi = 0; vi < effect.mod.vertices.size(); vi++) {
+        m_mod_vtx_temp[vi].pad0 = effect.mod.vertices[vi].pad0;
+      }
+    }
 
     // and upload to GPU
     stats->num_uploads++;
@@ -401,6 +690,8 @@ void Merc2::model_mod_draws(int num_effects,
           memcpy(&m_mod_vtx_temp[vi], &m_mod_vtx_unpack_temp[addr], 32);
           m_mod_vtx_temp[vi].st[0] = m_mod_vtx_unpack_temp[addr].uv[0];
           m_mod_vtx_temp[vi].st[1] = m_mod_vtx_unpack_temp[addr].uv[1];
+          // 21/10 : normale soudee (pad0) des personnages, ecrasee par la copie de 32 octets
+          m_mod_vtx_temp[vi].pad0 = effect.mod.vertices[vi].pad0;
         }
       }
     }
@@ -641,11 +932,11 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   u32 first_bone = alloc_bones(bone_count, skel_matrix_buffer);
 
   // allocate lights
-  // if (current_lights.w1) {
-  //   if (render_state->version != GameVersion::Jak3) {
-  //     current_lights.w1 = 0;  // force off merc fade in jak2/1 - a bunch of stuff uses this
-  //   }
-  // }
+  if (current_lights.w1) {
+    if (render_state->version != GameVersion::Jak3) {
+      current_lights.w1 = 0;  // force off merc fade in jak2/1 - a bunch of stuff uses this
+    }
+  }
   u32 lights = alloc_lights(current_lights);
   stats->num_lights++;
 
@@ -659,6 +950,9 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.lights = lights;
   args.first_bone = first_bone;
   args.no_texture = render_state->version == GameVersion::Jak3 && model_no_texture;
+  args.character = model->pc_character && m_remake.actif;
+  args.lev = lev;
+  args.orbe = model->name.rfind("money", 0) == 0;
 
   // loop over effects, creating draws for each
   for (size_t ei = 0; ei < model->effects.size(); ei++) {
@@ -810,6 +1104,10 @@ void Merc2::render(DmaFollower& dma,
                    SharedRenderState* render_state,
                    ScopedProfilerNode& prof,
                    MercDebugStats* stats) {
+  if (m_shaders_seq != g_pc_merc_shaders_seq) {
+    m_shaders_seq = g_pc_merc_shaders_seq;
+    init_shaders(render_state->shaders);
+  }
   bool hack = stats->collect_debug_model_list;
   *stats = {};
   stats->collect_debug_model_list = hack;
@@ -970,15 +1268,13 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
               nrm_ok ? 1.f : 0.f);
   // PC-REMAKE 22/09 : eclairage par pixel des personnages (merc2.frag) ;
   // `touch /tmp/qa_gouraud` pour revoir le Gouraud d'origine (A/B a chaud)
-  {
-    static int ppl_poll = 0;
-    static float ppl = 1.f;
-    if ((ppl_poll++ & 31) == 0) {
-      ppl = fs::exists("/tmp/qa_gouraud") ? 0.f : 1.f;
-    }
-    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "per_pixel_light"),
-                ppl);
+  static int ppl_poll = 0;
+  static float ppl = 1.f;
+  if ((ppl_poll++ & 31) == 0) {
+    ppl = fs::exists("/tmp/qa_gouraud") ? 0.f : 1.f;
   }
+  glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "per_pixel_light"), ppl);
+  glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "remake_force"), 1.f);
   {
     auto id = render_state->shaders[ShaderId::MERC2].id();
     if (sun_ok) {
@@ -990,10 +1286,15 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
     }
   }
   switch_to_emerc(render_state);
+  // 21/10 : normales merc -> monde, pour le reflet des orbes
+  glUniformMatrix3fv(pc_uniform_loc(render_state->shaders[ShaderId::EMERC].id(),
+                                    "world_nrm_from_merc"),
+                     1, GL_FALSE, nrm_mat);
   set_uniform(m_emerc_uniforms.hvdf_offset, m_low_memory.hvdf_offset);
   set_uniform(m_emerc_uniforms.fog, m_low_memory.fog);
   glUniformMatrix4fv(m_emerc_uniforms.perspective_matrix, 1, GL_FALSE,
                      &m_low_memory.perspective[0].x());
+  float sun_view[4] = {0.f, 1.f, 0.f, 0.f};  // 21/10 : reutilisee par EMERC_TESS
   {
     // PC-REMAKE: sun glint on reflective (metal) materials. The sun direction
     // is rotated into this shader's space with the camera basis, and the
@@ -1010,14 +1311,86 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
       float vy = -(C[0][1] * wx + C[1][1] * wy + C[2][1] * wz);
       float vz = -(C[0][2] * wx + C[1][2] * wy + C[2][2] * wz);
       glUniform4f(pc_uniform_loc(id, "sun_dir_view"), vx, vy, vz, 1.f);
+      // 21/10 : soleil en monde (reflet des orbes, emerc.frag)
+      glUniform4f(pc_uniform_loc(id, "sun_dir_world"), wx, wy, wz, 1.f);
+      sun_view[0] = vx;
+      sun_view[1] = vy;
+      sun_view[2] = vz;
+      sun_view[3] = 1.f;
     } else {
       glUniform4f(pc_uniform_loc(id, "sun_dir_view"), 0.f, 1.f, 0.f, 0.f);
     }
     // 18/08 : le glint suit la FORCE du soleil (w des ombres), pas seulement sa
     // direction — sinon les objets reflechissants gardaient leur reflet de
-    // plein soleil en PLEINE NUIT (bug releve par l'enquete du 18/08).
+    // plein soleil en PLEINE NUIT (18/08).
     glUniform1f(pc_uniform_loc(id, "glint_strength"),
                 0.85f * std::min(1.f, g_sun_shadow_params[3] / 0.5f));
+  }
+
+  // 21/10 : PERSONNAGES REMODELES — memes reglages par image que MERC2 / EMERC pour les
+  // programmes decoupes et la fourrure. Interrupteurs de comparaison : /tmp/qa_perso_off (tout),
+  // /tmp/qa_perso_notess (decoupage), /tmp/qa_perso_nofur (fourrure).
+  {
+    static int poll = 0;
+    static bool qa_split = false;
+    if ((poll++ & 63) == 0) {
+      m_remake.actif = !fs::exists("/tmp/qa_perso_off");
+      m_remake.decoupe = !fs::exists("/tmp/qa_perso_notess");
+      m_remake.fourrure = !fs::exists("/tmp/qa_perso_nofur");
+      qa_split = fs::exists("/tmp/qa_perso_split");
+    }
+    // essai /tmp/qa_perso_split : rendu d'origine a gauche, matieres a droite (meme image)
+    render_state->shaders[ShaderId::MERC2].activate();
+    float split = 0.f;
+    if (qa_split) {
+      GLint vp[4];
+      glGetIntegerv(GL_VIEWPORT, vp);
+      split = vp[0] + vp[2] * 0.5f;
+    }
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "remake_split"),
+                split);
+    auto commun = [&](ShaderId sid, Uniforms& u) {
+      auto& sh = render_state->shaders[sid];
+      sh.activate();
+      glUniform4f(u.fog_color, render_state->fog_color[0] / 255.f,
+                  render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
+                  render_state->fog_intensity / 255);
+      glUniform1i(u.gfx_hack_no_tex, Gfx::g_global_settings.hack_no_tex);
+      set_uniform(u.hvdf_offset, m_low_memory.hvdf_offset);
+      set_uniform(u.fog, m_low_memory.fog);
+      glUniformMatrix4fv(u.perspective_matrix, 1, GL_FALSE, &m_low_memory.perspective[0].x());
+      // longueur visee d'un morceau : 0,6 % de la distance, 6 coupes au plus par arete
+      glUniform2f(pc_uniform_loc(sh.id(), "decoupe"), m_remake.decoupe ? 0.006f : 0.f, 6.f);
+      return sh.id();
+    };
+    for (auto [sid, u] : {std::pair<ShaderId, Uniforms*>{ShaderId::MERC2_TESS, &m_merc_tess_uniforms},
+                          {ShaderId::MERC2_FUR, &m_merc_fur_uniforms}}) {
+      if (!render_state->shaders[sid].okay()) {
+        continue;
+      }
+      auto id = commun(sid, *u);
+      glUniformMatrix3fv(pc_uniform_loc(id, "world_nrm_from_merc"), 1, GL_FALSE, nrm_mat);
+      glUniform1f(pc_uniform_loc(id, "write_normals"), nrm_ok ? 1.f : 0.f);
+      glUniform1f(pc_uniform_loc(id, "per_pixel_light"), ppl);
+      glUniform1f(pc_uniform_loc(id, "remake_force"), 1.f);
+      glUniform1f(pc_uniform_loc(id, "remake_split"), split);
+      // fourrure : poils de 1 cm, brins de 3 mm, 16 couches douces (v1 : brins de 1,7 mm — plus
+      // petits qu'un pixel en jeu, scintillement)
+      glUniform4f(pc_uniform_loc(id, "fourrure"), 42.f, 12.f, 16.f, 0.f);
+      if (sun_ok) {
+        glUniformMatrix4fv(u->sun_light_from_cam, 1, GL_FALSE, sun_mat);
+        g_sun_shadow.bind_for_receive(id);
+      } else {
+        g_sun_shadow.bind_disabled(id);
+      }
+    }
+    if (render_state->shaders[ShaderId::EMERC_TESS].okay()) {
+      auto id = commun(ShaderId::EMERC_TESS, m_emerc_tess_uniforms);
+      glUniform4f(pc_uniform_loc(id, "sun_dir_view"), sun_view[0], sun_view[1], sun_view[2],
+                  sun_view[3]);
+      glUniform1f(pc_uniform_loc(id, "glint_strength"),
+                  0.85f * std::min(1.f, g_sun_shadow_params[3] / 0.5f));
+    }
   }
 
   // 1 qw with another 4 vifcodes.
@@ -1186,6 +1559,15 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
   draw->light_idx = args.lights;
   draw->num_triangles = mdraw.num_triangles;
   draw->no_strip = mdraw.no_strip;
+  draw->famille = 0;
+  draw->reflet = args.orbe ? 1 : 0;
+  if (args.character) {
+    draw->flags |= CHARACTER;
+    // la passe des reflets suit la meme surface que la base (bois deforme compris)
+    bool coquilles = false;
+    draw->famille =
+        mdraw.eye_id != 0xff ? 7 : texture_famille(args.lev, mdraw.tree_tex_id, &coquilles);
+  }
   for (int i = 0; i < 4; i++) {
     draw->fade[i] = args.fade[i];
   }
@@ -1219,6 +1601,17 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
   }
   if (args.no_texture) {
     draw->flags |= NO_TEXTURE;
+  }
+  draw->famille = 0;
+  draw->reflet = args.orbe ? 1 : 0;
+  if (args.character) {
+    draw->flags |= CHARACTER;
+    bool coquilles = false;
+    draw->famille =
+        mdraw.eye_id != 0xff ? 7 : texture_famille(args.lev, mdraw.tree_tex_id, &coquilles);
+    if (coquilles && !draw->mode.get_ab_enable()) {
+      draw->flags |= FUR_SHELLS;
+    }
   }
   for (int i = 0; i < 4; i++) {
     draw->fade[i] = 0;
@@ -1284,6 +1677,11 @@ void Merc2::setup_merc_vao() {
                          sizeof(tfrag3::MercVertex),                   //
                          (void*)offsetof(tfrag3::MercVertex, mats[0])  // offset in array
   );
+
+  // 21/10 : normale soudee des personnages (pad0, voir tfrag3::pc_pack_weld_normal)
+  glEnableVertexAttribArray(6);
+  glVertexAttribIPointer(6, 1, GL_UNSIGNED_INT, sizeof(tfrag3::MercVertex),
+                         (void*)offsetof(tfrag3::MercVertex, pad0));
 }
 
 void Merc2::flush_draw_buckets(SharedRenderState* render_state,
@@ -1311,6 +1709,10 @@ void Merc2::flush_draw_buckets(SharedRenderState* render_state,
                     m_shader_bone_vector_buffer);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
+    // 21/10 v3 : cartes de detail des matieres (unite 5)
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, m_detail_tex);
+    glActiveTexture(GL_TEXTURE0);
     switch_to_merc2(render_state);
     // PC-REMAKE 21/09 : la passe de base ecrit la normale monde dans le G-buffer ;
     // la passe envmap (EMERC, additive) ne doit pas y toucher
@@ -1399,7 +1801,7 @@ void Merc2::render_shadow_casters(void* shader_lib) {
 }
 
 // PC-REMAKE 21/09 : matrice (3x3) qui envoie une NORMALE de l'espace merc (celui
-// des os, « vue » pre-perspective) vers le monde, pour le G-buffer de normales.
+// des os, vue pre-perspective) vers le monde, pour le G-buffer de normales.
 // Positions : monde = campos + (-A^-1 * P) * v (cf. compute_sun_light_from_camera)
 // -> pour une normale, l'inverse-transposee de la partie lineaire de ce produit.
 static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
@@ -1478,6 +1880,42 @@ void Merc2::do_draws(const Draw* draw_array,
 
   bool fog_on = true;
 
+  // 21/10 : PERSONNAGES REMODELES — chaque dessin de personnage passe par le programme decoupe
+  // (base ou reflets) ; les autres gardent MERC2 / EMERC. Le programme change a la volee.
+  const ShaderId sid_base = set_fade ? ShaderId::EMERC : ShaderId::MERC2;
+  const ShaderId sid_tess = set_fade ? ShaderId::EMERC_TESS : ShaderId::MERC2_TESS;
+  const bool tess_ok =
+      m_remake.actif && m_remake.decoupe && render_state->shaders[sid_tess].okay();
+  const bool fur_ok = !set_fade && m_remake.actif && m_remake.fourrure &&
+                      render_state->shaders[ShaderId::MERC2_FUR].okay();
+  const Uniforms* U = &uniforms;
+  ShaderId sid_cur = sid_base;
+  float last_perso = -1.f;
+  int last_famille = -1;
+  int last_reflet = -1;
+  if (tess_ok) {
+    glPatchParameteri(GL_PATCH_VERTICES, 3);
+  }
+  auto set_lights = [&](const Uniforms& u, u16 light_idx) {
+    const auto& l0_dir = m_lights_buffer[light_idx].direction0;
+    const auto& l1_dir = m_lights_buffer[light_idx].direction1;
+    float fade = 1.f;
+    float fade_enable = 0.f;
+    if (m_lights_buffer[light_idx].w1) {
+      fade = m_lights_buffer[light_idx].w2 / 128.f;
+      fade_enable = 1.f;
+    }
+    math::Vector4f l0_dir_f(l0_dir.x(), l0_dir.y(), l0_dir.z(), fade);
+    set_uniform(u.light_direction[0], l0_dir_f);
+    math::Vector4f l1_dir_f(l1_dir.x(), l1_dir.y(), l1_dir.z(), fade_enable);
+    set_uniform(u.light_direction[1], l1_dir_f);
+    set_uniform(u.light_direction[2], m_lights_buffer[light_idx].direction2);
+    set_uniform(u.light_color[0], m_lights_buffer[light_idx].color0);
+    set_uniform(u.light_color[1], m_lights_buffer[light_idx].color1);
+    set_uniform(u.light_color[2], m_lights_buffer[light_idx].color2);
+    set_uniform(u.light_ambient, m_lights_buffer[light_idx].ambient);
+  };
+
   for (u32 di = 0; di < num_draws; di++) {
     auto& draw = draw_array[di];
     if (draw.flags & MOD_VTX) {
@@ -1493,22 +1931,55 @@ void Merc2::do_draws(const Draw* draw_array,
         normal_vtx_buffer_bound = true;
       }
     }
-    glUniform1i(uniforms.ignore_alpha, draw.flags & DrawFlags::IGNORE_ALPHA);
+    const bool perso = (draw.flags & CHARACTER) != 0;
+    const bool tess = perso && tess_ok && draw.no_strip;
+    {
+      const ShaderId want = tess ? sid_tess : sid_base;
+      if (want != sid_cur) {
+        render_state->shaders[want].activate();
+        U = tess ? (set_fade ? &m_emerc_tess_uniforms : &m_merc_tess_uniforms) : &uniforms;
+        sid_cur = want;
+        last_light = -1;
+        last_perso = -1.f;
+        last_famille = -1;
+        last_reflet = -1;
+        glUniform4f(U->fog_color, render_state->fog_color[0] / 255.f,
+                    render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
+                    fog_on ? render_state->fog_intensity / 255 : 0);
+      }
+    }
+    if (!set_fade) {
+      const float pv = perso ? 1.f : 0.f;
+      if (pv != last_perso) {
+        glUniform1f(U->remake_perso, pv);
+        last_perso = pv;
+      }
+    }
+    if (perso && draw.famille != last_famille) {
+      glUniform1i(U->remake_famille, draw.famille);
+      last_famille = draw.famille;
+    }
+    if (!tess && draw.reflet != last_reflet) {
+      glUniform1i(pc_uniform_loc(render_state->shaders[sid_base].id(), "reflet_orbe"), draw.reflet);
+      last_reflet = draw.reflet;
+    }
+    const GLenum prim = tess ? GL_PATCHES : (draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP);
+    glUniform1i(U->ignore_alpha, draw.flags & DrawFlags::IGNORE_ALPHA);
 
     if (fog_on && !draw.mode.get_fog_enable()) {
       // on -> off
-      glUniform4f(uniforms.fog_color, render_state->fog_color[0] / 255.f,
+      glUniform4f(U->fog_color, render_state->fog_color[0] / 255.f,
                   render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f, 0);
       fog_on = false;
     } else if (!fog_on && draw.mode.get_fog_enable()) {
-      glUniform4f(uniforms.fog_color, render_state->fog_color[0] / 255.f,
+      glUniform4f(U->fog_color, render_state->fog_color[0] / 255.f,
                   render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
                   render_state->fog_intensity / 255);
       fog_on = true;
     }
     bool use_mipmaps_for_filtering = true;
     // PC-REMAKE 17/10 : texture d'oeil = rendu 256 px agrandi a l'ecran ; le mode
-    // « sans filtrage » de la PS2 la lisait au plus proche voisin (yeux pixelises).
+    // sans filtrage de la PS2 la lisait au plus proche voisin (yeux pixelises).
     const bool eye_tex = (draw.texture & 0xffffff00) == 0xefffff00;
     if (draw.texture != last_tex) {
       if (draw.texture < (int)lev->textures.size() && draw.texture >= 0) {
@@ -1539,33 +2010,17 @@ void Merc2::do_draws(const Draw* draw_array,
     }
 
     if ((int)draw.light_idx != last_light && !set_fade) {
-      const auto& l0_dir = m_lights_buffer[draw.light_idx].direction0;
-      const auto& l1_dir = m_lights_buffer[draw.light_idx].direction1;
-      float fade = 1.f;
-      float fade_enable = 0.f;
-      if (m_lights_buffer[draw.light_idx].w1) {
-        fade = m_lights_buffer[draw.light_idx].w2 / 128.f;
-        fade_enable = 1.f;
-      }
-      math::Vector4f l0_dir_f(l0_dir.x(), l0_dir.y(), l0_dir.z(), fade);
-      set_uniform(uniforms.light_direction[0], l0_dir_f);
-      math::Vector4f l1_dir_f(l1_dir.x(), l1_dir.y(), l1_dir.z(), fade_enable);
-      set_uniform(uniforms.light_direction[1], l1_dir_f);
-      set_uniform(uniforms.light_direction[2], m_lights_buffer[draw.light_idx].direction2);
-      set_uniform(uniforms.light_color[0], m_lights_buffer[draw.light_idx].color0);
-      set_uniform(uniforms.light_color[1], m_lights_buffer[draw.light_idx].color1);
-      set_uniform(uniforms.light_color[2], m_lights_buffer[draw.light_idx].color2);
-      set_uniform(uniforms.light_ambient, m_lights_buffer[draw.light_idx].ambient);
+      set_lights(*U, draw.light_idx);
       last_light = draw.light_idx;
     }
 
-    glUniform1i(uniforms.decal, draw.mode.get_decal());
-    glUniform1i(uniforms.gfx_hack_no_tex, (draw.flags & NO_TEXTURE) != 0);
+    glUniform1i(U->decal, draw.mode.get_decal());
+    glUniform1i(U->gfx_hack_no_tex, (draw.flags & NO_TEXTURE) != 0);
 
     if (set_fade) {
       math::Vector4f fade =
           math::Vector4f(draw.fade[0], draw.fade[1], draw.fade[2], draw.fade[3]) / 255.f;
-      set_uniform(uniforms.fade, fade);
+      set_uniform(U->fade, fade);
       ASSERT(draw.mode.get_alpha_blend() == DrawMode::AlphaBlend::SRC_0_DST_DST);
     }
 
@@ -1585,9 +2040,9 @@ void Merc2::do_draws(const Draw* draw_array,
       // draw rgb
       const auto& l1_dir = m_lights_buffer[draw.light_idx].direction1;
       math::Vector4f l1_dir_f(l1_dir.x(), l1_dir.y(), l1_dir.z(), 1);
-      set_uniform(uniforms.light_direction[1], l1_dir_f);
+      set_uniform(U->light_direction[1], l1_dir_f);
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-      glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
+      glDrawElements(prim, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
       qa_glerr_check("merc2 draw #2 (ligne 1573)");  // [QA-GLERR] 14/10
       // draw a
@@ -1596,9 +2051,9 @@ void Merc2::do_draws(const Draw* draw_array,
         pc_eye_texture_linear();
       }
       math::Vector4f l1_dir_f_off(l1_dir.x(), l1_dir.y(), l1_dir.z(), -1);
-      set_uniform(uniforms.light_direction[1], l1_dir_f_off);
+      set_uniform(U->light_direction[1], l1_dir_f_off);
       glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-      glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
+      glDrawElements(prim, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
       qa_glerr_check("merc2 draw #3 (ligne 1580)");  // [QA-GLERR] 14/10
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1612,9 +2067,37 @@ void Merc2::do_draws(const Draw* draw_array,
       prof.add_tri(draw.num_triangles);
       glBindBufferRange(GL_UNIFORM_BUFFER, 1, m_bones_buffer,
                         sizeof(math::Vector4f) * draw.first_bone, 128 * sizeof(ShaderMercMat));
-      glDrawElements(draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP, draw.index_count,
+      glDrawElements(prim, draw.index_count,
                      GL_UNSIGNED_INT, (void*)(sizeof(u32) * draw.first_index));
       qa_glerr_check("merc2 draw #4 (ligne 1590)");  // [QA-GLERR] 14/10
+
+      // 21/10 : FOURRURE EN COUCHES au-dessus de ce dessin (meme maillage, meme pose)
+      if (fur_ok && (draw.flags & FUR_SHELLS) && draw.no_strip) {
+        const auto& fu = m_merc_fur_uniforms;
+        render_state->shaders[ShaderId::MERC2_FUR].activate();
+        set_lights(fu, draw.light_idx);
+        glUniform4f(fu.fog_color, render_state->fog_color[0] / 255.f,
+                    render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
+                    fog_on ? render_state->fog_intensity / 255 : 0);
+        glUniform1i(fu.ignore_alpha, draw.flags & DrawFlags::IGNORE_ALPHA);
+        glUniform1i(fu.decal, draw.mode.get_decal());
+        glUniform1i(fu.gfx_hack_no_tex, (draw.flags & NO_TEXTURE) != 0);
+        glUniform1f(fu.remake_perso, 1.f);
+        glUniform1i(fu.remake_famille, draw.famille);
+        // couches semi-transparentes : melange, sans ecrire la profondeur, l'alpha de l'image ni le
+        // G-buffer de normales
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+        glDepthMask(GL_FALSE);
+        glColorMaski(1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glUniform1i(fu.ignore_alpha, 1);
+        prof.add_draw_call();
+        glDrawElementsInstanced(GL_TRIANGLES, draw.index_count, GL_UNSIGNED_INT,
+                                (void*)(sizeof(u32) * draw.first_index), 16);
+        glColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        setup_opengl_from_draw_mode(draw.mode, GL_TEXTURE0, use_mipmaps_for_filtering);
+        render_state->shaders[sid_cur].activate();
+      }
     }
   }
 

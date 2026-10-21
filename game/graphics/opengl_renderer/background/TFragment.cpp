@@ -307,6 +307,7 @@ void TFragment::update_load(const std::vector<tfrag3::TFragmentTreeKind>& tree_k
         // (la spec de /tmp/palm_debug change en cours de jeu)
         tree_cache.tex_names = &lev_data->textures;
         tree_cache.palm_debug_seq_built = 0;
+        tree_cache.draw_snow.clear();  // 20/10 : reclasse au premier rendu
         // inventaire des textures du niveau, loggé UNE fois (base de la chasse
         // par dichotomie : grep 'texinv' dans le log de gk)
         {
@@ -528,7 +529,7 @@ void TFragment::render_tree(int geom,
   }
 
   first_tfrag_draw_setup(settings.camera, render_state, ShaderId::TFRAG3);
-  // bascule à chaud du mode « peinture violette » (fichier témoin)
+  // bascule à chaud du mode peinture violette (fichier témoin)
   update_palm_debug_flag();
   // PC-REMAKE : temps + amplitude (réglable au REPL) du vent des feuillages
   // fondus dans le terrain
@@ -622,10 +623,33 @@ void TFragment::render_tree(int geom,
   const GLint detail_loc =
       pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "detail_amt");
 
+  // 20/10 : SOL DE NEIGE DEFORMABLE — les draws de neige au sol (textures snow, snow-0x,
+  // snow-path, snow-clumps, snow-fringe : pc_is_snow_ground_texture) passent par le programme
+  // decoupe TFRAG3_SNOW quand la carte des traces est active (voir la passe apres la boucle)
+  if (tree.draw_snow.size() != tree.draws->size() && tree.tex_names && tree.draws) {
+    tree.draw_snow.assign(tree.draws->size(), 0);
+    for (size_t i = 0; i < tree.draws->size(); i++) {
+      const auto& d = (*tree.draws)[i];
+      if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)tree.tex_names->size()) {
+        if (pc_is_snow_ground_texture((*tree.tex_names)[d.tree_tex_id].debug_name)) {
+          tree.draw_snow[i] = 1;
+        }
+      }
+    }
+  }
+  const bool snow_tess = tree.draw_mode == GL_TRIANGLES &&
+                         tree.kind == tfrag3::TFragmentTreeKind::NORMAL &&
+                         pc_snow_tess_available(render_state);
+  std::vector<size_t> snow_draws;
+
   // PC-REMAKE 21/09 : le shader TFRAG3 ecrit la normale monde dans le G-buffer
   pc_normal_target(true);
   for (size_t draw_idx = 0; draw_idx < tree.draws->size(); draw_idx++) {
     const auto& draw = tree.draws->operator[](draw_idx);
+    if (snow_tess && draw_idx < tree.draw_snow.size() && tree.draw_snow[draw_idx]) {
+      snow_draws.push_back(draw_idx);
+      continue;
+    }
     const auto& multidraw_indices = m_cache.multidraw_offset_per_stripdraw[draw_idx];
     const auto& singledraw_indices = m_cache.draw_idx_temp[draw_idx];
 
@@ -703,6 +727,47 @@ void TFragment::render_tree(int geom,
   // traîner la teinte violette du dernier draw
   glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "palm_debug"),
               0.f);
+
+  // 20/10 : passe du sol de neige deformable (memes reglages que TFRAG3, primitive = patch)
+  if (!snow_draws.empty()) {
+    const ShaderId sid = ShaderId::TFRAG3_SNOW;
+    const GLuint pid = pc_snow_tess_begin(settings.camera, render_state);
+    const GLint snow_detail_loc = pc_uniform_loc(pid, "detail_amt");
+    for (size_t draw_idx : snow_draws) {
+      const auto& draw = tree.draws->operator[](draw_idx);
+      const auto& multidraw_indices = m_cache.multidraw_offset_per_stripdraw[draw_idx];
+      const auto& singledraw_indices = m_cache.draw_idx_temp[draw_idx];
+      if (render_state->no_multidraw ? singledraw_indices.second == 0
+                                     : multidraw_indices.second == 0) {
+        continue;
+      }
+      s32 tex_idx = draw.tree_tex_id;
+      if (tex_idx >= 0) {
+        glBindTexture(GL_TEXTURE_2D, m_textures->at(draw.tree_tex_id));
+      } else {
+        glBindTexture(GL_TEXTURE_2D, m_anim_slot_array->at(-(tex_idx + 1)));
+      }
+      setup_tfrag_shader(render_state, draw.mode, sid);
+      glUniform1i(pc_uniform_loc(pid, "decal"), draw.mode.get_decal() ? 1 : 0);
+      glUniform1f(snow_detail_loc,
+                  (draw_idx < tree.draw_detail.size() ? tree.draw_detail[draw_idx] : 0.f) *
+                      g_pc_detail_gain);
+      tree.tris_this_frame += draw.num_triangles;
+      tree.draws_this_frame++;
+      prof.add_draw_call();
+      if (render_state->no_multidraw) {
+        glDrawElements(GL_PATCHES, singledraw_indices.second, GL_UNSIGNED_INT,
+                       (void*)(singledraw_indices.first * sizeof(u32)));
+      } else {
+        glMultiDrawElements(GL_PATCHES, &m_cache.multidraw_count_buffer[multidraw_indices.first],
+                            GL_UNSIGNED_INT,
+                            &m_cache.multidraw_index_offset_buffer[multidraw_indices.first],
+                            multidraw_indices.second);
+      }
+    }
+    // retour au programme du sol pour la suite (ombres, autres arbres)
+    render_state->shaders[ShaderId::TFRAG3].activate();
+  }
   pc_normal_target(false);
 
   // PC-REMAKE sun shadows: render the WHOLE tree into the shadow map (not the

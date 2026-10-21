@@ -1298,6 +1298,24 @@ void pc_screen_shot() {
 // Defined in game/graphics/opengl_renderer/background/background_common.cpp;
 // declared here directly to keep graphics headers out of the kernel.
 extern float g_grass_push[4];
+// 20/10 : pas de Jak sur la neige (traces, background_common.cpp) — w = 0.5 neige, 1 profonde
+extern float g_snow_step[4];
+void pc_set_snow_step(u32 x_bits, u32 y_bits, u32 z_bits, u32 kind_bits) {
+  memcpy(&g_snow_step[0], &x_bits, 4);
+  memcpy(&g_snow_step[1], &y_bits, 4);
+  memcpy(&g_snow_step[2], &z_bits, 4);
+  memcpy(&g_snow_step[3], &kind_bits, 4);
+}
+
+// 20/10 : pendant une cinematique, l'herbe autour de Jak se couche (shrub.vert, grass_clear)
+extern float g_grass_clear[4];
+void pc_set_grass_clear(u32 x_bits, u32 y_bits, u32 z_bits, u32 amount_bits) {
+  memcpy(&g_grass_clear[0], &x_bits, 4);
+  memcpy(&g_grass_clear[1], &y_bits, 4);
+  memcpy(&g_grass_clear[2], &z_bits, 4);
+  memcpy(&g_grass_clear[3], &amount_bits, 4);
+}
+
 void pc_set_grass_push(u32 x_bits, u32 y_bits, u32 z_bits, u32 strength_bits) {
   memcpy(&g_grass_push[0], &x_bits, 4);
   memcpy(&g_grass_push[1], &y_bits, 4);
@@ -1395,8 +1413,10 @@ void pc_remake_add_static_lamp(long long id, float x, float y, float z, float ra
                                float g, float b, float intensity, int priority);
 void pc_remake_remove_static_lamp(long long id);
 
-void pc_set_night_fx(u32 night_bits, u32 reach_bits, u32 bright_bits, u32 unused) {
-  (void)unused;
+extern float g_shaft_amt;
+void pc_set_night_fx(u32 night_bits, u32 reach_bits, u32 bright_bits, u32 shaft_bits) {
+  // 20/10 : 4e parametre (libre jusque-la) = dose des rayons de soleil volumetriques
+  memcpy(&g_shaft_amt, &shaft_bits, 4);
   memcpy(&g_night_fx[0], &night_bits, 4);
   memcpy(&g_night_fx[1], &reach_bits, 4);
   memcpy(&g_night_fx[2], &bright_bits, 4);
@@ -1407,6 +1427,16 @@ void pc_set_night_fx(u32 night_bits, u32 reach_bits, u32 bright_bits, u32 unused
 //   0 = warm pickup   1 = green eco   2 = blue eco   3 = fire
 //   4 = village street lamp (same warm colour, but never dropped in favour of
 //       a pickup that happens to be closer)
+// PC-REMAKE 20/10 : un faisceau d'eco (segment monde) pour cette image — le post en fait une
+// lumiere en tube la nuit (post_processing.frag, beam_seg).
+void pc_remake_add_beam(float x0, float y0, float z0, float x1, float y1, float z1);
+void pc_add_beam(u32 x0, u32 y0, u32 z0, u32 x1, u32 y1, u32 z1) {
+  float f[6];
+  const u32 b[6] = {x0, y0, z0, x1, y1, z1};
+  memcpy(f, b, sizeof(f));
+  pc_remake_add_beam(f[0], f[1], f[2], f[3], f[4], f[5]);
+}
+
 void pc_add_lamp(u32 x_bits, u32 y_bits, u32 z_bits, u32 rad_bits, u32 int_bits, u32 kind) {
   float x, y, z, rad, inten;
   memcpy(&x, &x_bits, 4);
@@ -1429,8 +1459,8 @@ void pc_add_lamp(u32 x_bits, u32 y_bits, u32 z_bits, u32 rad_bits, u32 int_bits,
   };
   static const int kPriority[7] = {0, 0, 0, 1, 2, 0, 0};
   u32 k = kind < 7 ? kind : 0;
-  // famille ECO (1,2,5,6) : intensite NEGATIVE = la convention « visible de
-  // jour » du modele unifie — l'eco rayonne sa couleur a toute heure
+  // famille ECO (1,2,5,6) : intensite NEGATIVE = la convention visible de
+  // jour du modele unifie — l'eco rayonne sa couleur a toute heure
   bool eco = (k == 1 || k == 2 || k == 5 || k == 6);
   pc_remake_add_lamp(x, y, z, rad, kColors[k][0], kColors[k][1], kColors[k][2],
                      eco ? -inten : inten, kPriority[k]);
@@ -1486,8 +1516,7 @@ void pc_add_eco_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u64 pickup_type
       return;  // money, fuel cells etc. keep their own systems
   }
   // rayon 10 m / intensité 1.6, et la source ANCRÉE AU SOL (l'amas flotte à
-  // ~3 m : posée à sa hauteur, la flaque au sol restait fantôme — le test aux
-  // 3 lampes du 16/08 a validé la version au sol, photo à l'appui)
+  // ~3 m : posée à sa hauteur, la flaque au sol restait fantôme)
   constexpr float kRadius = 10.f * 4096.f;
   pc_remake_add_static_lamp((long long)id, x, y - 2.f * 4096.f, z, kRadius, r, g, b, -1.6f, 1);
   lg::info("PC-REMAKE eco lamp: type {} at ({:.0f}, {:.0f}, {:.0f})", pickup_type, x, y, z);
@@ -1507,7 +1536,7 @@ void pc_set_palm_wind(u32 a, u32 b, u32 c, u32 d) {
 // scintillement de l'eau : forces jour/nuit côté GOAL ; le NIVEAU de la mer
 // vient du rendu océan C++ (lire *ocean-map* per-frame côté GOAL crashait sur
 // pointeur pendouillant pendant les transitions de niveau — 17/08). Une
-// sentinelle < -900000 signifie « ne touche pas au niveau ».
+// sentinelle < -900000 signifie ne touche pas au niveau.
 extern float g_water_glitter[4];
 void pc_set_water_glitter(u32 sea, u32 day, u32 night) {
   float fsea, fday, fnight;
@@ -1540,7 +1569,7 @@ void pc_set_sky_ambient(u32 sr, u32 sg, u32 sb, u32 gr) {
   memcpy(&g_sky_color[2], &sb, 4);
   memcpy(&g_ground_color[0], &gr, 4);
 }
-// PC-REMAKE 21/09 : le 3e parametre porte le drapeau « niveau interieur » (grottes,
+// PC-REMAKE 21/09 : le 3e parametre porte le drapeau niveau interieur (grottes,
 // cite engloutie, temple, citadelle : pas de soleil, pas de nuit) dans ground_color.w.
 extern float g_pc_detail_menu;
 void pc_set_ground_ambient(u32 gg, u32 gb, u32 interior_bits, u32 detail_bits) {
@@ -1719,6 +1748,8 @@ void init_common_pc_port_functions(
   make_func_symbol_func("pc-filter-debug-string?", (void*)pc_filter_debug_string);
   make_func_symbol_func("pc-screen-shot", (void*)pc_screen_shot);
   make_func_symbol_func("pc-set-grass-push!", (void*)pc_set_grass_push);
+  make_func_symbol_func("pc-set-grass-clear!", (void*)pc_set_grass_clear);
+  make_func_symbol_func("pc-set-snow-step!", (void*)pc_set_snow_step);
   make_func_symbol_func("pc-set-post-fx!", (void*)pc_set_post_fx);
   make_func_symbol_func("pc-set-fx-quality!", (void*)pc_set_fx_quality);
   make_func_symbol_func("pc-set-grade!", (void*)pc_set_grade);
@@ -1730,6 +1761,7 @@ void init_common_pc_port_functions(
   make_func_symbol_func("pc-set-sky-ambient!", (void*)pc_set_sky_ambient);
   make_func_symbol_func("pc-set-night-fx!", (void*)pc_set_night_fx);
   make_func_symbol_func("pc-add-lamp!", (void*)pc_add_lamp);
+  make_func_symbol_func("pc-add-beam!", (void*)pc_add_beam);
   make_func_symbol_func("pc-add-static-lamp!", (void*)pc_add_static_lamp);
   make_func_symbol_func("pc-add-eco-lamp!", (void*)pc_add_eco_lamp);
   make_func_symbol_func("pc-remove-eco-lamp!", (void*)pc_remove_eco_lamp);

@@ -145,6 +145,7 @@ class Tie3 : public BucketRenderer {
     // PC-REMAKE émissives : boost d'auto-illumination par draw statique
     // (têtes de lampes, lueurs précurseurs, foyers — objets TIE)
     std::vector<float> static_draw_emissive;
+    std::vector<u8> static_draw_snow;  // 20/10 : monticules de neige deformables
     std::vector<char> wind_draw_palm_debug;
     GLuint wind_vertex_index_buffer;
     std::vector<u32> wind_vertex_index_offsets;

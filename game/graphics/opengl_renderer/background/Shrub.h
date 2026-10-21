@@ -58,7 +58,7 @@ class Shrub : public BucketRenderer {
     const tfrag3::PackedTimeOfDay* colors = nullptr;
     const u32* index_data = nullptr;
     // PC-REMAKE 14/10 : TRI DE VISIBILITE PAR CASES. Le format shrub n'a aucune
-    // structure de visibilite (« todo » d'origine) : chaque image dessinait TOUTE
+    // structure de visibilite (todo d'origine) : chaque image dessinait TOUTE
     // l'herbe du niveau, derriere la camera comprise (26 000 touffes semees =
     // 2,8 ms de GPU a la plage). Au chargement, les bandes de chaque draw sont
     // regroupees par case de 32 m et l'index buffer est reordonne draw par draw,
@@ -95,6 +95,7 @@ class Shrub : public BucketRenderer {
   struct {
     GLuint decal;
     GLuint grass_push;  // PC-REMAKE: player position + strength for grass bending
+    GLuint grass_clear;  // 20/10 : herbe couchee pendant les cinematiques
     GLuint grass_wind;  // PC-REMAKE: ambient sway (time + amplitude)
     GLuint shrub_facet;  // PC-REMAKE 13/10 : normale de facette (1) ou verticale (0)
   } m_uniforms;

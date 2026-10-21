@@ -617,6 +617,10 @@
 ;; PC-REMAKE : herbe réactive — envoie au renderer shrub la position monde de
 ;; Jak (x y z) et la force d'écartement (0..1). Bindé dans kmachine.cpp.
 (define-extern pc-set-grass-push! (function float float float float none))
+;; PC-REMAKE 20/10 : herbe couchee autour de Jak pendant les cinematiques (x y z dose)
+(define-extern pc-set-grass-clear! (function float float float float none))
+;; PC-REMAKE 20/10 : pas de Jak sur la neige (x y z genre : 0.5 neige, 1.0 neige profonde)
+(define-extern pc-set-snow-step! (function float float float float none))
 ;; PC-REMAKE : post-effets de présentation (bloom, seuil, saturation, chaleur).
 ;; Tout est neutre à zéro. Bindé dans kmachine.cpp.
 (define-extern pc-set-post-fx! (function float float float float none))
@@ -641,6 +645,8 @@
 (define-extern pc-set-water-glitter! (function float float float none))
 ;; x y z rayon intensite kind (0 lampe chaude, 1 eco vert, 2 froid, 3 feu)
 (define-extern pc-add-lamp! (function float float float float float int none))
+;; PC-REMAKE 20/10 : faisceau d'eco (extremites monde) -> lumiere en tube la nuit
+(define-extern pc-add-beam! (function float float float float float float none))
 ;; Couleur du ciel (r v b) + rouge du sol.
 (define-extern pc-set-sky-ambient! (function float float float float none))
 ;; Vert et bleu du sol.
