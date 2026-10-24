@@ -20,7 +20,7 @@ Tous les droits sur OpenGOAL sont réservés à leurs propriétaires respectifs.
 2. Dans le lanceur : **Réglages → Mods → Ajouter une source**, et coller l'adresse de la source
    de mods de ce projet.
 
-   https://github.com/Superoug/Jak-1-Remake/blob/main/mod-source/mods.json
+   https://raw.githubusercontent.com/Superoug/Jak-1-Remake/main/mod-source/mods.json
 
    
 4. Ouvrir la page des mods de Jak 1, choisir **Jak 1 Remake**, puis **Installer**. Le lanceur
