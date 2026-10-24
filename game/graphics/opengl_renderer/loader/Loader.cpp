@@ -997,7 +997,7 @@ void Loader::loader_thread() {
         // vraies sources de lumière pour la passe différée.
         pc_emissive_scan_level(*result);
       }
-      lg::info("PC-REMAKE PC-REMAKE : decor affine, {} triangles ajoutes dont {} sculptes ({:.0f} ms)",
+      lg::info("PC-REMAKE : decor affine, {} triangles ajoutes dont {} sculptes ({:.0f} ms)",
                tfrag3::g_pc_decor_tris_added - n_decor0, tfrag3::g_pc_sculpt_tris_added - n_sculpt0,
                unpack_timer.getMs());
 
@@ -1302,6 +1302,8 @@ void Loader::update(TexturePool& texture_pool) {
           }
           m_garbage_textures.push_back(tex);
           pc_sculpt_forget_texture(tex);
+          pc_normal_forget_texture(tex);
+          pc_det_forget_texture(tex);
         }
 
         for (auto& tie_geo : lev->tie_data) {

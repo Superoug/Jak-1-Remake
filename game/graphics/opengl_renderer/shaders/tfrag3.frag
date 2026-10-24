@@ -50,6 +50,13 @@ uniform float sol_melange;
 uniform float sol_kind;
 uniform float fronde_pli_f;  // PC-REMAKE : relief des folioles (feuilles du terrain), 0 = rien
 uniform float sculpt_amp;  // hauteur maxi en fraction d'une repetition de texture (0 = sans carte)
+// PC-REMAKE : carte de normales du sol (repere de la texture : x vers +u, y vers +v ; b = hauteur)
+uniform sampler2D nrm_tex;
+uniform float nrm_amt;  // 0 = pas de carte
+// PC-REMAKE : couche de detail des sols (0 sable, 1 terre, 2 herbe, 3 roche ; -1 = rien).
+// RGBA : R = variation de clarte (0.5 = rien), GB = pente (x vers +x monde, y vers +z), A = hauteur
+uniform sampler2DArray det_tex;
+uniform int det_kind;
 in vec3 v_vue;
 
 // bruit de valeur (hash) — grain de sable/terre a petite echelle, ancre au monde
@@ -249,6 +256,30 @@ void main() {
     }
   }
 
+  // PC-REMAKE : CARTE DE NORMALES DU SOL. Repere de la texture tire des derivees ecran (comme la
+  // sculpture). Remplace le relief devine par la clarte : plus juste, et filtre par les mips
+  // (sans scintillement).
+  bool nr_ok = false;
+  vec3 nr_N = vec3(0.0);
+  float nr_h = 0.5, nr_hb = 0.5;
+  if (nrm_amt > 0.0 && !sc_ok && gfx_hack_no_tex == 0 && v_dist < 4096.0 * 60.0) {
+    float nl = length(w_nor);
+    vec3 dp2perp = cross(rl_sy, w_nor), dp1perp = cross(w_nor, rl_sx);
+    vec3 T = dp2perp * rl_dx.x + dp1perp * rl_dy.x;
+    vec3 B = dp2perp * rl_dx.y + dp1perp * rl_dy.y;
+    float lt = length(T), lb = length(B);
+    if (nl > 0.05 && lt > 1e-20 && lb > 1e-20) {
+      vec3 N = w_nor / nl;
+      vec3 s = textureGrad(nrm_tex, uv, rl_dx, rl_dy).rgb;
+      vec2 d = (s.xy * 2.0 - 1.0) * nrm_amt;
+      nr_N = normalize(N + (T / lt) * d.x + (B / lb) * d.y);
+      nr_h = s.z;
+      float lod = textureQueryLod(nrm_tex, tex_coord.xy).x;
+      nr_hb = textureLod(nrm_tex, uv, lod + 2.5).b;
+      nr_ok = true;
+    }
+  }
+
   vec4 T0 = vec4(1.0);
   if (gfx_hack_no_tex == 0) {
     T0 = sc_ok ? textureGrad(tex_T0, uv, rl_dx, rl_dy) : texture(tex_T0, uv);
@@ -265,11 +296,23 @@ void main() {
       color.rgb = mix(vec3(l), c, 1.04);
     }
     if (sol_melange > 0.5) {
+      // PC-REMAKE : BORD NATUREL ENTRE DEUX SOLS. Le melange d'origine suit les triangles : son
+      // seuil traçait des marches d'escalier. Distance (m) a la ligne de partage, estimee par
+      // la pente du melange, puis deformee par un bruit ancre au monde (40 cm, 15 cm, 5 cm) :
+      // un bord irregulier, independant des triangles.
+      // (original : a = color.a + clamp(h * 2.2, -0.3, 0.3) ; w = max(fwidth(a) * 0.75, 0.06) ;
+      //  color.a = smoothstep(0.5 - w, 0.5 + w, a) * step(0.004, color.a))
       const vec3 Ys = vec3(0.299, 0.587, 0.114);
       float h = dot(T0.rgb, Ys) - dot(textureLod(tex_T0, uv, 3.5).rgb, Ys);
-      float a = color.a + clamp(h * 2.2, -0.3, 0.3);
-      float w = max(fwidth(a) * 0.75, 0.06);
-      color.a = smoothstep(0.5 - w, 0.5 + w, a) * step(0.004, color.a);
+      float a0 = color.a;
+      float pix_m = max(length(rl_sx), length(rl_sy)) / 4096.0;
+      float ga = (abs(dFdx(a0)) + abs(dFdy(a0))) / max(pix_m, 1e-5);
+      float dist_m = clamp((a0 - 0.5) / max(ga, 0.08), -4.0, 4.0);
+      vec2 pm = v_pos_w.xz / 4096.0;
+      float bord = pc_vnoise(pm * 1.1) * 0.55 + pc_vnoise(pm * 3.7) * 0.24 +
+                   pc_vnoise(pm * 11.0) * 0.09 + clamp(h, -0.2, 0.2) * 0.25;
+      float w = max(pix_m, 0.012);
+      color.a = smoothstep(-w, w, dist_m + bord) * step(0.004, a0);
     }
   } else {
     color = fragment_color/2;
@@ -278,6 +321,42 @@ void main() {
 
   if (color.a < alpha_min || color.a > alpha_max) {
     discard;
+  }
+
+  // PC-REMAKE : COUCHE DE DETAIL DES SOLS. Les sols d'origine (128 pixels sur plusieurs metres)
+  // sont flous de pres : une couche de matiere reelle (1 mm par pixel, en tuile d'un metre,
+  // projetee a plat dans le monde) leur donne grain et relief fin, sans changer leur couleur
+  // moyenne. Deux tirages (tourne, autre echelle) melanges selon un bruit lent et leur hauteur :
+  // pas de motif qui se repete. Seulement de pres (fondu 5 -> 18 m) et sur les faces a plat.
+  bool dt_ok = false;
+  vec3 dt_tilt = vec3(0.0);
+  {
+    // une tuile de detail couvre 1,6 m : grains, gravillons et brins lisibles a la distance de jeu
+    const float DT_TUILE = 1.0 / (4096.0 * 1.6);
+    vec2 dpx = rl_sx.xz * DT_TUILE, dpy = rl_sy.xz * DT_TUILE;
+    if (det_kind >= 0 && gfx_hack_no_tex == 0 && v_dist < 4096.0 * 18.0) {
+      float nl = length(w_nor);
+      vec3 Nd = nl > 0.05 ? w_nor / nl : vec3(0.0, 1.0, 0.0);
+      // (le sens des normales du terrain d'origine n'est pas fiable : vers le haut ou vers le bas)
+      float f = (1.0 - smoothstep(4096.0 * 5.0, 4096.0 * 18.0, v_dist)) * smoothstep(0.5, 0.8, abs(Nd.y));
+      if (f > 0.001) {
+        vec2 p = v_pos_w.xz * DT_TUILE;
+        const mat2 R = mat2(0.6, 0.8, -0.8, 0.6);
+        vec2 p2 = R * p * 1.37 + vec2(0.31, 0.77);
+        float layer = float(det_kind);
+        vec4 s1 = textureGrad(det_tex, vec3(p, layer), dpx, dpy);
+        vec4 s2 = textureGrad(det_tex, vec3(p2, layer), R * dpx * 1.37, R * dpy * 1.37);
+        float m = clamp(0.5 + pc_vnoise(p * 1.1) * 1.4 + pc_vnoise(p * 3.3) * 0.4, 0.0, 1.0);
+        float t = smoothstep(-0.12, 0.12, (s2.a + m) - (s1.a + 1.0 - m));
+        vec2 n1 = s1.gb * 2.0 - 1.0;
+        vec2 n2 = transpose(R) * (s2.gb * 2.0 - 1.0);
+        float alb = mix(s1.r, s2.r, t);
+        vec2 nn = mix(n1, n2, t);
+        color.rgb *= 1.0 + (alb - 0.5) * 2.2 * f;
+        dt_tilt = vec3(nn.x, 0.0, nn.y) * 1.6 * f * sign(Nd.y);
+        dt_ok = true;
+      }
+    }
   }
   // QA 22/09 : draws a decoupe peints en couleur pleine (tfrag=rouge, tie_wind=bleu,
   // etie=jaune) — si le decor se voit A TRAVERS cette couleur pleine, le melange
@@ -324,6 +403,19 @@ void main() {
         Nb = normalize(mix(N, sc_N, 0.85));
         hb = h0 - sc_h * 0.15;
       }
+      // PC-REMAKE : carte de normales du sol : normale et creux tires de la carte
+      if (nr_ok) {
+        Nb = nr_N;
+        h0 = nr_h;
+        hb = nr_hb;
+      } else if (dt_ok && !sc_ok) {
+        // sol sans carte : la couche de detail remplace le relief devine par la clarte
+        Nb = N;
+        hb = h0;
+      }
+      if (dt_ok) {
+        Nb = normalize(Nb + dt_tilt);
+      }
       vec3 L = -normalize(sun_dir_w);
       // part directe du soleil ici (0 a l'ombre portee, la nuit, en interieur)
       float direct = sun_shadow_strength > 0.001
@@ -335,7 +427,8 @@ void main() {
       float ciel = clamp(Nb.y - N.y, -0.3, 0.3);
       float creux = clamp((h0 - hb) * 1.6, -0.25, 0.25);
       float fondu = 1.0 - smoothstep(4096.0 * 25.0, 4096.0 * 45.0, v_dist);
-      fondu *= (sol_kind > 0.5) ? 0.35 : 1.0;  // PC-REMAKE : sols : relief adouci (scintillement)
+      // PC-REMAKE : sols : relief adouci (scintillement) ; pas avec une carte de normales (stable)
+      fondu *= (sol_kind > 0.5 && !nr_ok && !dt_ok) ? 0.35 : 1.0;
       color.rgb *= 1.0 + relief_amt * fondu *
                              (flanc * 1.45 * direct + ciel * 0.6 * (1.0 - direct) + creux * 0.45);
       if (sc_ok) {
@@ -408,6 +501,12 @@ void main() {
     vec3 n_g = (nl > 0.05) ? w_nor / nl : vec3(0.0, 1.0, 0.0);
     if (sc_ok) {
       n_g = normalize(mix(n_g, sc_N, 0.5));
+    }
+    if (nr_ok) {
+      n_g = normalize(mix(n_g, nr_N, 0.6));  // l'eclairage du post suit aussi le relief du sol
+    }
+    if (dt_ok) {
+      n_g = normalize(n_g + dt_tilt * 0.8);
     }
     // PC-REMAKE : FEUILLES (palmes fondues dans le terrain) : relief des folioles tire du dessin, comme
     // tie_wind.frag — chaque foliole accroche la lumiere du post

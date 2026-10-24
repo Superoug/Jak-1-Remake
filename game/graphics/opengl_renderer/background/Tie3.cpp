@@ -798,6 +798,10 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     if (!use_envmap) {
       pc_sculpt_bind(draw.tree_tex_id >= 0 ? m_textures->at(draw.tree_tex_id) : 0,
                      render_state->shaders[ShaderId::TFRAG3].id());
+      pc_normal_bind(draw.tree_tex_id >= 0 ? m_textures->at(draw.tree_tex_id) : 0,
+                     render_state->shaders[ShaderId::TFRAG3].id());
+      pc_det_bind(draw.tree_tex_id >= 0 ? m_textures->at(draw.tree_tex_id) : 0,
+                  render_state->shaders[ShaderId::TFRAG3].id());
       // PC-REMAKE : palmes pliees + relief des folioles
       const float pli = (draw.tree_tex_id >= 0 && tree.tex_names &&
                          draw.tree_tex_id < (int)tree.tex_names->size() &&

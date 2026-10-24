@@ -57,6 +57,9 @@ class TextureLoaderStage : public LoaderStage {
         data.lev_data->textures.push_back(add_texture(*data.tex_pool, tex, false));
         // PC-REMAKE : carte de hauteur sculptee du decor (si l'outil en a fait une pour cette texture)
         pc_sculpt_register_texture(data.lev_data->textures.back(), tex.debug_name);
+        // PC-REMAKE : carte de normales des sols
+        pc_normal_register_texture(data.lev_data->textures.back(), tex.debug_name);
+        pc_det_register_texture(data.lev_data->textures.back(), tex.debug_name);
         bytes_this_run += tex.w * tex.h * 4;
         tex_this_run++;
         if (tex_this_run > 20) {

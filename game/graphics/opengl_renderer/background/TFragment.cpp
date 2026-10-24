@@ -683,6 +683,10 @@ void TFragment::render_tree(int geom,
     // PC-REMAKE : carte de hauteur sculptee de cette texture (relief par pixel ; 0 = sans)
     pc_sculpt_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
                    render_state->shaders[ShaderId::TFRAG3].id());
+    pc_normal_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
+                   render_state->shaders[ShaderId::TFRAG3].id());
+    pc_det_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
+                render_state->shaders[ShaderId::TFRAG3].id());
     // [QA-TEST 25/08] vista : on desarme le test d'alpha (seuil 38) qui perce
     // le decor lointain en tamis
     glUniform1i(m_uniforms.decal, draw.mode.get_decal() ? 1 : 0);

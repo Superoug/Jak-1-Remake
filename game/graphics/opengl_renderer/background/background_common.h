@@ -150,6 +150,18 @@ const PcSculptMap* pc_sculpt_map(const std::string& debug_name);
 void pc_sculpt_register_texture(GLuint color_tex, const std::string& debug_name);
 void pc_sculpt_forget_texture(GLuint color_tex);
 void pc_sculpt_bind(GLuint color_tex, GLuint program);
+// PC-REMAKE : CARTES DE NORMALES DES SOLS (<nom>.nrm, out/jak1/normales puis
+// custom_assets/jak1/normales) : relief stable des sables, terres et chemins (tfrag3.frag).
+// /tmp/qa_no_nrm a chaud = coupe (A/B).
+void pc_normal_register_texture(GLuint color_tex, const std::string& debug_name);
+void pc_normal_forget_texture(GLuint color_tex);
+void pc_normal_bind(GLuint color_tex, GLuint program);
+// PC-REMAKE : COUCHE DE DETAIL DES SOLS (custom_assets/jak1/sol_detail, outil details_sol.py) :
+// grain et relief fin de la matiere (sable, terre, herbe, roche), vus de pres seulement.
+// /tmp/qa_no_det a chaud = coupe (A/B).
+void pc_det_register_texture(GLuint color_tex, const std::string& debug_name);
+void pc_det_forget_texture(GLuint color_tex);
+void pc_det_bind(GLuint color_tex, GLuint program);
 bool pc_sol_melange_off();
 float pc_sol_kind(const std::string& debug_name);
 bool pc_vert_off();

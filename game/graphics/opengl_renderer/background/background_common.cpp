@@ -2,6 +2,8 @@
 
 #include "background_common.h"
 
+#include "third-party/stb_image/stb_image.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -2279,6 +2281,219 @@ void pc_sculpt_bind(GLuint color_tex, GLuint program) {
   glUniform1f(pc_uniform_loc(program, "sculpt_amp"), amp);
 }
 
+// PC-REMAKE : CARTES DE NORMALES DES SOLS (voir background_common.h)
+namespace {
+struct PcNormalMap {
+  GLuint tex = 0;
+  float dose = 1.f;
+};
+std::unordered_map<GLuint, PcNormalMap> s_normal_tex;  // thread GL
+bool normal_off_now() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ % 64) == 0) {
+    FILE* f = fopen("/tmp/qa_no_nrm", "r");
+    off = f != nullptr;
+    if (f) {
+      fclose(f);
+    }
+  }
+  return off;
+}
+}  // namespace
+
+void pc_normal_register_texture(GLuint color_tex, const std::string& debug_name) {
+  if (debug_name.empty()) {
+    return;
+  }
+  auto path = file_util::get_jak_project_dir() / "out" / "jak1" / "normales" / (debug_name + ".nrm");
+  if (!fs::exists(path)) {
+    path = file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "normales" /
+           (debug_name + ".nrm");
+  }
+  if (!fs::exists(path)) {
+    return;
+  }
+  auto data = file_util::read_binary_file(path);
+  if (data.size() < 12 || memcmp(data.data(), "NRM1", 4) != 0) {
+    return;
+  }
+  u16 w, h;
+  float dose;
+  memcpy(&w, data.data() + 4, 2);
+  memcpy(&h, data.data() + 6, 2);
+  memcpy(&dose, data.data() + 8, 4);
+  if (w == 0 || h == 0 || data.size() < 12 + (size_t)w * h * 3) {
+    return;
+  }
+  GLint align = 4;
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  PcNormalMap m;
+  m.dose = dose;
+  glGenTextures(1, &m.tex);
+  glBindTexture(GL_TEXTURE_2D, m.tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data() + 12);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, align);
+  auto old = s_normal_tex.find(color_tex);
+  if (old != s_normal_tex.end()) {
+    glDeleteTextures(1, &old->second.tex);
+  }
+  s_normal_tex[color_tex] = m;
+}
+
+void pc_normal_forget_texture(GLuint color_tex) {
+  auto it = s_normal_tex.find(color_tex);
+  if (it != s_normal_tex.end()) {
+    glDeleteTextures(1, &it->second.tex);
+    s_normal_tex.erase(it);
+  }
+}
+
+void pc_normal_bind(GLuint color_tex, GLuint program) {
+  float dose = 0.f;
+  auto it = s_normal_tex.find(color_tex);
+  if (it != s_normal_tex.end() && !normal_off_now()) {
+    glActiveTexture(GL_TEXTURE18);
+    glBindTexture(GL_TEXTURE_2D, it->second.tex);
+    glActiveTexture(GL_TEXTURE0);
+    dose = it->second.dose;
+  }
+  glUniform1i(pc_uniform_loc(program, "nrm_tex"), 18);
+  glUniform1f(pc_uniform_loc(program, "nrm_amt"), dose);
+}
+
+// PC-REMAKE : COUCHE DE DETAIL DES SOLS (voir background_common.h)
+namespace {
+GLuint s_det_tex = 0;
+bool s_det_tried = false;
+std::unordered_map<GLuint, int> s_det_kind;  // thread GL
+bool det_off_now() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ % 64) == 0) {
+    FILE* f = fopen("/tmp/qa_no_det", "r");
+    off = f != nullptr;
+    if (f) {
+      fclose(f);
+    }
+  }
+  return off;
+}
+// 0 sable, 1 terre, 2 herbe, 3 roche ; -1 = pas un sol
+int det_kind_for_name(const std::string& debug_name) {
+  if (pc_detail_texture_amount(debug_name) <= 0.f) {
+    return -1;
+  }
+  std::string n = debug_name;
+  std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+  auto has = [&](std::initializer_list<const char*> ks) {
+    for (auto* k : ks) {
+      if (n.find(k) != std::string::npos) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (has({"snow", "lava", "crystal", "fringe"})) {
+    return -1;
+  }
+  if (has({"leafyground", "grass", "moss"})) {
+    return 2;
+  }
+  if (has({"rock", "cliff", "stone", "cobble", "gravel", "cave", "wall"})) {
+    return 3;
+  }
+  if (has({"beach", "sand"})) {
+    return 0;
+  }
+  if (has({"path", "dirt", "soil", "ground", "mud", "floor"})) {
+    return 1;
+  }
+  return -1;
+}
+void det_load() {
+  s_det_tried = true;
+  const int kLayers = 4;
+  std::vector<unsigned char*> img(kLayers, nullptr);
+  int w = 0, h = 0;
+  bool ok = true;
+  for (int i = 0; i < kLayers && ok; i++) {
+    auto path = file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "sol_detail" /
+                fmt::format("sol_detail_{}.png", i);
+    int iw, ih, ic;
+    img[i] = stbi_load(path.string().c_str(), &iw, &ih, &ic, 4);
+    if (!img[i] || (i > 0 && (iw != w || ih != h))) {
+      ok = false;
+    }
+    w = iw;
+    h = ih;
+  }
+  if (ok) {
+    GLint align = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glGenTextures(1, &s_det_tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, s_det_tex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, w, h, kLayers, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 nullptr);
+    for (int i = 0; i < kLayers; i++) {
+      glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, GL_RGBA, GL_UNSIGNED_BYTE, img[i]);
+    }
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D_ARRAY, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, 8.f);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
+    lg::info("PC-REMAKE detail des sols : {} matieres ({}x{})", kLayers, w, h);
+  }
+  for (auto* p : img) {
+    if (p) {
+      stbi_image_free(p);
+    }
+  }
+}
+}  // namespace
+
+void pc_det_register_texture(GLuint color_tex, const std::string& debug_name) {
+  int k = det_kind_for_name(debug_name);
+  if (k >= 0) {
+    s_det_kind[color_tex] = k;
+  } else {
+    s_det_kind.erase(color_tex);
+  }
+}
+
+void pc_det_forget_texture(GLuint color_tex) {
+  s_det_kind.erase(color_tex);
+}
+
+void pc_det_bind(GLuint color_tex, GLuint program) {
+  int kind = -1;
+  auto it = s_det_kind.find(color_tex);
+  if (it != s_det_kind.end() && !det_off_now()) {
+    if (!s_det_tried) {
+      det_load();
+    }
+    if (s_det_tex) {
+      glActiveTexture(GL_TEXTURE22);
+      glBindTexture(GL_TEXTURE_2D_ARRAY, s_det_tex);
+      glActiveTexture(GL_TEXTURE0);
+      kind = it->second;
+    }
+  }
+  glUniform1i(pc_uniform_loc(program, "det_tex"), 22);
+  glUniform1i(pc_uniform_loc(program, "det_kind"), kind);
+}
+
 // PC-REMAKE : SOLS — 1 sol (sable, terre, chemin, neige : relief adouci, il scintillait), 2 sol d'herbe
 // (vert etalonne : la texture d'origine est un vert-jaune tres sature que la lumiere refaite poussait
 // vers un citron pale, presque blanc en plein jour)
@@ -2374,6 +2589,8 @@ void first_tfrag_draw_setup(const GoalBackgroundCameraData& settings,
   glUniform1f(pc_uniform_loc(id, "sol_kind"), 0.f);
   glUniform1f(pc_uniform_loc(id, "fronde_pli"), 0.f);
   glUniform1f(pc_uniform_loc(id, "fronde_pli_f"), 0.f);
+  glUniform1f(pc_uniform_loc(id, "nrm_amt"), 0.f);  // PC-REMAKE : cartes de normales des sols
+  glUniform1i(pc_uniform_loc(id, "det_kind"), -1);  // PC-REMAKE : detail des sols
   glUniform1i(pc_uniform_loc(id, "gfx_hack_no_tex"), Gfx::g_global_settings.hack_no_tex);
   glUniform1i(pc_uniform_loc(id, "decal"), false);
   glUniform1i(pc_uniform_loc(id, "tex_T0"), 0);
