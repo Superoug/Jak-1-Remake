@@ -288,11 +288,11 @@
       ;; point de vue d'où l'on domine la baie. Ailleurs dans le village, on
       ;; laisse les deux emplacements aux frontières (jungle, canyon, misty…).
       ;; Zone : boîte de ±65 m autour de la hutte (-132.7, 213.5) + y > 30 m.
+      ;; 21/10 : TOUT le village (et plus seulement la hutte de Samos) — hors de la zone, la
+      ;; plage cessait d'etre forcee et se voyait se defaire depuis le rivage du village.
+      ;; (avant : boite de +-65 m autour de la hutte (-132.7, 213.5) et y > 30 m)
       (if (and *target*
-               (= (-> (level-get-target-inside *level*) name) 'village1)
-               (< (fabs (- (-> *target* control trans x) (meters -132.7))) (meters 65.0))
-               (< (fabs (- (-> *target* control trans z) (meters 213.5))) (meters 65.0))
-               (> (-> *target* control trans y) (meters 30.0)))
+               (= (-> (level-get-target-inside *level*) name) 'village1))
           (set! *remake-village-frames* (min 10000 (+ *remake-village-frames* 1)))
           (set! *remake-village-frames* 0))
       ;; 5 s (300 frames) : quasi immédiat, assez pour ne pas

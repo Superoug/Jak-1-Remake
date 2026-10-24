@@ -13,6 +13,8 @@
 #include "decompiler/ObjectFile/LinkedObjectFile.h"
 #include "decompiler/level_extractor/level_editor.h"
 
+#include "common/util/gltf_util.h"
+
 // Jak 2 notes:
 // - proto flags are currently ignored, but stored.
 
@@ -2615,6 +2617,209 @@ void handle_draw_for_strip(tfrag3::TieTree& tree,
   draw_to_add_to->vis_groups.push_back(vgroup);
 }
 
+
+// ============================================================================
+// PC-REMAKE : PROTOTYPES DU DECOR REMODELES. Un prototype (hutte, rocher, poteau...) peut etre
+// remplace par custom_assets/jak1/tie_replacements/<niveau>/<prototype>.glb (repere local du
+// prototype, metres ; une primitive par texture, nommee comme la texture du jeu), au niveau de
+// detail le plus fin. Ce que le jeu peignait par sommet et par instance (couleurs du jour, nuit
+// comprise) est reporte sur la nouvelle geometrie : chaque sommet prend le melange des 3 couleurs
+// des coins du triangle d'origine le plus proche (PackedTieVertices::color_indices2/3).
+// Le mode de dessin, la texture et le reflet sont ceux de la piece d'origine de meme texture.
+// Sans fichier, rien ne change. Prototypes a vent (palmiers) : pas encore.
+// ============================================================================
+namespace {
+
+struct Remplacement {
+  struct Prim {
+    std::string tex;
+    std::vector<tfrag3::PreloadedVertex> vtx;  // positions en unites du jeu
+    std::vector<math::Vector3f> nrm;
+    std::vector<std::array<u32, 3>> tris;
+  };
+  std::vector<Prim> prims;
+};
+
+std::optional<Remplacement> charger_remplacement(const std::string& level,
+                                                 const std::string& proto) {
+  auto path = file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "tie_replacements" /
+              level / (proto + ".glb");
+  if (!file_util::file_exists(path.string())) {
+    return std::nullopt;
+  }
+  tinygltf::TinyGLTF loader;
+  tinygltf::Model model;
+  std::string err, warn;
+  if (!loader.LoadBinaryFromFile(&model, &err, &warn, path.string())) {
+    lg::warn("remake decor : {} illisible ({})", path.string(), err);
+    return std::nullopt;
+  }
+  Remplacement r;
+  for (const auto& n : gltf_util::flatten_nodes_from_all_scenes(model)) {
+    const auto& node = model.nodes[n.node_idx];
+    if (node.mesh < 0) {
+      continue;
+    }
+    for (const auto& prim : model.meshes[node.mesh].primitives) {
+      if (prim.mode != TINYGLTF_MODE_TRIANGLES || prim.indices < 0) {
+        continue;
+      }
+      Remplacement::Prim p;
+      if (prim.material >= 0) {
+        p.tex = model.materials[prim.material].name;
+        // "nom-envmap" (export des modeles) -> nom de la texture
+        auto e = p.tex.find("-envmap");
+        if (e != std::string::npos) {
+          p.tex = p.tex.substr(0, e);
+        }
+        auto dot = p.tex.find('.');
+        if (dot != std::string::npos) {
+          p.tex = p.tex.substr(0, dot);
+        }
+      }
+      auto ev = gltf_util::gltf_vertices(model, prim.attributes, n.w_T_node, false, true, proto);
+      p.vtx = std::move(ev.vtx);
+      p.nrm = std::move(ev.normals);
+      auto idx = gltf_util::gltf_index_buffer(model, prim.indices, 0);
+      for (size_t i = 0; i + 2 < idx.size(); i += 3) {
+        p.tris.push_back({idx[i], idx[i + 1], idx[i + 2]});
+      }
+      if (!p.tris.empty()) {
+        r.prims.push_back(std::move(p));
+      }
+    }
+  }
+  if (r.prims.empty()) {
+    return std::nullopt;
+  }
+  return r;
+}
+
+// bandes de triangles (meme convention que le jeu : triangle k = (s_k, s_k+1, s_k+2) pair,
+// (s_k+1, s_k, s_k+2) impair), orientation des triangles conservee
+std::vector<std::vector<u32>> en_bandes(const std::vector<std::array<u32, 3>>& tris) {
+  std::unordered_map<u64, std::vector<u32>> par_arete;  // arete orientee a->b -> triangles
+  auto cle = [](u32 a, u32 b) { return ((u64)a << 32) | b; };
+  for (u32 t = 0; t < tris.size(); t++) {
+    for (int e = 0; e < 3; e++) {
+      par_arete[cle(tris[t][e], tris[t][(e + 1) % 3])].push_back(t);
+    }
+  }
+  std::vector<char> pris(tris.size(), 0);
+  auto troisieme = [&](u32 t, u32 a, u32 b) -> std::optional<u32> {
+    // le triangle t contient l'arete orientee a->b : renvoie son troisieme sommet
+    for (int e = 0; e < 3; e++) {
+      if (tris[t][e] == a && tris[t][(e + 1) % 3] == b) {
+        return tris[t][(e + 2) % 3];
+      }
+    }
+    return std::nullopt;
+  };
+  std::vector<std::vector<u32>> bandes;
+  for (u32 t0 = 0; t0 < tris.size(); t0++) {
+    if (pris[t0]) {
+      continue;
+    }
+    pris[t0] = 1;
+    std::vector<u32> s = {tris[t0][0], tris[t0][1], tris[t0][2]};
+    while (true) {
+      const size_t n = s.size();
+      const size_t k = n - 2;  // indice du triangle suivant
+      const u32 a = (k & 1) ? s[n - 1] : s[n - 2];
+      const u32 b = (k & 1) ? s[n - 2] : s[n - 1];
+      auto it = par_arete.find(cle(a, b));
+      std::optional<u32> suivant;
+      if (it != par_arete.end()) {
+        for (u32 t : it->second) {
+          if (!pris[t]) {
+            auto v = troisieme(t, a, b);
+            if (v) {
+              pris[t] = 1;
+              suivant = v;
+              break;
+            }
+          }
+        }
+      }
+      if (!suivant) {
+        break;
+      }
+      s.push_back(*suivant);
+      if (s.size() >= 65000) {
+        break;  // la longueur d'une suite de sommets d'un dessin tient sur 16 bits
+      }
+    }
+    bandes.push_back(std::move(s));
+  }
+  return bandes;
+}
+
+// point le plus proche dans un triangle (barycentriques)
+math::Vector3f bary_plus_proche(const math::Vector3f& p,
+                                const math::Vector3f& a,
+                                const math::Vector3f& b,
+                                const math::Vector3f& c,
+                                float* d2) {
+  // Ericson, Real-Time Collision Detection 5.1.5
+  auto ab = b - a, ac = c - a, ap = p - a;
+  float d1 = ab.dot(ap), d2_ = ac.dot(ap);
+  math::Vector3f w;
+  if (d1 <= 0 && d2_ <= 0) {
+    w = {1, 0, 0};
+  } else {
+    auto bp = p - b;
+    float d3 = ab.dot(bp), d4 = ac.dot(bp);
+    if (d3 >= 0 && d4 <= d3) {
+      w = {0, 1, 0};
+    } else {
+      float vc = d1 * d4 - d3 * d2_;
+      if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+        float v = d1 / (d1 - d3);
+        w = {1 - v, v, 0};
+      } else {
+        auto cp = p - c;
+        float d5 = ab.dot(cp), d6 = ac.dot(cp);
+        if (d6 >= 0 && d5 <= d6) {
+          w = {0, 0, 1};
+        } else {
+          float vb = d5 * d2_ - d1 * d6;
+          if (vb <= 0 && d2_ >= 0 && d6 <= 0) {
+            float ww = d2_ / (d2_ - d6);
+            w = {1 - ww, 0, ww};
+          } else {
+            float va = d3 * d6 - d5 * d4;
+            if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+              float ww = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+              w = {0, 1 - ww, ww};
+            } else {
+              float den = 1.f / (va + vb + vc);
+              float v = vb * den, ww = vc * den;
+              w = {1 - v - ww, v, ww};
+            }
+          }
+        }
+      }
+    }
+  }
+  auto q = a * w.x() + b * w.y() + c * w.z();
+  *d2 = (q - p).squared_length();
+  return w;
+}
+
+void completer_couleurs(tfrag3::PackedTieVertices& pv) {
+  if (pv.color_indices2.empty() && pv.color_weights.empty()) {
+    return;
+  }
+  while (pv.color_indices2.size() < pv.color_indices.size()) {
+    const u16 c = pv.color_indices[pv.color_indices2.size()];
+    pv.color_indices2.push_back(c);
+    pv.color_indices3.push_back(c);
+    pv.color_weights.push_back(0);
+  }
+}
+
+}  // namespace
+
 /*!
  * Convert TieProtoInfo's to C++ renderer format
  */
@@ -2622,7 +2827,8 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
                                   tfrag3::Level& lev,
                                   const TextureDB& tdb,
                                   const std::vector<TieProtoInfo>& protos,
-                                  GameVersion version) {
+                                  GameVersion version,
+                                  int geo) {
   // our current approach for static draws is just to flatten to giant mesh, except for wind stuff.
   // this map sorts these two types of draws by texture.
   std::unordered_map<s32, std::vector<u32>> static_draws_by_tex;
@@ -2665,6 +2871,291 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
     if (using_envmap) {
       envmap_drawmode = process_envmap_draw_mode(proto.envmap_adgif.value(), version,
                                                  info.envmap_second_draw_category);
+    }
+
+    // PC-REMAKE : prototype remodele (voir plus haut)
+    // geo 0 : modele refait ; geo 1 (premiere version de loin) : sa version allegee <nom>.lod1
+    // (prototypes a vent compris : palmiers ; le vent est applique par instance dans le shader)
+    if (geo <= 1 && version == GameVersion::Jak1 && !proto.instances.empty()) {
+      auto remp = charger_remplacement(lev.level_name.empty() ? "common" : lev.level_name,
+                                       geo == 0 ? proto.name : proto.name + ".lod1");
+      if (remp) {
+        // triangles d'origine (coins : fragment, indice de couleur, teinte de reflet)
+        struct Coin {
+          math::Vector3f p;
+          u32 frag;
+          u32 cii;
+          math::Vector<u8, 4> teinte;
+        };
+        std::vector<std::array<Coin, 3>> tri_orig;
+        std::unordered_map<std::string, std::pair<u32, u32>> modele_par_tex;  // tex -> frag, strip
+        for (u32 fi = 0; fi < proto.frags.size(); fi++) {
+          const auto& frag = proto.frags[fi];
+          for (u32 si = 0; si < frag.strips.size(); si++) {
+            const auto& strip = frag.strips[si];
+            auto t = tdb.textures.find(strip.adgif.combo_tex);
+            if (t != tdb.textures.end()) {
+              modele_par_tex.emplace(t->second.name, std::make_pair(fi, si));
+            }
+            for (size_t i = 2; i < strip.verts.size(); i++) {
+              std::array<Coin, 3> c;
+              for (int k = 0; k < 3; k++) {
+                const auto& v = strip.verts[i - 2 + k];
+                c[k] = {math::Vector3f(v.pos.x(), v.pos.y(), v.pos.z()), fi, v.color_index_index,
+                        v.envmap_tint_color};
+              }
+              if ((c[1].p - c[0].p).cross(c[2].p - c[0].p).squared_length() > 1e-6f) {
+                tri_orig.push_back(c);
+              }
+            }
+          }
+        }
+        // deux prototypes de meme nom dans un niveau (arbres differents, textures differentes) :
+        // le modele refait doit porter les textures de CE prototype, sinon on garde l'original
+        bool memes_textures = true;
+        for (const auto& prim : remp->prims) {
+          if (!modele_par_tex.count(prim.tex)) {
+            memes_textures = false;
+          }
+        }
+        if (!memes_textures) {
+          lg::info("remake decor : {} homonyme aux textures differentes, original garde", proto.name);
+        }
+        if (memes_textures && !tri_orig.empty() && !modele_par_tex.empty()) {
+          tree.proto_names.back() += " [remake]";
+          completer_couleurs(tree.packed_vertices);
+          if (tree.packed_vertices.color_indices2.size() < tree.packed_vertices.color_indices.size() ||
+              tree.packed_vertices.color_indices2.empty()) {
+            // premier prototype remplace de l'arbre : les tableaux paralleles demarrent ici
+            tree.packed_vertices.color_indices2 = tree.packed_vertices.color_indices;
+            tree.packed_vertices.color_indices3 = tree.packed_vertices.color_indices;
+            tree.packed_vertices.color_weights.assign(tree.packed_vertices.color_indices.size(), 0);
+          }
+          // prototype a vent : une instance de vent par instance du prototype (matrice, rigidite)
+          std::vector<u32> vent_idx;
+          if (using_wind) {
+            for (const auto& inst : proto.instances) {
+              vent_idx.push_back(tree.wind_instance_info.size());
+              tfrag3::TieWindInstance wi;
+              wi.wind_idx = inst.wind_index;
+              wi.stiffness = proto.stiffness;
+              wi.matrix = inst.mat;
+              tree.wind_instance_info.push_back(wi);
+            }
+          }
+          size_t n_tris = 0;
+          for (const auto& prim : remp->prims) {
+            auto mit = modele_par_tex.find(prim.tex);
+            if (mit == modele_par_tex.end()) {
+              mit = modele_par_tex.begin();
+              std::string dispo;
+              for (const auto& [nom_t, fs] : modele_par_tex) {
+                dispo += nom_t + " ";
+              }
+              lg::warn("remake decor : {} texture {} absente de l'original ({})", proto.name, prim.tex,
+                       dispo);
+            }
+            const auto& frag_m = proto.frags[mit->second.first];
+            const auto& strip_m = frag_m.strips[mit->second.second];
+            s32 tex_lev = get_or_add_texture(strip_m.adgif.combo_tex, lev, tdb);
+            DrawMode mode = process_draw_mode(strip_m.adgif, frag_m.prog_info.misc_x == 0,
+                                              frag_m.has_magic_tex0_bit, version, info.category);
+            // une texture peut etre bornee (clamp) dans une bande d'origine et repetee dans une
+            // autre : le modele refait reunit toutes ses coordonnees ; si elles sortent de [0, 1]
+            // la texture doit se repeter, sinon le bord est etire en stries
+            {
+              bool hors_s = false, hors_t = false;
+              for (const auto& v : prim.vtx) {
+                hors_s |= v.s < -0.01f || v.s > 1.01f;
+                hors_t |= v.t < -0.01f || v.t > 1.01f;
+              }
+              if (hors_s) {
+                mode.set_clamp_s_enable(false);
+              }
+              if (hors_t) {
+                mode.set_clamp_t_enable(false);
+              }
+            }
+            // couleur de chaque sommet : triangle d'origine le plus proche
+            struct Melange {
+              u32 frag;
+              u32 cii[3];
+              u8 w0, w1;
+              math::Vector<u8, 4> teinte;
+            };
+            std::vector<Melange> mel(prim.vtx.size());
+            for (size_t vi = 0; vi < prim.vtx.size(); vi++) {
+              math::Vector3f p(prim.vtx[vi].x, prim.vtx[vi].y, prim.vtx[vi].z);
+              float best = 1e30f;
+              math::Vector3f bw(1, 0, 0);
+              size_t bt = 0;
+              for (size_t t = 0; t < tri_orig.size(); t++) {
+                float d2;
+                auto w = bary_plus_proche(p, tri_orig[t][0].p, tri_orig[t][1].p, tri_orig[t][2].p, &d2);
+                if (d2 < best) {
+                  best = d2;
+                  bw = w;
+                  bt = t;
+                }
+              }
+              const auto& c = tri_orig[bt];
+              auto& m = mel[vi];
+              m.frag = c[0].frag;
+              for (int k = 0; k < 3; k++) {
+                m.cii[k] = c[k].cii;
+              }
+              m.w0 = (u8)std::clamp((int)std::lround(bw.x() * 255.f), 0, 255);
+              m.w1 = (u8)std::clamp((int)std::lround(bw.y() * 255.f), 0, 255 - m.w0);
+              if (m.w0 == 0 && m.w1 == 0) {
+                m.w0 = 1;  // poids nul = code de la couleur d'origine : jamais tout sur le 3e coin
+              }
+              const int k = bw.x() >= bw.y() && bw.x() >= bw.z() ? 0 : (bw.y() >= bw.z() ? 1 : 2);
+              m.teinte = c[k].teinte;
+            }
+            // sommets du prototype (partages par toutes les instances), par bande
+            auto bandes = en_bandes(prim.tris);
+            std::vector<std::pair<u32, u32>> plages;
+            bool a_normales = !prim.nrm.empty();
+            for (const auto& b : bandes) {
+              u32 deb = tree.packed_vertices.vertices.size();
+              for (u32 vi : b) {
+                const auto& v = prim.vtx[vi];
+                tfrag3::PackedTieVertices::Vertex pvx;
+                pvx.x = v.x;
+                pvx.y = v.y;
+                pvx.z = v.z;
+                pvx.s = v.s;
+                pvx.t = v.t;
+                if (a_normales) {
+                  auto n = prim.nrm[vi];
+                  pvx.nx = (s8)std::clamp((int)std::lround(n.x() * 127.f), -127, 127);
+                  pvx.ny = (s8)std::clamp((int)std::lround(n.y() * 127.f), -127, 127);
+                  pvx.nz = (s8)std::clamp((int)std::lround(n.z() * 127.f), -127, 127);
+                } else {
+                  pvx.nx = pvx.ny = pvx.nz = 0;
+                }
+                pvx.r = mel[vi].teinte.x();
+                pvx.g = mel[vi].teinte.y();
+                pvx.b = mel[vi].teinte.z();
+                pvx.a = mel[vi].teinte.w();
+                tree.packed_vertices.vertices.push_back(pvx);
+              }
+              plages.emplace_back(deb, (u32)tree.packed_vertices.vertices.size());
+              n_tris += b.size() - 2;
+            }
+            // instances
+            for (size_t ii = 0; ii < proto.instances.size(); ii++) {
+              const auto& inst = proto.instances[ii];
+              auto couleur = [&](u32 frag, u32 cii) -> u16 {
+                if (cii == UINT32_MAX) {
+                  return 0;
+                }
+                const auto& ifrag = inst.frags.at(frag);
+                return ifrag.color_indices.at(cii) + ifrag.color_index_offset_in_big_palette;
+              };
+              if (using_wind) {
+                for (size_t bi = 0; bi < bandes.size(); bi++) {
+                  const auto& b = bandes[bi];
+                  tfrag3::InstancedStripDraw* d = nullptr;
+                  auto ex = wind_draws_by_tex.find(tex_lev);
+                  if (ex != wind_draws_by_tex.end()) {
+                    for (auto idx : ex->second) {
+                      if (tree.instanced_wind_draws.at(idx).mode == mode) {
+                        d = &tree.instanced_wind_draws[idx];
+                      }
+                    }
+                  }
+                  if (!d) {
+                    tree.instanced_wind_draws.emplace_back();
+                    wind_draws_by_tex[tex_lev].push_back(tree.instanced_wind_draws.size() - 1);
+                    d = &tree.instanced_wind_draws.back();
+                    d->mode = mode;
+                    d->tree_tex_id = tex_lev;
+                  }
+                  tfrag3::InstancedStripDraw::InstanceGroup ig;
+                  ig.vis_idx = inst.vis_id;
+                  ig.num = b.size() + 1;
+                  ig.instance_idx = vent_idx[ii];
+                  d->num_triangles += b.size() - 2;
+                  tfrag3::PackedTieVertices::MatrixGroup grp;
+                  grp.matrix_idx = -1;
+                  grp.start_vert = plages[bi].first;
+                  grp.end_vert = plages[bi].second;
+                  tree.packed_vertices.matrix_groups.push_back(grp);
+                  for (u32 vi : b) {
+                    const auto& m = mel[vi];
+                    d->vertex_index_stream.push_back(tree.packed_vertices.color_indices.size());
+                    tree.packed_vertices.color_indices.push_back(couleur(m.frag, m.cii[0]));
+                    tree.packed_vertices.color_indices2.push_back(couleur(m.frag, m.cii[1]));
+                    tree.packed_vertices.color_indices3.push_back(couleur(m.frag, m.cii[2]));
+                    tree.packed_vertices.color_weights.push_back((u16)(m.w0 | (m.w1 << 8)));
+                  }
+                  d->vertex_index_stream.push_back(UINT32_MAX);
+                  d->instance_groups.push_back(ig);
+                }
+                continue;
+              }
+              u32 matrix_idx = tree.packed_vertices.matrices.size();
+              tree.packed_vertices.matrices.push_back(inst.mat);
+              auto ajouter = [&](DrawMode dmode, s32 dtex, std::vector<tfrag3::StripDraw>& cat) {
+                for (size_t bi = 0; bi < bandes.size(); bi++) {
+                  const auto& b = bandes[bi];
+                  // dessin existant (meme texture, meme mode) ou nouveau
+                  tfrag3::StripDraw* d = nullptr;
+                  auto ex = static_draws_by_tex.find(dtex);
+                  if (ex != static_draws_by_tex.end()) {
+                    for (auto idx : ex->second) {
+                      if (idx < cat.size() && cat[idx].mode == dmode && cat[idx].tree_tex_id == dtex) {
+                        d = &cat[idx];
+                      }
+                    }
+                  }
+                  if (!d) {
+                    cat.emplace_back();
+                    static_draws_by_tex[dtex].push_back(cat.size() - 1);
+                    d = &cat.back();
+                    d->mode = dmode;
+                    d->tree_tex_id = dtex;
+                  }
+                  tfrag3::StripDraw::VisGroup vg;
+                  vg.vis_idx_in_pc_bvh = inst.vis_id;
+                  vg.tie_proto_idx = proto_idx;
+                  vg.num_inds = b.size() + 1;
+                  vg.num_tris = b.size() - 2;
+                  d->num_triangles += b.size() - 2;
+                  tfrag3::PackedTieVertices::MatrixGroup grp;
+                  grp.matrix_idx = matrix_idx;
+                  grp.start_vert = plages[bi].first;
+                  grp.end_vert = plages[bi].second;
+                  grp.has_normals = a_normales;
+                  tree.packed_vertices.matrix_groups.push_back(grp);
+                  tfrag3::StripDraw::VertexRun run;
+                  run.vertex0 = tree.packed_vertices.color_indices.size();
+                  run.length = b.size();
+                  for (u32 vi : b) {
+                    const auto& m = mel[vi];
+                    tree.packed_vertices.color_indices.push_back(couleur(m.frag, m.cii[0]));
+                    tree.packed_vertices.color_indices2.push_back(couleur(m.frag, m.cii[1]));
+                    tree.packed_vertices.color_indices3.push_back(couleur(m.frag, m.cii[2]));
+                    tree.packed_vertices.color_weights.push_back((u16)(m.w0 | (m.w1 << 8)));
+                  }
+                  d->runs.push_back(run);
+                  d->vis_groups.push_back(vg);
+                }
+              };
+              ajouter(mode, tex_lev, draws_by_category.at((int)info.category));
+              if (info.uses_envmap) {
+                s32 env_tex = get_or_add_texture(proto.envmap_adgif.value().combo_tex, lev, tdb);
+                ajouter(envmap_drawmode, env_tex,
+                        draws_by_category.at((int)info.envmap_second_draw_category));
+              }
+            }
+          }
+          lg::info("remake decor : {} remplace ({} triangles x {} instances)", proto.name, n_tris,
+                   proto.instances.size());
+          continue;
+        }
+      }
     }
 
     // create the model first
@@ -2760,6 +3251,7 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
                      });
   }
 
+  completer_couleurs(tree.packed_vertices);  // PC-REMAKE
   ASSERT(tree.static_draws.empty());
   tree.category_draw_indices[0] = 0;
   for (int i = 0; i < tfrag3::kNumTieCategories; i++) {
@@ -3036,7 +3528,7 @@ void extract_tie(const level_tools::DrawableTreeInstanceTie* tree,
     auto full_palette = make_big_palette(info);
 
     // create draws
-    add_vertices_and_static_draw(this_tree, out, tex_db, info, version);
+    add_vertices_and_static_draw(this_tree, out, tex_db, info, version, geo);
 
     // remap vis indices and merge
     for (auto& draw : this_tree.static_draws) {

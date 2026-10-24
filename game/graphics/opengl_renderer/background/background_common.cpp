@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_map>
@@ -465,6 +466,7 @@ SnowTrail s_snow;
 }  // namespace
 
 bool g_snow_geom_drawn = false;
+u64 g_snow_geom_frame = ~0ull;
 int g_pc_merc_shaders_seq = 0;
 
 void pc_snow_trail_frame(unsigned long long frame_idx) {
@@ -1133,6 +1135,28 @@ float pc_emissive_texture_boost(const std::string& debug_name) {
     return 1.0f + 0.45f * rule->intensity;
   }
   return 1.0f + 0.20f * rule->intensity;
+}
+
+float pc_lava_texture_kind(const std::string& debug_name) {
+  std::string lower = debug_name;
+  std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+  // croute : sol craquele du canyon de feu et du tube de lave (lave dans les fissures)
+  static const char* kCroute[] = {"crackedfloor", "cracked-floor", "craked-floor"};
+  // en fusion : nappes et coulees ; fcn-coal = la lave du canyon de feu entre les plaques (les
+  // braseros vil2-coal / vil3-coal des villages n'en font pas partie)
+  static const char* kFusion[] = {"lava-flow", "lava-floor", "thicklava", "magma", "vil3-lava",
+                                  "fcn-coal"};
+  for (const char* k : kCroute) {
+    if (lower.find(k) != std::string::npos) {
+      return 1.f;
+    }
+  }
+  for (const char* k : kFusion) {
+    if (lower.find(k) != std::string::npos) {
+      return 2.f;
+    }
+  }
+  return 0.f;
 }
 
 void pc_emissive_fold_into_all() {
@@ -2034,9 +2058,12 @@ DoubleDraw setup_opengl_from_draw_mode(DrawMode mode, u32 tex_unit, bool mipmap)
     // couleur delavee sur tout l'horizon. La MAGNIFICATION reste NEAREST (le
     // rendu net voulu de pres est intact) ; seule la minification lointaine
     // passe par les mipmaps.
+    // PC-REMAKE : avec les textures HD, le tirage au pixel le plus proche ne rendait plus le net voulu
+    // par les artistes mais des CARRES visibles de pres (sable, murs). Agrandissement lisse.
+    // (original : MIN mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST ; MAG GL_NEAREST)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                    mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   }
 
   // for some reason, they set atest NEVER + FB_ONLY to disable depth writes
@@ -2178,12 +2205,175 @@ std::array<math::Vector4f, 4> make_new_cam_mat(const math::Vector4f cam_T_w[4],
   return result;
 }
 
+// PC-REMAKE : SCULPTURE DU DECOR (voir background_common.h)
+namespace {
+std::unordered_map<GLuint, std::pair<GLuint, const PcSculptMap*>> s_sculpt_tex;  // thread GL
+bool sculpt_off_launch() {
+  static const bool off = std::getenv("QA_NO_SCULPT") != nullptr;
+  return off;
+}
+bool sculpt_off_now() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ % 64) == 0) {
+    FILE* f = fopen("/tmp/qa_no_sculpt", "r");
+    off = f != nullptr;
+    if (f) {
+      fclose(f);
+    }
+  }
+  return off;
+}
+}  // namespace
+
+const PcSculptMap* pc_sculpt_map(const std::string& debug_name) {
+  if (sculpt_off_launch()) {
+    return nullptr;
+  }
+  return tfrag3::pc_sculpt_height(debug_name);
+}
+
+void pc_sculpt_register_texture(GLuint color_tex, const std::string& debug_name) {
+  const auto* m = pc_sculpt_map(debug_name);
+  if (!m) {
+    return;
+  }
+  GLint align = 4;
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  GLuint t = 0;
+  glGenTextures(1, &t);
+  glBindTexture(GL_TEXTURE_2D, t);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m->w, m->h, 0, GL_RED, GL_UNSIGNED_BYTE, m->data.data());
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, align);
+  auto old = s_sculpt_tex.find(color_tex);
+  if (old != s_sculpt_tex.end()) {
+    glDeleteTextures(1, &old->second.first);
+  }
+  s_sculpt_tex[color_tex] = {t, m};
+}
+
+void pc_sculpt_forget_texture(GLuint color_tex) {
+  auto it = s_sculpt_tex.find(color_tex);
+  if (it != s_sculpt_tex.end()) {
+    glDeleteTextures(1, &it->second.first);
+    s_sculpt_tex.erase(it);
+  }
+}
+
+void pc_sculpt_bind(GLuint color_tex, GLuint program) {
+  float amp = 0.f;
+  auto it = s_sculpt_tex.find(color_tex);
+  if (it != s_sculpt_tex.end() && !sculpt_off_now()) {
+    glActiveTexture(GL_TEXTURE17);
+    glBindTexture(GL_TEXTURE_2D, it->second.first);
+    glActiveTexture(GL_TEXTURE0);
+    amp = it->second.second->amp;
+  }
+  glUniform1i(pc_uniform_loc(program, "sculpt_tex"), 17);
+  glUniform1f(pc_uniform_loc(program, "sculpt_amp"), amp);
+}
+
+// PC-REMAKE : SOLS — 1 sol (sable, terre, chemin, neige : relief adouci, il scintillait), 2 sol d'herbe
+// (vert etalonne : la texture d'origine est un vert-jaune tres sature que la lumiere refaite poussait
+// vers un citron pale, presque blanc en plein jour)
+float pc_sol_kind(const std::string& debug_name) {
+  std::string n = debug_name;
+  std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+  if (n.find("fringe") != std::string::npos || n.find("hang") != std::string::npos ||
+      n.find("clump") != std::string::npos) {
+    return 0.f;
+  }
+  if (n.find("leafyground") != std::string::npos || n.find("grass") != std::string::npos ||
+      n.find("moss") != std::string::npos) {
+    return 2.f;
+  }
+  return pc_detail_texture_amount(debug_name) > 0.f ? 1.f : 0.f;
+}
+bool pc_vert_off() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ % 64) == 0) {
+    FILE* f = fopen("/tmp/qa_no_vert", "r");
+    off = f != nullptr;
+    if (f) {
+      fclose(f);
+    }
+  }
+  return off;
+}
+
+// PC-REMAKE : PALMES — dose du pli et du relief des folioles (/tmp/pc_fronde : dose d'essai,
+// /tmp/qa_no_fronde : coupe) ; une texture de palme = nervure au bord s = 0
+float pc_fronde_dose() {
+  static int poll = 0;
+  static float dose = 1.f;
+  if ((poll++ % 64) == 0) {
+    dose = 1.f;
+    if (FILE* f = fopen("/tmp/pc_fronde", "r")) {
+      if (fscanf(f, "%f", &dose) != 1) {
+        dose = 1.f;
+      }
+      fclose(f);
+    }
+    if (FILE* f = fopen("/tmp/qa_no_fronde", "r")) {
+      fclose(f);
+      dose = 0.f;
+    }
+  }
+  return dose;
+}
+bool pc_is_palm_leaf_texture(const std::string& n) {
+  return n.find("palm-leaf") != std::string::npos || n.find("palmleaf") != std::string::npos ||
+         n.find("frond") != std::string::npos;
+}
+
+// PC-REMAKE : bord des couches de sol guide par la texture — /tmp/qa_no_solmel = coupe (A/B)
+bool pc_sol_melange_off() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ % 64) == 0) {
+    FILE* f = fopen("/tmp/qa_no_solmel", "r");
+    off = f != nullptr;
+    if (f) {
+      fclose(f);
+    }
+  }
+  return off;
+}
+
+// 22/10 : dose du RELIEF DES SURFACES (tfrag3.frag, relief_amt) — /tmp/qa_no_relief = coupe (A/B)
+float g_relief_amt = 1.f;
+float pc_relief_amount() {
+  static int poll = 0;
+  static bool off = false;
+  if ((poll++ % 64) == 0) {
+    FILE* f = fopen("/tmp/qa_no_relief", "r");
+    off = f != nullptr;
+    if (f) {
+      fclose(f);
+    }
+  }
+  return off ? 0.f : g_relief_amt;
+}
+
 void first_tfrag_draw_setup(const GoalBackgroundCameraData& settings,
                             SharedRenderState* render_state,
                             ShaderId shader) {
   const auto& sh = render_state->shaders[shader];
   sh.activate();
   auto id = sh.id();
+  glUniform1f(pc_uniform_loc(id, "relief_amt"), pc_relief_amount());
+  glUniform1f(pc_uniform_loc(id, "lava_kind"), 0.f);
+  glUniform1f(pc_uniform_loc(id, "sol_melange"), 0.f);
+  glUniform1f(pc_uniform_loc(id, "sol_kind"), 0.f);
+  glUniform1f(pc_uniform_loc(id, "fronde_pli"), 0.f);
+  glUniform1f(pc_uniform_loc(id, "fronde_pli_f"), 0.f);
   glUniform1i(pc_uniform_loc(id, "gfx_hack_no_tex"), Gfx::g_global_settings.hack_no_tex);
   glUniform1i(pc_uniform_loc(id, "decal"), false);
   glUniform1i(pc_uniform_loc(id, "tex_T0"), 0);
@@ -2878,6 +3068,7 @@ GLuint pc_snow_tess_begin(const GoalBackgroundCameraData& camera, SharedRenderSt
   const ShaderId sid = ShaderId::TFRAG3_SNOW;
   const GLuint pid = render_state->shaders[sid].id();
   g_snow_geom_drawn = true;
+  g_snow_geom_frame = render_state->frame_idx;
   first_tfrag_draw_setup(camera, render_state, sid);
   if (g_sun_shadow.enabled()) {
     g_sun_shadow.bind_for_receive(pid);

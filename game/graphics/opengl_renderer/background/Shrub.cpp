@@ -621,6 +621,12 @@ void Shrub::render_tree(int idx,
 
   Timer draw_timer;
 
+  // 22/10 : le G-buffer de normales recoit enfin la normale des arbustes. shrub.frag l'ecrivait
+  // (sortie 1, 13/10) mais l'attachement 1 n'etait pas dans la liste de dessin pendant leurs
+  // draws : elle etait jetee. Le post relumait donc l'herbe et les feuilles avec la normale du
+  // SOL derriere elles — ses facettes et son relief se voyaient a travers (herbe et feuillage
+  // transparents, zones a bords droits).
+  pc_normal_target(true);
   for (size_t draw_idx = 0; draw_idx < tree.draws->size(); draw_idx++) {
     const auto& draw = tree.draws->operator[](draw_idx);
     if (!tree.proto_vis_mask.at(draw.proto_idx)) {
@@ -675,6 +681,21 @@ void Shrub::render_tree(int idx,
       glUniform4fv(m_uniforms.grass_wind, 1, wind);
       glUniform1f(m_uniforms.shrub_facet,
                   (draw_idx < tree.facet_flags.size() && tree.facet_flags[draw_idx]) ? 1.f : 0.f);
+      // PC-REMAKE : touffes d'herbe etalonnees comme le sol d'herbe (sinon jaunes a cote de lui)
+      {
+        float herbe = 0.f;
+        if (!pc_vert_off() && tree.tex_names && tree.draws && draw_idx < tree.draws->size()) {
+          const s32 ti = (s32)(*tree.draws)[draw_idx].tree_tex_id;
+          if (ti >= 0 && ti < (int)tree.tex_names->size()) {
+            const auto& n = (*tree.tex_names)[ti].debug_name;
+            herbe = (n.find("grass") != std::string::npos || n.find("moss") != std::string::npos)
+                        ? 1.f
+                        : 0.f;
+          }
+        }
+        glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::SHRUB].id(), "herbe_vert"),
+                    herbe);
+      }
       glStencilOp(GL_KEEP, GL_KEEP,
                   (draw_idx < tree.veg_mark.size() && tree.veg_mark[draw_idx]) ? GL_REPLACE
                                                                                 : GL_KEEP);
@@ -735,6 +756,7 @@ void Shrub::render_tree(int idx,
     }
   }
 
+  pc_normal_target(false);
   glBindVertexArray(0);
   glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
   glStencilMask(0xFF);

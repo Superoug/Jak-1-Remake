@@ -2,6 +2,8 @@
 
 #include "Loader.h"
 
+#include "game/graphics/opengl_renderer/background/background_common.h"
+
 #include "common/global_profiler/GlobalProfiler.h"
 
 constexpr float LOAD_BUDGET = 4.5f;
@@ -53,6 +55,8 @@ class TextureLoaderStage : public LoaderStage {
       while (data.lev_data->textures.size() < data.lev_data->level->textures.size()) {
         auto& tex = data.lev_data->level->textures[data.lev_data->textures.size()];
         data.lev_data->textures.push_back(add_texture(*data.tex_pool, tex, false));
+        // PC-REMAKE : carte de hauteur sculptee du decor (si l'outil en a fait une pour cette texture)
+        pc_sculpt_register_texture(data.lev_data->textures.back(), tex.debug_name);
         bytes_this_run += tex.w * tex.h * 4;
         tex_this_run++;
         if (tex_this_run > 20) {

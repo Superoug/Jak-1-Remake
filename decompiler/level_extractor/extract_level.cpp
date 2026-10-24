@@ -22,6 +22,7 @@
 #include "decompiler/level_extractor/extract_tfrag.h"
 #include "decompiler/level_extractor/extract_tie.h"
 #include "decompiler/level_extractor/level_editor.h"
+#include "decompiler/level_extractor/shore_map.h"
 #include "decompiler/level_extractor/fr3_to_gltf.h"
 #include "goalc/build_actor/jak1/build_actor.h"
 
@@ -259,6 +260,8 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   std::vector<std::pair<level_tools::shrub_types::DrawableTreeInstanceShrub*, std::string>>
       deferred_shrubs;
 
+  // PC-REMAKE: the decor (tie) replacement looks its files up by level name.
+  level_data.level_name = bsp_header.name;
   for (auto& draw_tree : bsp_header.drawable_tree_array.trees) {
     if (tfrag_trees.count(draw_tree->my_type())) {
       auto as_tfrag_tree = dynamic_cast<level_tools::DrawableTreeTfrag*>(draw_tree.get());
@@ -547,6 +550,11 @@ void extract_all_levels(const ObjectFileDB& db,
       },
       rest.size(), std::max(1, std::min(num_workers, (int)rest.size())));
   threads.join();
+  // PC-REMAKE : cartes du rivage (vagues), a partir de l'export de l'editeur de niveaux
+  if (config.game_version == GameVersion::Jak1) {
+    build_shore_maps(file_util::get_jak_project_dir() / "decompiler_out" / "jak1" / "editor",
+                     output_path.parent_path() / "rivages");
+  }
 }
 
 }  // namespace decompiler

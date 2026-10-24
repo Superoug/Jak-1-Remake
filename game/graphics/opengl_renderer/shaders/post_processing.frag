@@ -75,6 +75,7 @@ uniform vec4 water_glitter;
 uniform float water_murk_ocean;
 // xyz = normalized direction TOWARDS the sun (world), w = 1 when it is up
 uniform vec4 sun_dir;
+uniform float foliage_transl;  // PC-REMAKE : translucidite du feuillage (0 = coupee)
 
 // World position is rebuilt from the depth buffer with the inverse of the
 // game's own camera matrix, which is what makes local lights possible at all:
@@ -169,6 +170,148 @@ float snow_relief(vec3 pm, float now) {
 // 20/10 v3 : rayons au quart de resolution, adoucis (unite 8)
 uniform sampler2D shaft_tex;
 uniform float has_shaft_tex;
+// ---- 22/10 : FAISCEAUX DE CANOPEE (jungle). Des colonnes de lumiere descendent du feuillage,
+// meme la ou le vrai soleil ne passe pas : elles tombent d'en haut (axe L presque vertical,
+// penche de ~20 degres vers le soleil). Une colonne par cellule de 7 m, une cellule sur trois
+// environ. Meme code dans shafts.frag (l'air des colonnes).
+const float CB_CELL = 7.0;
+vec3 cb_axis(vec3 to_sun) {
+  return normalize(vec3(to_sun.x * 0.36, 1.0, to_sun.z * 0.36));
+}
+// projection le long de L sur le plan y = 0 (metres) : une colonne y devient un point
+vec2 cb_proj(vec3 p_m, vec3 L) {
+  return p_m.xz - L.xz / L.y * p_m.y;
+}
+float cb_hash(vec2 c, float k) {
+  return fract(sin(dot(c, vec2(127.1, 311.7)) + k * 74.7) * 43758.5453);
+}
+// colonne de la cellule : centre (m), rayon (m), poids (0 = pas de colonne)
+vec4 cb_beam(vec2 cell, float t) {
+  if (cb_hash(cell, 0.0) > 0.24) {
+    return vec4(0.0);
+  }
+  float h = cb_hash(cell, 1.0);
+  float r = mix(0.45, 1.3, h);
+  vec2 off = vec2(cb_hash(cell, 2.0), cb_hash(cell, 3.0));
+  vec2 ctr = cell * CB_CELL + vec2(r) + off * (CB_CELL - 2.0 * r);
+  float w = mix(0.55, 1.0, cb_hash(cell, 4.0));
+  // le feuillage bouge : la colonne respire doucement
+  w *= 0.78 + 0.22 * sin(t * (0.45 + 0.35 * h) + 6.2832 * cb_hash(cell, 5.0));
+  return vec4(ctr, r, w);
+}
+// une colonne n'a de source que s'il y a du ciel au-dessus du feuillage : le vrai soleil
+// doit eclairer l'un des points 12 m ou 24 m plus haut le long de L (sous la canopee : oui ;
+// dans une salle enterree ou sous un toit : non). Hors de la carte d'ombres : oui.
+float cb_ciel(vec3 q, vec3 L) {
+  for (int i = 1; i <= 2; i++) {
+    vec3 s = (sun_light_vp * vec4(q + L * (12.0 * 4096.0 * float(i)), 1.0)).xyz * 0.5 + 0.5;
+    if (s.x < 0.01 || s.x > 0.99 || s.y < 0.01 || s.y > 0.99 || s.z > 1.0) {
+      return 1.0;
+    }
+    if (texture(sun_shadow_tex, vec3(s.xy, s.z - 0.002)) > 0.5) {
+      return 1.0;
+    }
+  }
+  return 0.0;
+}
+// ---- 22/10 : VAGUES DE RIVAGE. Meme code dans post_processing.frag (nappe qui monte sur le sable, sable mouille)
+// et ocean_common.frag (ecume sur l'eau) : une vague par periode
+// de 7 s, decalee le long de la cote par un bruit (les fronts n'arrivent pas tous ensemble).
+// Phase 0 -> 0.55 : la crete avance de 1,6 m de fond jusqu'au bord ; 0.55 -> 1 : elle monte
+// sur le sable puis se retire.
+float sh_hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float sh_noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(sh_hash(i), sh_hash(i + vec2(1.0, 0.0)), f.x),
+             mix(sh_hash(i + vec2(0.0, 1.0)), sh_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float sh_phase(vec2 xz_m, float t) {
+  float n = sh_noise(xz_m * 0.045) * 1.7 + sh_noise(xz_m * 0.13 + 3.7) * 0.35;
+  return fract(t / 7.0 + n);
+}
+// hauteur (m au-dessus de la mer) atteinte par la nappe a la phase ph ; hmax depend du lieu
+float sh_runup(float ph, float hmax) {
+  if (ph < 0.55) {
+    return 0.0;
+  }
+  float s = (ph - 0.55) / 0.45;
+  return s < 0.3 ? hmax * sin(s / 0.3 * 1.5708) : hmax * pow(1.0 - (s - 0.3) / 0.7, 1.4);
+}
+// dentelle d'ecume (motif ancre au monde, qui derive doucement)
+float sh_lace(vec2 xz_m, float t) {
+  // PC-REMAKE : ecume plus fine, en filaments (trois echelles, la plus fine etiree)
+  // (original : a = noise(xz * 1.7 ...), b = noise(xz * 4.1 ...), smoothstep(0.32, 0.72, 0.62 a + 0.38 b))
+  float a = sh_noise(xz_m * 2.6 + vec2(t * 0.11, -t * 0.07));
+  float b = sh_noise(xz_m * vec2(7.0, 3.2) - vec2(t * 0.05, t * 0.09));
+  float f = sh_noise(xz_m * 13.0 + vec2(t * 0.2, 0.0));
+  float v = 0.5 * a + 0.32 * b + 0.18 * f;
+  return smoothstep(0.38, 0.66, v) * (0.75 + 0.25 * f);
+}
+// ---- PC-REMAKE : HOULE. Champ de vagues de la surface de la mer : six trains (longueurs 0,7 a
+// 12 m) qui avancent a la vitesse des vagues en eau profonde (omega = sqrt(g k)), tous a peu pres
+// dans le sens du vent. Un train s'efface quand il devient plus fin que quelques pixels (pas de
+// moire au loin). Rend la pente de la surface (dh/dx, dh/dz), metres et secondes.
+vec2 houle_pente(vec2 xz, float t, float pix_m) {
+  // directions etalees autour du vent (pas de rangees paralleles), longueurs non harmoniques
+  const vec2 D[6] = vec2[6](vec2(0.80, 0.60), vec2(0.93, -0.37), vec2(0.38, 0.93),
+                            vec2(0.99, 0.10), vec2(0.55, -0.83), vec2(0.07, 1.00));
+  const float L[6] = float[6](12.3, 7.4, 4.6, 2.9, 1.75, 1.05);
+  const float K[6] = float[6](0.050, 0.052, 0.050, 0.044, 0.036, 0.028);
+  // champ deforme a deux echelles et en groupes de vagues : la surface n'a pas de motif
+  vec2 n2 = vec2(sh_noise(xz * 0.045 + 1.3), sh_noise(xz * 0.045 + 7.9));
+  vec2 n3 = vec2(sh_noise(xz * 0.17 + 4.1), sh_noise(xz * 0.17 + 9.6));
+  vec2 w0 = xz + n2 * 9.0 + n3 * 1.6;
+  vec2 g = vec2(0.0);
+  for (int i = 0; i < 6; i++) {
+    float k = 6.2832 / L[i];
+    float om = sqrt(9.81 * k);
+    float f = 1.0 - smoothstep(L[i] * 0.10, L[i] * 0.30, pix_m);
+    if (f <= 0.0) {
+      continue;
+    }
+    // chaque train a ses propres groupes (zones calmes, zones plus agitees) qui derivent
+    float grp = sh_noise(xz * (0.9 / L[i]) + vec2(float(i) * 3.1 + t * 0.04, float(i) * 1.7));
+    grp = 0.2 + 1.6 * grp * grp;
+    g += D[i] * (K[i] * f * grp * cos(k * dot(D[i], w0) - om * t + float(i) * 1.7));
+  }
+  return g;
+}
+// Eclairage de la surface par la houle (meme mer turquoise, rien n'est blanchi) : les faces
+// tournees vers l'horizon refletent plus de ciel (crete un peu plus claire, teinte de l'eau
+// gardee), les faces vers la camera laissent voir plus d'eau profonde ; reflets du soleil fins.
+vec3 houle_surface(vec3 c, vec3 N, vec3 I, float jour, float fondu) {
+  float cv = clamp(dot(-I, N), 0.0, 1.0);
+  float cf = clamp(-I.y, 0.0, 1.0);
+  float F = 0.02 + 0.98 * pow(1.0 - cv, 5.0);
+  float F0 = 0.02 + 0.98 * pow(1.0 - cf, 5.0);
+  // contraste doux : la mer garde son grand degrade, les vagues ne font que le nuancer
+  float d = clamp((F - F0) * 3.0, -0.18, 0.24) * fondu;
+  vec3 clair = c * 1.20 + vec3(0.03, 0.06, 0.06) * max(jour, 0.2);
+  vec3 sombre = c * 0.86;
+  c = d > 0.0 ? mix(c, clair, d / 0.24 * 0.5) : mix(c, sombre, -d / 0.18 * 0.5);
+  if (sun_dir.w > 0.5) {
+    vec3 R = reflect(I, N);
+    float rs = max(dot(R, sun_dir.xyz), 0.0);
+    float glint = pow(rs, 900.0) * 3.0 + pow(rs, 120.0) * 0.22;
+    c += vec3(1.0, 0.95, 0.82) * glint * jour * fondu;
+  }
+  return c;
+}
+float cb_hash3(vec3 c) {
+  return fract(sin(dot(c, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+// bruit doux (taches de feuilles dans la lumiere au sol)
+float cb_vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(cb_hash(i, 7.0), cb_hash(i + vec2(1.0, 0.0), 7.0), f.x),
+             mix(cb_hash(i + vec2(0.0, 1.0), 7.0), cb_hash(i + vec2(1.0, 1.0), 7.0), f.x), f.y);
+}
 uniform vec4 lamp_pos[MAX_LAMPS];    // xyz = world position, w = radius
 uniform vec4 lamp_color[MAX_LAMPS];  // rgb = colour, w = intensity
 // PERF 14/10 : position ecran des lampes, calculee une fois par image par le C++
@@ -276,6 +419,103 @@ vec3 world_normal(vec2 uv, float d, vec3 P) {
 float scene_depth(vec2 uv) {
   return texture(depth_tex, uv).r;
 }
+// vrai si le point monde q, vu a l'ecran, montre la mer (le fond vu a travers est sous le
+// niveau de la mer) ; hors ecran : non
+bool sh_mer(vec3 q) {
+  vec4 qc = clip_from_world * vec4(q - cam_trans.xyz, 1.0);
+  if (qc.w < 1e-4) {
+    return false;
+  }
+  vec2 quv = (qc.xy / qc.w) * 0.5 + 0.5;
+  if (quv.x < 0.0 || quv.x > 1.0 || quv.y < 0.0 || quv.y > 1.0) {
+    return false;
+  }
+  float qd = scene_depth(quv);
+  if (qd < 1e-5) {
+    return false;
+  }
+  vec3 w = world_from_depth(quv, qd);
+  if (w.y > water_glitter.x - 0.15 * 4096.0) {
+    return false;
+  }
+  // la surface traversee par ce regard doit etre LA (a moins de 1,5 m de q) : vue par-dessus
+  // un talus, la mer lointaine derriere lui ne compte pas
+  vec3 cr = cam_trans.xyz + (w - cam_trans.xyz) * ((water_glitter.x - cam_trans.y) / (w.y - cam_trans.y));
+  return length(cr.xz - q.xz) < 1.5 * 4096.0;
+}
+// vrai si le point monde q (au niveau de la mer), vu a l'ecran, montre la terre ferme
+bool sh_terre(vec3 q) {
+  vec4 qc = clip_from_world * vec4(q - cam_trans.xyz, 1.0);
+  if (qc.w < 1e-4) {
+    return false;
+  }
+  vec2 quv = (qc.xy / qc.w) * 0.5 + 0.5;
+  if (quv.x < 0.0 || quv.x > 1.0 || quv.y < 0.0 || quv.y > 1.0) {
+    return false;
+  }
+  float qd = scene_depth(quv);
+  return qd > 1e-5 && world_from_depth(quv, qd).y > water_glitter.x - 0.05 * 4096.0;
+}
+// distance horizontale (m) du point P a la mer (vers_mer) ou a la terre ferme, au plus 4,5 m
+// (99 = rien) : dans chacune des 8 directions, premier anneau touche (1,2 / 2,6 / 4,5 m) puis
+// dichotomie ; on garde le minimum — une mesure continue quand P se deplace (prendre seulement
+// la premiere direction touchee faisait des bords droits)
+float sh_distance(vec3 P0, bool vers_mer) {
+  float best = 99.0;
+  for (int k = 0; k < 8; k++) {
+    vec3 d = vec3(kOct8[k].x, 0.0, kOct8[k].y) * 4096.0;
+    float lo = 0.0, hi = 0.0;
+    for (int ri = 0; ri < 3; ri++) {
+      float r = ri == 0 ? 1.2 : (ri == 1 ? 2.6 : 4.5);
+      if (r > best) {
+        break;
+      }
+      vec3 q = P0 + d * r;
+      if (vers_mer ? sh_mer(q) : sh_terre(q)) {
+        hi = r;
+        break;
+      }
+      lo = r;
+    }
+    if (hi > 0.0) {
+      for (int it = 0; it < 4; it++) {
+        float rm = 0.5 * (lo + hi);
+        vec3 q = P0 + d * rm;
+        if (vers_mer ? sh_mer(q) : sh_terre(q)) {
+          hi = rm;
+        } else {
+          lo = rm;
+        }
+      }
+      best = min(best, 0.5 * (lo + hi));
+    }
+  }
+  return best;
+}
+
+// PC-REMAKE : CARTES DU RIVAGE (une par niveau cotier, outils/rivages.py) : distance signee au trait de
+// cote en metres, > 0 en mer, < 0 sur la terre, bornee a 32 m. 99 = aucune carte ici (on garde
+// alors la recherche a l'ecran ci-dessus).
+uniform sampler2D riv_tex0;
+uniform sampler2D riv_tex1;
+uniform vec4 riv_box[2];  // x0, z0 (m), 1/largeur, 1/profondeur
+uniform int riv_n;
+float riv_dist(vec2 xz_m) {
+  float d = 99.0;
+  if (riv_n > 0) {
+    vec2 uv = (xz_m - riv_box[0].xy) * riv_box[0].zw;
+    if (uv.x > 0.002 && uv.x < 0.998 && uv.y > 0.002 && uv.y < 0.998) {
+      d = texture(riv_tex0, uv).r;
+    }
+  }
+  if (riv_n > 1) {
+    vec2 uv = (xz_m - riv_box[1].xy) * riv_box[1].zw;
+    if (uv.x > 0.002 && uv.x < 0.998 && uv.y > 0.002 && uv.y < 0.998) {
+      d = min(d, texture(riv_tex1, uv).r);
+    }
+  }
+  return d;
+}
 
 // crude screen-space AO from depth alone: neighbors closer than us occlude
 // Ambient occlusion done properly: for each neighbour, unproject it to a world
@@ -324,10 +564,18 @@ float contact_shadow(vec3 P, vec3 L, float pix_dist) {
     if (sd < 1e-5) {
       continue;  // sky: nothing in the way
     }
-    float behind = length(world_from_depth(uv, sd) - cam_trans.xyz) - length(sp - cam_trans.xyz);
+    // PC-REMAKE : un echantillon est dans l'ombre s'il est CACHE a la camera (la surface visible est
+    // plus proche que lui). Le signe inverse ombrait le sol degage et epargnait l'ombre de Jak :
+    // halo clair sous le personnage, sable marbre.
+    // (original : float behind = length(world_from_depth(uv, sd) - cam_trans.xyz) -
+    //                            length(sp - cam_trans.xyz);)
+    float behind = length(sp - cam_trans.xyz) - length(world_from_depth(uv, sd) - cam_trans.xyz);
     // smooth entry and exit of the thickness window, so the shadow fades in
-    float hit = smoothstep(4096.0 * 0.05, 4096.0 * 0.35, behind) *
-                (1.0 - smoothstep(4096.0 * 4.0, 4096.0 * 7.0, behind));
+    // PC-REMAKE : epaisseur d'obstacle bornee a ~1 m : un personnage (quelques dizaines de cm)
+    // ne projette plus un pave d'ombre de plusieurs metres derriere lui
+    // (original : smoothstep(0.05, 0.35 m) * (1 - smoothstep(4 m, 7 m)))
+    float hit = smoothstep(4096.0 * 0.03, 4096.0 * 0.15, behind) *
+                (1.0 - smoothstep(4096.0 * 0.6, 4096.0 * 1.2, behind));
     occ += hit * w;
   }
   return weight > 0.0 ? clamp(occ / weight * 2.4, 0.0, 1.0) : 0.0;
@@ -377,6 +625,7 @@ vec3 bloom_tap(vec3 s, float thresh) {
 }
 
 void main() {
+  bool pc_feuillage = false;  // PC-REMAKE : pixel de feuillage (translucidite, bloc soleil)
 #ifdef POST_PASS2
   // reprise de la passe 1 : couleur eclairee, aretes (a >= 0) ou ciel (a < 0)
   vec4 lit = texelFetch(lit_tex, ivec2(tex_coord * vec2(textureSize(lit_tex, 0))), 0);
@@ -434,6 +683,7 @@ void main() {
       }
       // 17/10 : alpha 0.95 = feuillage (tie_wind, shrub, feuilles tfrag)
       foliage_px = gn.a > 0.92 && gn.a < 0.98;
+      pc_feuillage = foliage_px;
       if (gn.a > 0.5) {
         vec3 tn = gn.rgb * 2.0 - 1.0;
         float tl = length(tn);
@@ -455,7 +705,13 @@ void main() {
       // 17/10 : sauf le FEUILLAGE (feuilles fines, double face) : retourner sa normale
       // assombrissait d'un coup toutes les feuilles situees au-dessus de la camera — une
       // ligne nette a hauteur des yeux sur les couronnes des palmiers, a l'horizon.
-      if (!foliage_px && dot(N, cam_trans.xyz - P) < 0.0) {
+      // 22/10 : sauf aussi une normale EXACTEMENT verticale : c'est la convention des dessins
+      // feuillage / a decoupe du decor (Tfrag3Data, phong_subdivide_impl : normale
+      // vers le haut), pas un vrai sol — un sol vu par-dessus ne tourne jamais le dos a la
+      // camera. La retourner assombrissait d'un coup ces objets au-dessus de la hauteur des
+      // yeux : une ligne nette a l'horizon (souches de la jungle).
+      // (original : if (!foliage_px && dot(N, cam_trans.xyz - P) < 0.0) {)
+      if (!foliage_px && N.y < 0.995 && dot(N, cam_trans.xyz - P) < 0.0) {
         N = -N;
       }
     } else {
@@ -600,6 +856,59 @@ void main() {
   //  — a tester a l'image ; l'etat ci-dessous est celui mesure et valide.)
   float far_flat = sky_pixel ? 0.0 : smoothstep(4096.0 * 180.0, 4096.0 * 320.0, view_dist);
   float flat_amt = max(near_flat, far_flat);
+  // 22/10 : SOUS L'EAU, ECLAIRAGE RECONSTRUIT EN DEGRADE. La mer ne grave pas de profondeur
+  // (elle est transparente) : pour un pixel vu a travers l'eau, P et N sont ceux du FOND. La
+  // pleine mer (pas de fond dessine derriere) n'etait jamais relumee, l'eau au-dessus d'un
+  // haut-fond l'etait (soleil, ciel) : la limite du fond dessinait une nappe claire a bords
+  // droits, en polygones (village). Le haut-fond garde sa clarte, mais dosee par la part de
+  // haut-fond (fond a moins de 4,5 m) sur un disque de 3 m autour du point de la surface : elle
+  // s'estompe en degrade vers le large. Occlusion et ombre de contact du fond : retirees.
+  // 22/10 : NEIGE CREUSEE (traces de Jak, geometrie decoupee). Le post relumait les parois du
+  // sillon selon leur pente, avec la lumiere CHAUDE du soleil, sans savoir qu'elles etaient a
+  // l'ombre des falaises : les parois tournees vers le soleil viraient au beige-brun. La neige
+  // creusee est desormais eclairee comme la neige qui l'entoure (normale de la surface
+  // d'origine, verticale, pour tout l'eclairage) : elle reste blanche ; son modele vient de
+  // l'occlusion, de l'ombre du bord et de la teinte de neige tassee (bloc des traces, plus bas).
+  float neige_creux = 0.0;
+  if (!sky_pixel && snow_trail.x > 0.5 && snow_geom > 0.5) {
+    vec3 pm0 = P / 4096.0;
+    if (length(pm0.xz - snow_trail.yz / 4096.0) < 49.0) {
+      float h0 = snow_relief(pm0, snow_trail.w);
+      float h1 = snow_relief(vec3(pm0.x, pm0.y - h0, pm0.z), snow_trail.w);
+      neige_creux = smoothstep(0.005, 0.06, -h1);
+    }
+  }
+  float sous_eau = 0.0;
+  float haut_fond = 1.0;  // part de haut-fond autour du point (1 = hors de l'eau)
+  if (!sky_pixel && (water_glitter.y > 0.001 || water_glitter.z > 0.001) &&
+      cam_trans.y > water_glitter.x && P.y < water_glitter.x) {
+    float ts = (water_glitter.x - cam_trans.y) / (P.y - cam_trans.y);
+    float col = view_dist * (1.0 - clamp(ts, 0.0, 1.0)) / 4096.0;
+    // (des 25 cm d'eau : une transition sur 1 m suivait la profondeur, donc la marche du banc)
+    sous_eau = smoothstep(0.02, 0.25, col);
+    if (sous_eau > 0.001) {
+      vec3 ps = cam_trans.xyz + (P - cam_trans.xyz) * clamp(ts, 0.0, 1.0);
+      float hf = 2.0 * (P.y > water_glitter.x - 4.5 * 4096.0 ? 1.0 : 0.0);
+      float hn = 2.0;
+      for (int k = 0; k < 12; k++) {
+        float r = (k < 8 ? 3.0 : 1.5) * 4096.0;
+        vec2 o = k < 8 ? kOct8[k] : kOct8[(k - 8) * 2 + 1];
+        vec4 qc = clip_from_world * vec4(ps + vec3(o.x, 0.0, o.y) * r - cam_trans.xyz, 1.0);
+        if (qc.w < 1e-4) {
+          continue;
+        }
+        vec2 quv = (qc.xy / qc.w) * 0.5 + 0.5;
+        if (quv.x < 0.0 || quv.x > 1.0 || quv.y < 0.0 || quv.y > 1.0) {
+          continue;
+        }
+        float qd = scene_depth(quv);
+        float qy = qd > 1e-5 ? world_from_depth(quv, qd).y : -1e9;
+        hf += qy > water_glitter.x - 4.5 * 4096.0 ? 1.0 : 0.0;
+        hn += 1.0;
+      }
+      haut_fond = hf / hn;
+    }
+  }
 
   // ---- depth-aware: SSAO (contact shading in crevices) ----
   if (depth_fx.x > 0.001 && !sky_pixel) {
@@ -608,6 +917,7 @@ void main() {
     ao *= 1.0 - edge_amt;  // pas d'anneau d'occlusion derrière les objets fins
     ao *= 1.0 - near_flat * 0.9;  // champ proche/cinematique : ne pas cerner les facettes
     ao *= (1.0 - emissive_px);  // 21/09 : pas d'occlusion sur une source
+    ao *= 1.0 - sous_eau;  // 22/10 : pas d'occlusion du fond vu a travers l'eau
     c *= mix(vec3(1.0), vec3(0.88, 0.92, 1.02), ao * depth_fx.x) * (1.0 - ao * depth_fx.x * 0.85);
   }
 
@@ -632,6 +942,132 @@ void main() {
   // the street lamps are computed with real N.L maths instead of screen-space
   // approximations. The original game had none of this — its lighting was
   // baked flat into vertex colours, which is why it reads as 2002.
+  // 22/10 : VAGUES DE RIVAGE SUR LE SABLE (l'ecume sur l'eau est dans ocean_common.frag). Sur
+  // le terrain bas qui borde la mer, une fine nappe d'eau monte puis se retire a chaque vague
+  // (jusqu'a 1,6 a 3,2 m du bord), avec un front d'ecume ; le sable qu'elle couvre reste
+  // mouille (plus sombre) et seche entre deux vagues. La distance au bord de l'eau est cherchee
+  // a l'ecran (sh_distance) : rien sans mer visible a moins de 4,5 m.
+  if (!sky_pixel && water_glitter.y > 0.001 && view_dist < 4096.0 * 90.0) {
+    float hy = (P.y - water_glitter.x) / 4096.0;
+    // PC-REMAKE : avec une carte du rivage, la nappe monte aussi sur le haut de plage (la mer
+    // d'origine monte et descend : le sable du bord est jusqu'a 1 m au-dessus du plan)
+    // (original : hy < 0.9 ; fondu 0.55 -> 0.9)
+    float drv = riv_dist(P.xz / 4096.0);
+    float hmax = drv < 90.0 ? 1.5 : 0.9;
+    // pentes douces seulement (plage) : sur un talus raide la nappe ne monte pas
+    if (hy > -0.02 && hy < hmax && N.y > 0.72) {
+      // PC-REMAKE : distance a la mer lue dans la carte du rivage (original : sh_distance(P, true))
+      float dmer = drv < 90.0 ? max(-drv, 0.0) : sh_distance(P, true);
+      if (dmer < 90.0) {
+        vec2 xz = P.xz / 4096.0;
+        float t = water_glitter.w;
+        float ph = sh_phase(xz, t);
+        float fmax = 1.6 + 1.6 * sh_noise(xz * 0.08 + 1.3);
+        float front = sh_runup(ph, fmax);
+        float jour = clamp(1.0 - night_fx.x, 0.25, 1.0);
+        float loin = (1.0 - smoothstep(50.0, 90.0, view_dist / 4096.0)) *
+                     (1.0 - smoothstep(hmax * 0.6, hmax, hy)) * smoothstep(0.72, 0.86, N.y);
+        // sable mouille : la zone que les vagues atteignent, qui seche entre deux vagues ; le
+        // bord de l'eau reste toujours trempe
+        float zone = 1.0 - smoothstep(fmax * 0.75, fmax * 1.05, dmer);
+        float seche = ph < 0.55 ? ph / 0.55 : 0.0;
+        float mouille = max(zone * (1.0 - 0.45 * seche), 1.0 - smoothstep(0.0, 0.35, dmer)) * loin;
+        c = mix(c, c * vec3(0.72, 0.74, 0.78), mouille * 0.75);
+        // nappe : fine pellicule d'eau claire, plus epaisse loin du front
+        if (front > 0.02) {
+          float nappe = (1.0 - smoothstep(front - 0.10, front + 0.02, dmer)) * loin;
+          float epais = smoothstep(0.0, 0.9, front - dmer);
+          // sous la nappe : sable trempe (plus sombre, a peine bleute) + reflet du ciel, plus
+          // fort en rasant (Fresnel) et quand l'eau est plus epaisse
+          vec3 Vn = normalize(cam_trans.xyz - P);
+          float fres = 0.04 + 0.96 * pow(1.0 - clamp(Vn.y, 0.0, 1.0), 5.0);
+          // PC-REMAKE : nappe plus lisible : sable trempe plus sombre et teinte d'eau, reflet du ciel
+          // (original : sous = c * (0.80, 0.90, 0.95), film = mix(sous, ciel, fres * (0.35 + 0.45 epais)
+          //  borne 0.6), dose nappe * (0.55 + 0.35 epais))
+          vec3 sous = c * vec3(0.66, 0.80, 0.84);
+          vec3 ciel = sky_color.rgb * (0.55 + 0.45 * jour);
+          vec3 film = mix(sous, ciel, clamp(0.12 + fres * (0.40 + 0.45 * epais), 0.0, 0.65));
+          c = mix(c, film, nappe * (0.70 + 0.25 * epais));
+          // front d'ecume (dentelle) et bulles qui trainent derriere lui
+          float lace = sh_lace(xz, t);
+          float bq = (dmer - front) / 0.2;
+          float bord = exp(-bq * bq);
+          float traine = (1.0 - smoothstep(0.0, 0.6, front - dmer)) * nappe;
+          float ecume = clamp(bord * (0.6 + 0.4 * lace) + traine * lace * 0.55, 0.0, 1.0) * loin;
+          vec3 blanc = c + (vec3(0.97, 0.98, 1.0) - c) * 0.9 * jour;
+          c = mix(c, blanc, ecume * 0.95);
+        }
+      }
+    } else if (hy < -0.15 && cam_trans.y > water_glitter.x + 0.3 * 4096.0) {
+      // COTE MER : le pixel montre l'eau (fond sous la surface). Au point ou le regard traverse
+      // la surface, distance a la terre ferme (meme recherche) ; les cretes des vagues y
+      // avancent vers le bord et y arrivent quand la nappe commence a monter sur le sable.
+      vec3 ps = cam_trans.xyz + (P - cam_trans.xyz) * ((water_glitter.x - cam_trans.y) / (P.y - cam_trans.y));
+      float dps = length(ps - cam_trans.xyz) / 4096.0;
+      // PC-REMAKE : avec une carte du rivage, les vagues se voient de plus loin (original : dps < 45.0)
+      float drs = riv_dist(ps.xz / 4096.0);
+      if (dps < (drs < 90.0 ? 90.0 : 45.0)) {
+        float dter = drs < 90.0 ? max(drs, 0.0) : sh_distance(ps, false);
+        if (dter < 90.0) {
+          vec2 xz = ps.xz / 4096.0;
+          float t = water_glitter.w;
+          float ph = sh_phase(xz, t);
+          float jour = clamp(1.0 - night_fx.x, 0.25, 1.0);
+          float loin = 1.0 - smoothstep(drs < 90.0 ? 60.0 : 30.0, drs < 90.0 ? 90.0 : 45.0, dps);
+          float lace = sh_lace(xz, t);
+          float ecume = 0.0;
+          float rouleau = 0.0;
+          if (drs < 90.0) {
+            // PC-REMAKE : VAGUE QUI ARRIVE DU LARGE. La houle part de 18 m, ralentit et se creuse en
+            // approchant (dos en pente douce cote large, front raide cote plage) ; sa levre
+            // laisse passer la lumiere (bande turquoise claire). Vers 4 m elle deferle : ecume
+            // sur la crete, puis un tapis d'ecume qui la suit et se dechire.
+            if (ph < 0.55) {
+              // chaque vague a sa force, qui varie aussi le long de la cote : certaines cassent
+              // franchement, d'autres arrivent presque sans ecume
+              float force = 0.25 + 0.75 * sh_noise(xz * 0.16 + vec2(t * 0.021, t * 0.013));
+              float sp = ph / 0.55;
+              float xc = 18.0 * pow(1.0 - sp, 1.25);
+              float dx = dter - xc;
+              float bosse = dx > 0.0 ? exp(-dx * dx / 4.8) : exp(-dx * dx / 0.5);
+              float casse = smoothstep(5.5, 3.2, xc) * force;
+              rouleau = bosse * smoothstep(18.0, 8.0, xc) * (1.0 - 0.7 * casse) * (0.5 + 0.5 * force);
+              float cq = dx / ((0.28 + 0.05 * xc) * (0.7 + 0.6 * sh_noise(xz * 0.5 + 2.3)));
+              float crete = exp(-cq * cq) * casse;
+              float tapis = (dx > 0.0 ? exp(-dx / 2.6) : exp(dx / 0.3)) * casse;
+              // la crete n'est jamais un trait continu : elle se dechire comme le tapis
+              ecume = crete * smoothstep(0.05, 0.55, lace) + tapis * smoothstep(0.25, 0.85, lace) * 0.6;
+            }
+            // ressac : la nappe redescend du sable, ecume dechiree pres du bord
+            float retrait = ph > 0.55 ? (1.0 - smoothstep(0.0, 2.2, dter)) * (1.0 - (ph - 0.55) / 0.45) : 0.0;
+            float lisere = 1.0 - smoothstep(0.0, 0.35 + 0.2 * sin(ph * 6.2832), dter);
+            ecume = max(ecume, (lisere * 0.7 + retrait * 0.5) * (0.25 + 0.75 * lace));
+            ecume = clamp(ecume, 0.0, 1.0) * loin;
+            rouleau *= loin;
+          } else {
+            // (sans carte : version du 22/10)
+            float crete = 0.0;
+            if (ph < 0.55) {
+              float xc = 6.0 * (1.0 - ph / 0.55);
+              float w = 0.22 + 0.07 * xc;
+              float cq = (dter - xc) / w;
+              crete = exp(-cq * cq) * smoothstep(6.0, 1.5, xc);
+            }
+            float retrait = ph > 0.55 ? (1.0 - smoothstep(0.0, 1.6, dter)) * (1.0 - (ph - 0.55) / 0.45) * 0.6 : 0.0;
+            float lisere = 1.0 - smoothstep(0.0, 0.3 + 0.2 * sin(ph * 6.2832), dter);
+            ecume = clamp(lisere * 0.7 * (0.5 + 0.5 * lace) + (crete * 0.85 + retrait) * lace, 0.0, 1.0) * loin;
+          }
+          // levre de la vague : l'eau mince s'eclaire en turquoise (la lumiere la traverse)
+          c = mix(c, c * 1.16 + vec3(0.02, 0.07, 0.06) * jour, rouleau * 0.5);
+          vec3 blanc = c + (vec3(0.95, 0.98, 1.0) - c) * 0.85 * jour;
+          c = mix(c, blanc, ecume * 0.9);
+        }
+      }
+    }
+  }
+
+  // 22/10 : neige creusee eclairee comme la surface intacte qui l'entoure (voir neige_creux)
+  N = normalize(mix(N, vec3(0.0, 1.0, 0.0), neige_creux));
   if ((light_fx.y > 0.001 || light_fx.z > 0.001 || night_fx.x > 0.001) && !sky_pixel) {
     vec3 V = normalize(cam_trans.xyz - P);
     float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
@@ -666,7 +1102,8 @@ void main() {
       // small-scale occlusion of the sun, marched through the depth buffer
       // PERF 25/08 : au-dela de 90 m le fondu vaut exactement 0 — on saute la marche
       if (depth_fx.z >= 0.0 && light_fx.w >= 0.0 && ndl > 0.001 && view_dist < 4096.0 * 90.0) {
-        float cs = contact_shadow(P, L, view_dist) * clamp(1.0 - view_dist / (4096.0 * 90.0), 0.0, 1.0);
+        float cs = contact_shadow(P, L, view_dist) * clamp(1.0 - view_dist / (4096.0 * 90.0), 0.0, 1.0) *
+                   (1.0 - sous_eau);
         lit *= 1.0 - cs * 0.85 * (1.0 - near_flat);
       }
       // champ proche : le contraste directionnel s'efface (0.62 = valeur moyenne
@@ -674,6 +1111,17 @@ void main() {
       // (original : lit = mix(lit, 0.62, near_flat);) — lointain inclus
       lit = mix(lit, 0.62, flat_amt);
       vec3 lighting = mix(shade_col * 0.78, sun_col, lit);
+      // PC-REMAKE : TRANSLUCIDITE DU FEUILLAGE (rendu recent). Herbe, palmes et feuilles sont des
+      // limbes fins : contre le soleil, la lumiere les traverse et ils s'allument, teintes par
+      // leur propre couleur (vert-jaune), au lieu de rester des cartes plates et sombres.
+      // Seulement de jour ; /tmp/qa_no_transl = coupe (A/B, foliage_transl a 0).
+      if (pc_feuillage && foliage_transl > 0.001) {
+        float contre = pow(clamp(dot(-V, L), 0.0, 1.0), 3.0);
+        // de dos (on voit la face non eclairee) : la transmission domine
+        float dos = clamp(-dot(N, L) * 0.5 + 0.5, 0.0, 1.0);
+        lighting += vec3(1.10, 1.12, 0.62) * contre * (0.35 + 0.65 * dos) * 0.75 * foliage_transl *
+                    (1.0 - flat_amt * 0.6);
+      }
       // specular sheen so surfaces catch the sun instead of staying matte
       if (light_fx.w > 0.001) {
         vec3 H = normalize(L + V);
@@ -682,7 +1130,8 @@ void main() {
         lighting += vec3(1.0, 0.95, 0.85) * spec * light_fx.w * 1.6 * (1.0 - flat_amt);
       }
       // (original : * day) — 21/09 : une source n'est pas relumee
-      c *= mix(vec3(1.0), lighting, clamp(light_fx.y, 0.0, 1.0) * day * (1.0 - emissive_px));
+      // 22/10 : sous l'eau, dose par la part de haut-fond (voir sous_eau) — (original : sans ce facteur)
+      c *= mix(vec3(1.0), lighting, clamp(light_fx.y, 0.0, 1.0) * day * (1.0 - emissive_px) * mix(1.0, haut_fond, sous_eau));
     }
 
     // ---- sky ambient: cool light from the sky above, warm bounce from below ----
@@ -696,7 +1145,8 @@ void main() {
       // les murs lavande des artistes restent lavande
       amb = mix(amb, vec3(0.74, 0.66, 0.56), clamp(grade_amt2.w, 0.0, 1.0));
       // (original : * day) — 21/09 : idem pour l'hemispherique
-      c *= mix(vec3(1.0), amb * 1.55, clamp(light_fx.z, 0.0, 1.0) * day * (1.0 - emissive_px));
+      // 22/10 : sous l'eau, dose par la part de haut-fond (voir sous_eau) — (original : sans ce facteur)
+      c *= mix(vec3(1.0), amb * 1.55, clamp(light_fx.z, 0.0, 1.0) * day * (1.0 - emissive_px) * mix(1.0, haut_fond, sous_eau));
     }
 
     // ============================================================
@@ -982,7 +1432,12 @@ void main() {
         vec3 I = normalize(Psurf - cam_trans.xyz);
         // miroir presque plan (0.14) : les traits blanchâtres venaient de
         // l'ondulation du reflet du ciel
-        vec3 Nr = normalize(vec3(Nw.x * 0.14, 1.0, Nw.z * 0.14));
+        // PC-REMAKE : la houle deforme aussi le miroir (reflets qui ondulent avec les vagues)
+        // (original : vec3 Nr = normalize(vec3(Nw.x * 0.14, 1.0, Nw.z * 0.14));)
+        float surf_m = length(Psurf - cam_trans.xyz) / 4096.0;
+        vec2 hp = houle_pente(Psurf.xz / 4096.0, t, surf_m * 0.0011 / max(abs(I.y), 0.04));
+        vec3 Nh = normalize(vec3(-hp.x, 1.0, -hp.y));
+        vec3 Nr = normalize(vec3(Nw.x * 0.14 - hp.x * 0.25, 1.0, Nw.z * 0.14 - hp.y * 0.25));
         vec3 Rdir = reflect(I, Nr);
         vec3 refl_col = sky_ref;
         float hit_w = 0.0;
@@ -1033,6 +1488,13 @@ void main() {
         if (hit_w > 0.5) {
           c = mix(c, refl_col, clamp(fresR * 0.55 * strength * shore, 0.0, 0.65));
         }
+        // PC-REMAKE : HOULE (eclairage de la surface et reflets du soleil), s'efface au loin
+        // hauts-fonds (fond clair a moins de 2 m) : la houle y est plus douce ; au ras du bord
+        // (moins de 15 cm d'eau) elle s'efface
+        float prof_m = max(water_glitter.x - P.y, 0.0) / 4096.0;
+        c = houle_surface(c, Nh, I, day, (1.0 - smoothstep(120.0, 260.0, surf_m)) *
+                                             mix(0.35, 1.0, smoothstep(0.5, 2.5, prof_m)) *
+                                             smoothstep(0.0, 0.15, prof_m));
       }
     }
   } else if (night_fx.x > 0.001) {
@@ -1052,6 +1514,18 @@ void main() {
   // une seule mer, continue jusqu'a l'horizon.
   // (17/10 : inutile quand la surface pose la brume elle-meme — le vide derriere l'eau y
   //  compte comme une eau tres profonde ; original sans la condition water_murk_ocean)
+  // PC-REMAKE : la houle aussi sur la mer au-dela du fond (pas de geometrie derriere la surface)
+  if (sky_pixel && (water_glitter.y > 0.001 || water_glitter.z > 0.001) &&
+      cam_trans.y > water_glitter.x) {
+    vec3 Ih = normalize(world_from_depth(tex_coord, 0.5) - world_from_depth(tex_coord, 0.99));
+    if (Ih.y < -0.002) {
+      vec3 Ps = cam_trans.xyz + Ih * ((water_glitter.x - cam_trans.y) / Ih.y);
+      float sm = length(Ps - cam_trans.xyz) / 4096.0;
+      vec2 hq = houle_pente(Ps.xz / 4096.0, water_glitter.w, sm * 0.0011 / max(abs(Ih.y), 0.04));
+      c = houle_surface(c, normalize(vec3(-hq.x, 1.0, -hq.y)), Ih,
+                        clamp(1.0 - night_fx.x, 0.0, 1.0), 1.0 - smoothstep(120.0, 260.0, sm));
+    }
+  }
   if (sky_pixel && (water_glitter.y > 0.001 || water_glitter.z > 0.001) &&
       cam_trans.y > water_glitter.x && water_murk_ocean < 0.5) {
     // direction du regard (profondeur inversee : 1 = proche, 0 = loin)
@@ -1153,11 +1627,13 @@ void main() {
             shadow = max(shadow, clamp(pen / 0.06, 0.0, 1.0) * (1.0 - float(k - 1) / 8.0));
           }
         }
-        c *= lit * mix(1.0, 0.62, shadow);
-        // neige tassee (plus dense : plus sombre, bleutee) ; bourrelet de poudreuse plus clair
+        // 22/10 : neige creusee BLANCHE — ombre du bord et teinte de neige tassee adoucies
+        // (original : mix(1.0, 0.62, shadow) et vec3(0.74, 0.82, 0.95))
+        c *= lit * mix(1.0, 0.78, shadow);
+        // neige tassee (a peine plus dense : legerement bleutee) ; bourrelet de poudreuse plus clair
         float trough = clamp(-h / 0.35, 0.0, 1.0);
         float bump = clamp(h / 0.08, 0.0, 1.0);
-        c *= mix(vec3(1.0), vec3(0.74, 0.82, 0.95), trough);
+        c *= mix(vec3(1.0), vec3(0.90, 0.94, 0.99), trough);
         c *= 1.0 + 0.10 * bump;
       }
     }
@@ -1170,6 +1646,142 @@ void main() {
   if (shaft_amt > 0.001 && has_shaft_tex > 0.5) {
     float sadd = texture(shaft_tex, tex_coord).r;
     c += vec3(1.0, 0.90, 0.68) * (sadd / (1.0 + 2.0 * sadd)) * shaft_amt;
+  }
+  // 22/10 : FAISCEAUX DE CANOPEE (jungle, de jour ; voir shafts.frag). L'air des colonnes brille
+  // (canal vert, adouci) et ce qu'une colonne touche (sol, rocher, tronc, Jak) recoit sa tache
+  // de lumiere chaude, a l'ombre du feuillage seulement (en plein soleil, rien ne change).
+  if (shaft_amt > 0.001 && has_shaft_tex > 0.5 && grade_amt2.w < 0.01) {
+    float cba = texture(shaft_tex, tex_coord).g;
+    c += vec3(1.0, 0.86, 0.56) * (cba / (1.0 + 1.2 * cba)) * shaft_amt * 0.40;
+    // poussieres en suspension dans les colonnes : grains de 1 a 2 pixels qui derivent et
+    // scintillent. Grille 3D de 0,4 m ancree au monde, parcourue le long du regard dans la
+    // traversee de chaque colonne (seulement la ou un faisceau brille deja).
+    if (cba > 0.04) {
+      vec3 L = cb_axis(sun_dir.xyz);
+      vec3 ro = cam_trans.xyz / 4096.0;
+      vec3 rs = normalize(world_from_depth(tex_coord, 0.5) - world_from_depth(tex_coord, 0.99));
+      vec2 uvp = tex_coord + vec2(0.0, 1.0 / float(textureSize(tex_T0, 0).y));
+      vec3 rs2 = normalize(world_from_depth(uvp, 0.5) - world_from_depth(uvp, 0.99));
+      float pxa = length(rs2 - rs);  // angle d'un pixel (rad)
+      vec3 rd = rs;
+      float tmax = 15.0;
+      if (!sky_pixel) {
+        vec3 rv = (P - cam_trans.xyz) / 4096.0;
+        tmax = min(length(rv), 15.0);
+        rd = rv / max(length(rv), 1e-3);
+      }
+      float tt = water_glitter.w;
+      vec2 X0 = cb_proj(ro, L);
+      vec2 V = rd.xz - L.xz / L.y * rd.y;
+      float v2 = max(dot(V, V), 1e-6);
+      float vl = sqrt(v2);
+      vec2 cell = floor(X0 / CB_CELL);
+      vec2 st = vec2(V.x >= 0.0 ? 1.0 : -1.0, V.y >= 0.0 ? 1.0 : -1.0);
+      vec2 av = max(abs(V), vec2(1e-5));
+      vec2 tdel = CB_CELL / av;
+      vec2 tnext = ((cell + max(st, 0.0)) * CB_CELL - X0) * st / av;
+      float grains = 0.0;
+      for (int k = 0; k < 5; k++) {
+        vec4 b = cb_beam(cell, tt);
+        if (b.w > 0.0) {
+          float tc = dot(b.xy - X0, V) / v2;
+          vec2 dv = X0 + V * tc - b.xy;
+          float hw2 = b.z * b.z - dot(dv, dv);
+          float hw = sqrt(max(hw2, 0.0)) / vl;
+          float t0 = max(tc - hw, 1.0), t1 = min(tc + hw, min(tmax, t0 + 3.0));
+          if (hw2 > 0.0 && t1 > t0) {
+            vec3 qs = (sun_light_vp * vec4((ro + rd * tc) * 4096.0, 1.0)).xyz * 0.5 + 0.5;
+            float ombre = 0.0;
+            if (qs.x > 0.01 && qs.x < 0.99 && qs.y > 0.01 && qs.y < 0.99 && qs.z < 1.0) {
+              ombre = 1.0 - texture(sun_shadow_tex, vec3(qs.xy, qs.z - 0.002));
+            }
+            if (ombre > 0.01) {
+              const float CS = 0.4;
+              vec3 p0 = ro + rd * t0;
+              vec3 cc = floor(p0 / CS);
+              vec3 s3 = vec3(rd.x >= 0.0 ? 1.0 : -1.0, rd.y >= 0.0 ? 1.0 : -1.0,
+                             rd.z >= 0.0 ? 1.0 : -1.0);
+              vec3 ad = max(abs(rd), vec3(1e-5));
+              vec3 td = CS / ad;
+              vec3 tn = t0 + ((cc + max(s3, 0.0)) * CS - p0) * s3 / ad;
+              float sg = b.z * 0.62;
+              for (int m = 0; m < 10; m++) {
+                float hp = cb_hash3(cc);
+                if (hp < 0.3) {
+                  vec3 j = vec3(cb_hash3(cc + 11.1), cb_hash3(cc + 23.7), cb_hash3(cc + 37.3));
+                  vec3 mp = (cc + 0.25 + 0.5 * j) * CS;
+                  // derive lente (reste dans sa cellule)
+                  mp += 0.07 * vec3(sin(tt * 0.7 + j.x * 6.3), sin(tt * 0.45 + j.y * 6.3),
+                                    sin(tt * 0.6 + j.z * 6.3));
+                  vec3 w = mp - ro;
+                  float tm = dot(w, rd);
+                  float dr = length(w - rd * tm);
+                  float pxm = max(tm, 0.5) * pxa;  // taille d'un pixel a cette distance
+                  float g = 1.0 - smoothstep(0.5 * pxm, 1.9 * pxm, dr);
+                  vec2 xm = cb_proj(mp, L) - b.xy;
+                  float dans = exp(-dot(xm, xm) / (sg * sg));
+                  float scint = 0.35 + 0.65 * max(sin(tt * (1.1 + 6.0 * hp) + j.y * 6.3), 0.0);
+                  grains += g * dans * scint * ombre * (1.0 - smoothstep(8.0, 15.0, tm));
+                }
+                float tout = min(tn.x, min(tn.y, tn.z));
+                if (tout > t1) {
+                  break;
+                }
+                if (tn.x <= tn.y && tn.x <= tn.z) {
+                  cc.x += s3.x;
+                  tn.x += td.x;
+                } else if (tn.y <= tn.z) {
+                  cc.y += s3.y;
+                  tn.y += td.y;
+                } else {
+                  cc.z += s3.z;
+                  tn.z += td.z;
+                }
+              }
+            }
+          }
+        }
+        float tout = min(tnext.x, tnext.y);
+        if (tout > tmax) {
+          break;
+        }
+        if (tnext.x < tnext.y) {
+          cell.x += st.x;
+          tnext.x += tdel.x;
+        } else {
+          cell.y += st.y;
+          tnext.y += tdel.y;
+        }
+      }
+      c += vec3(1.0, 0.93, 0.78) * min(grains, 1.5) * 1.6 * shaft_amt;
+    }
+    if (!sky_pixel) {
+      float dcam = length(P - cam_trans.xyz) / 4096.0;
+      if (dcam < 70.0) {
+        vec3 L = cb_axis(sun_dir.xyz);
+        vec2 X = cb_proj(P / 4096.0, L);
+        vec4 b = cb_beam(floor(X / CB_CELL), water_glitter.w);
+        // la tache s'etale un peu plus que la colonne (lumiere diffusee), bord doux, et
+        // tachetee par l'ombre des feuilles
+        vec2 dx = X - b.xy;
+        float tache = b.w > 0.0 ? 1.0 - smoothstep(b.z * 0.75, b.z * 1.35, length(dx)) : 0.0;
+        vec2 fv = (X + vec2(0.13, 0.07) * water_glitter.w) * 2.2;
+        tache *= smoothstep(0.18, 0.62, 0.65 * cb_vnoise(fv) + 0.35 * cb_vnoise(fv * 2.3 + 5.1));
+        if (tache > 0.0) {
+          vec3 sp = (sun_light_vp * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+          float ombre = 0.0;
+          if (sp.x > 0.01 && sp.x < 0.99 && sp.y > 0.01 && sp.y < 0.99 && sp.z < 1.0) {
+            ombre = 1.0 - texture(sun_shadow_tex, vec3(sp.xy, sp.z - 0.004));
+          }
+          if (ombre > 0.01) {
+            ombre *= cb_ciel(P, L);
+          }
+          float face = mix(0.3, 1.0, max(dot(N, L), 0.0));
+          float loin = 1.0 - smoothstep(40.0, 70.0, dcam);
+          c += c * vec3(1.0, 0.88, 0.58) * (tache * b.w * ombre * face * loin * 3.6 * shaft_amt);
+        }
+      }
+    }
   }
   // 20/10 : TACHES DE SOLEIL dans la cabane de Samos (toit ouvert) : la ou la carte d'ombres
   // dit que le soleil arrive (par le toit, la porte, la fenetre), le sol et les murs recoivent

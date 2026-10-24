@@ -147,6 +147,7 @@ class Merc2 {
   Uniforms m_merc_tess_uniforms, m_emerc_tess_uniforms, m_merc_fur_uniforms;
   struct RemakeToggles {
     bool actif = true;      // /tmp/qa_perso_off : tout le remodelage coupe
+    bool objets = true;     // /tmp/qa_obj_off : matieres des objets remodeles coupees
     bool decoupe = true;    // /tmp/qa_perso_notess : sans decoupage
     bool fourrure = true;   // /tmp/qa_perso_nofur : sans fourrure
   } m_remake;
@@ -198,6 +199,7 @@ class Merc2 {
     NO_TEXTURE = 4,
     CHARACTER = 8,   // 21/10 : personnage remodele
     FUR_SHELLS = 16, // 21/10 : fourrure en couches au-dessus de ce dessin
+    OBJET = 32,      // PC-REMAKE : objet remodele (rendu des matieres, sans decoupage ni fourrure)
   };
 
   struct Draw {
@@ -266,6 +268,7 @@ class Merc2 {
     u32 lights;
     u32 first_bone;
     bool character = false;          // 21/10
+    bool objet = false;              // PC-REMAKE : objet remodele
     bool orbe = false;               // 21/10 : orbe de precurseur (money)
     const LevelData* lev = nullptr;  // 21/10 : familles de matiere des textures
   };

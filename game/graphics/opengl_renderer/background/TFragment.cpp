@@ -418,6 +418,10 @@ void TFragment::update_load(const std::vector<tfrag3::TFragmentTreeKind>& tree_k
         glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, GL_TRUE,
                               sizeof(tfrag3::PreloadedVertex),
                               (void*)offsetof(tfrag3::PreloadedVertex, r));
+        // PC-REMAKE : decor affine : 3e couleur peinte + poids (tfrag3.vert)
+        glEnableVertexAttribArray(6);
+        glVertexAttribIPointer(6, 1, GL_UNSIGNED_INT, sizeof(tfrag3::PreloadedVertex),
+                               (void*)offsetof(tfrag3::PreloadedVertex, color_index3));
         glGenBuffers(1, &tree_cache.single_draw_index_buffer);
         glGenBuffers(1, &tree_cache.index_buffer);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tree_cache.index_buffer);
@@ -600,11 +604,13 @@ void TFragment::render_tree(int geom,
   // (la lave EST sa propre lumière — 18/08)
   if (tree.draw_emissive.size() != tree.draws->size() && tree.tex_names && tree.draws) {
     tree.draw_emissive.assign(tree.draws->size(), 0.f);
+    tree.draw_lava.assign(tree.draws->size(), 0.f);
     for (size_t i = 0; i < tree.draws->size(); i++) {
       const auto& d = (*tree.draws)[i];
       if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)tree.tex_names->size()) {
         tree.draw_emissive[i] =
             pc_emissive_texture_boost((*tree.tex_names)[d.tree_tex_id].debug_name);
+        tree.draw_lava[i] = pc_lava_texture_kind((*tree.tex_names)[d.tree_tex_id].debug_name);
       }
     }
   }
@@ -613,10 +619,13 @@ void TFragment::render_tree(int geom,
   update_detail_gain();
   if (tree.draw_detail.size() != tree.draws->size() && tree.tex_names && tree.draws) {
     tree.draw_detail.assign(tree.draws->size(), 0.f);
+    tree.draw_sol.assign(tree.draws->size(), 0.f);
     for (size_t i = 0; i < tree.draws->size(); i++) {
       const auto& d = (*tree.draws)[i];
       if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)tree.tex_names->size()) {
-        tree.draw_detail[i] = pc_detail_texture_amount((*tree.tex_names)[d.tree_tex_id].debug_name);
+        const auto& nom = (*tree.tex_names)[d.tree_tex_id].debug_name;
+        tree.draw_detail[i] = pc_detail_texture_amount(nom);
+        tree.draw_sol[i] = pc_sol_kind(nom);
       }
     }
   }
@@ -671,6 +680,9 @@ void TFragment::render_tree(int geom,
       glBindTexture(GL_TEXTURE_2D, m_anim_slot_array->at(-(tex_idx + 1)));
     }
     auto double_draw = setup_tfrag_shader(render_state, draw.mode, ShaderId::TFRAG3);
+    // PC-REMAKE : carte de hauteur sculptee de cette texture (relief par pixel ; 0 = sans)
+    pc_sculpt_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
+                   render_state->shaders[ShaderId::TFRAG3].id());
     // [QA-TEST 25/08] vista : on desarme le test d'alpha (seuil 38) qui perce
     // le decor lointain en tamis
     glUniform1i(m_uniforms.decal, draw.mode.get_decal() ? 1 : 0);
@@ -683,8 +695,29 @@ void TFragment::render_tree(int geom,
     // émissives : auto-illumination de la surface (0 = normal)
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "emissive_boost"),
                 draw_idx < tree.draw_emissive.size() ? tree.draw_emissive[draw_idx] : 0.f);
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "lava_kind"),
+                draw_idx < tree.draw_lava.size() ? tree.draw_lava[draw_idx] : 0.f);
     glUniform1f(detail_loc, (draw_idx < tree.draw_detail.size() ? tree.draw_detail[draw_idx] : 0.f) *
                                 g_pc_detail_gain);
+    // PC-REMAKE : palmes pliees + relief des folioles (dessin a texture de palme)
+    {
+      const float pli = (tex_idx >= 0 && tex_idx < (int)tree.tex_names->size() &&
+                         pc_is_palm_leaf_texture((*tree.tex_names)[tex_idx].debug_name))
+                            ? pc_fronde_dose()
+                            : 0.f;
+      const GLuint prog = render_state->shaders[ShaderId::TFRAG3].id();
+      glUniform1f(pc_uniform_loc(prog, "fronde_pli"), pli);
+      glUniform1f(pc_uniform_loc(prog, "fronde_pli_f"), pli);
+    }
+    // PC-REMAKE : sol (relief adouci) et sol d'herbe (vert etalonne) — /tmp/qa_no_vert : coupe (A/B)
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "sol_kind"),
+                (draw_idx < tree.draw_sol.size() && !pc_vert_off()) ? tree.draw_sol[draw_idx] : 0.f);
+    // PC-REMAKE : couche de sol en transparence -> bord guide par la texture (/tmp/qa_no_solmel : coupe)
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "sol_melange"),
+                (draw.mode.get_ab_enable() && draw_idx < tree.draw_detail.size() &&
+                 tree.draw_detail[draw_idx] > 0.f && !pc_sol_melange_off())
+                    ? 1.f
+                    : 0.f);
     tree.tris_this_frame += draw.num_triangles;
     tree.draws_this_frame++;
 

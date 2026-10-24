@@ -5,10 +5,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "common/log/log.h"
 #include "common/util/Assert.h"
+#include "common/util/FileUtil.h"
 #include "common/util/simd_util.h"
 
 namespace tfrag3 {
@@ -17,6 +21,14 @@ namespace tfrag3 {
 // forward-declared here because TieTree::unpack precedes them)
 extern bool g_tfrag_phong_subdiv;
 extern float g_tfrag_phong_strength;
+// PC-REMAKE : affinage du decor (defini plus bas)
+size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
+                            std::vector<u32>& indices,
+                            std::vector<StripDraw>& draws,
+                            const std::vector<u8>& classes,
+                            const std::function<u32(u32, u32)>& phong_mid,
+                            const std::vector<const PcSculptHeight*>* maps);
+
 
 void PackedTimeOfDay::serialize(Serializer& ser) {
   ser.from_pod_vector(&data);
@@ -28,6 +40,9 @@ void PackedTieVertices::serialize(Serializer& ser) {
   ser.from_pod_vector(&matrices);
   ser.from_pod_vector(&matrix_groups);
   ser.from_pod_vector(&vertices);
+  ser.from_pod_vector(&color_indices2);
+  ser.from_pod_vector(&color_indices3);
+  ser.from_pod_vector(&color_weights);
 }
 
 void PackedShrubVertices::serialize(Serializer& ser) {
@@ -240,6 +255,21 @@ void tie_normal_v3(__m128* out, const std::array<math::Vector4f, 4>& in) {
 }
  */
 
+// PC-REMAKE : couleurs a 3 indices des prototypes remodeles (voir PackedTieVertices)
+static inline void pc_tie_color_blend(const PackedTieVertices& pv, size_t i, PreloadedVertex& vtx) {
+  if (i < pv.color_indices2.size()) {
+    const u16 w = pv.color_weights[i];
+    if (w != 0) {
+      vtx.color_index2 = pv.color_indices2[i];
+      vtx.color_index3 = pv.color_indices3[i];
+      vtx.cw0 = (u8)(w & 0xff);
+      vtx.cw1 = (u8)(w >> 8);
+      return;
+    }
+  }
+  vtx.color_index2 = vtx.color_index;
+}
+
 void TieTree::unpack() {
   unpacked.vertices.resize(packed_vertices.color_indices.size());
   size_t i = 0;
@@ -248,7 +278,7 @@ void TieTree::unpack() {
       for (u32 src_idx = grp.start_vert; src_idx < grp.end_vert; src_idx++) {
         auto& vtx = unpacked.vertices[i];
         vtx.color_index = packed_vertices.color_indices[i];
-        vtx.color_index2 = vtx.color_index;
+        pc_tie_color_blend(packed_vertices, i, vtx);
         const auto& proto_vtx = packed_vertices.vertices[src_idx];
         vtx.x = proto_vtx.x;
         vtx.y = proto_vtx.y;
@@ -275,7 +305,7 @@ void TieTree::unpack() {
         for (u32 src_idx = grp.start_vert; src_idx < grp.end_vert; src_idx++) {
           auto& vtx = unpacked.vertices[i];
           vtx.color_index = packed_vertices.color_indices[i];
-        vtx.color_index2 = vtx.color_index;
+        pc_tie_color_blend(packed_vertices, i, vtx);
           const auto& proto_vtx = packed_vertices.vertices[src_idx];
           // auto temp = mat[0] * proto_vtx.x + mat[1] * proto_vtx.y + mat[2] * proto_vtx.z +
           // mat[3];
@@ -297,7 +327,7 @@ void TieTree::unpack() {
         for (u32 src_idx = grp.start_vert; src_idx < grp.end_vert; src_idx++) {
           auto& vtx = unpacked.vertices[i];
           vtx.color_index = packed_vertices.color_indices[i];
-        vtx.color_index2 = vtx.color_index;
+        pc_tie_color_blend(packed_vertices, i, vtx);
           const auto& proto_vtx = packed_vertices.vertices[src_idx];
           __m128 transformed = mat3;
           transformed = _mm_add_ps(transformed, _mm_mul_ps(_mm_set1_ps(proto_vtx.x), mat0));
@@ -436,7 +466,17 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
                           std::vector<StripDraw>& draws,
                           const std::function<bool(const StripDraw&)>& skip_draw,
                           PackedTimeOfDay* colors,
-                          float strength);
+                          float strength,
+                          const std::vector<u8>* decor_classes = nullptr,
+                          const std::vector<const PcSculptHeight*>* sculpt_maps = nullptr);
+
+// PC-REMAKE : prototypes du decor deja remodeles (nom suffixe " [remake]" par l'extracteur) : ni
+// subdivision ni affinage au chargement (pose par TieTree::subdivide_phong, par fil)
+thread_local const std::vector<char>* t_proto_remplace = nullptr;
+inline bool proto_remplace(const StripDraw::VisGroup& g) {
+  return t_proto_remplace && g.tie_proto_idx < t_proto_remplace->size() &&
+         (*t_proto_remplace)[g.tie_proto_idx];
+}
 
 bool tex_name_is_foliage(const std::string& n) {
   static const char* kWords[] = {"palm",  "leaf", "leaves", "frond", "branch", "treetop",
@@ -450,7 +490,7 @@ bool tex_name_is_foliage(const std::string& n) {
 }
 }  // namespace
 
-void TfragTree::subdivide_phong() {
+void TfragTree::subdivide_phong(const std::vector<Texture>* textures, bool sculpture) {
   // PC-REMAKE 22/09 : TERRAIN = subdivision SANS deplacement (force 0). Le sol
   // est fait de COUCHES COPLANAIRES (sable + decals d'herbe/chemin en alpha, arbre
   // dirt) : deplacer les milieux le long des normales faisait se CROISER ces
@@ -458,7 +498,44 @@ void TfragTree::subdivide_phong() {
   // de textures et d'ombres au sol presents depuis le 16/08).
   // La subdivision reste pour les vraies normales lisses du G-buffer.
   // (original : g_tfrag_phong_strength)
-  phong_subdivide_impl(unpacked.vertices, unpacked.indices, draws, nullptr, &colors, 0.f);
+  // PC-REMAKE : affinage du decor (bois, paille) sur le terrain normal
+  std::vector<u8> classes;
+  if (textures && kind == TFragmentTreeKind::NORMAL && !std::getenv("QA_NO_DECOR")) {
+    classes.assign(draws.size(), 0);
+    for (size_t i = 0; i < draws.size(); i++) {
+      const auto& d = draws[i];
+      if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)textures->size() && !d.mode.get_ab_enable()) {
+        const int k = pc_decor_class_for_texture((*textures)[d.tree_tex_id].debug_name);
+        classes[i] = (k == 1 || k == 3) ? (u8)k : 0;
+      }
+    }
+  }
+  // PC-REMAKE : SCULPTURE — dessins opaques dont la texture a une carte de hauteur : volume de la
+  // geometrie (classe 4 si le dessin n'etait pas deja affine)
+  std::vector<const PcSculptHeight*> maps;
+  // PC-REMAKE : volume geometrique de la roche — ESSAYE puis coupe par defaut : a l'echelle d'un niveau
+  // entier, le budget impose un pas de deux metres et rien ne se voit (le relief au pixel fait
+  // l'essentiel) pour 0,7 s de chargement de plus au village. PC_SCULPT_GEO=1 le remet.
+  if (sculpture && !classes.empty() && std::getenv("PC_SCULPT_GEO")) {
+    maps.assign(draws.size(), nullptr);
+    for (size_t i = 0; i < draws.size(); i++) {
+      const auto& d = draws[i];
+      if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)textures->size() && !d.mode.get_ab_enable() &&
+          !(d.mode.get_at_enable() && d.mode.get_aref() > 8)) {
+        maps[i] = pc_sculpt_height((*textures)[d.tree_tex_id].debug_name);
+        // volume geometrique : la roche (falaises, rochers, murs de pierre) ; le reste a son relief
+        // au pixel
+        if (maps[i] && maps[i]->famille != 2) {
+          maps[i] = nullptr;
+        }
+        if (maps[i] && classes[i] == 0) {
+          classes[i] = 4;
+        }
+      }
+    }
+  }
+  phong_subdivide_impl(unpacked.vertices, unpacked.indices, draws, nullptr, &colors, 0.f,
+                       classes.empty() ? nullptr : &classes, maps.empty() ? nullptr : &maps);
   use_strips = false;
 }
 
@@ -511,7 +588,7 @@ static void convert_wind_strips_to_tris(TieTree& tree) {
   }
 }
 
-void TieTree::subdivide_phong(const std::vector<Texture>& textures) {
+void TieTree::subdivide_phong(const std::vector<Texture>& textures, bool sculpture) {
   auto skip = [&](const StripDraw& d) {
     // cutout draws (alpha tested) OR any draw textured like foliage
     if (d.mode.get_at_enable() && d.mode.get_alpha_test() == DrawMode::AlphaTest::GEQUAL &&
@@ -524,8 +601,56 @@ void TieTree::subdivide_phong(const std::vector<Texture>& textures) {
     }
     return false;
   };
+  // PC-REMAKE : affinage du decor (bois, paille) — prioritaire sur le classement feuillage par le
+  // nom (un tronc de palmier est du bois), jamais sur une decoupe
+  std::vector<u8> classes;
+  if (!std::getenv("QA_NO_DECOR")) {
+    classes.assign(static_draws.size(), 0);
+    for (size_t i = 0; i < static_draws.size(); i++) {
+      const auto& d = static_draws[i];
+      const bool cutout = d.mode.get_at_enable() &&
+                          d.mode.get_alpha_test() == DrawMode::AlphaTest::GEQUAL &&
+                          d.mode.get_aref() > 8;
+      if (!cutout && d.tree_tex_id >= 0 && d.tree_tex_id < (s32)textures.size() &&
+          !d.mode.get_ab_enable()) {
+        const int k = pc_decor_class_for_texture(textures[d.tree_tex_id].debug_name);
+        classes[i] = (k == 1 || k == 3) ? (u8)k : 0;
+      }
+    }
+  }
+  std::vector<const PcSculptHeight*> maps;
+  // PC-REMAKE : volume geometrique de la roche — ESSAYE puis coupe par defaut : a l'echelle d'un niveau
+  // entier, le budget impose un pas de deux metres et rien ne se voit (le relief au pixel fait
+  // l'essentiel) pour 0,7 s de chargement de plus au village. PC_SCULPT_GEO=1 le remet.
+  if (sculpture && !classes.empty() && std::getenv("PC_SCULPT_GEO")) {
+    maps.assign(static_draws.size(), nullptr);
+    for (size_t i = 0; i < static_draws.size(); i++) {
+      const auto& d = static_draws[i];
+      const bool cutout = d.mode.get_at_enable() &&
+                          d.mode.get_alpha_test() == DrawMode::AlphaTest::GEQUAL &&
+                          d.mode.get_aref() > 8;
+      if (!cutout && d.tree_tex_id >= 0 && d.tree_tex_id < (s32)textures.size() &&
+          !d.mode.get_ab_enable()) {
+        maps[i] = pc_sculpt_height(textures[d.tree_tex_id].debug_name);
+        if (maps[i] && maps[i]->famille != 2) {
+          maps[i] = nullptr;
+        }
+        if (maps[i] && classes[i] == 0) {
+          classes[i] = 4;
+        }
+      }
+    }
+  }
+  std::vector<char> remplace(proto_names.size(), 0);
+  for (size_t i = 0; i < proto_names.size(); i++) {
+    const auto& n = proto_names[i];
+    remplace[i] = n.size() > 7 && n.compare(n.size() - 7, 7, " [remake]") == 0;
+  }
+  t_proto_remplace = &remplace;
   phong_subdivide_impl(unpacked.vertices, unpacked.indices, static_draws, skip, &colors,
-                       g_tfrag_phong_strength);
+                       g_tfrag_phong_strength, classes.empty() ? nullptr : &classes,
+                       maps.empty() ? nullptr : &maps);
+  t_proto_remplace = nullptr;
   convert_wind_strips_to_tris(*this);
   use_strips = false;
 }
@@ -536,7 +661,9 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
                           std::vector<StripDraw>& draws,
                           const std::function<bool(const StripDraw&)>& skip_draw,
                           PackedTimeOfDay* colors,
-                          float strength) {
+                          float strength,
+                          const std::vector<u8>* decor_classes,
+                          const std::vector<const PcSculptHeight*>* sculpt_maps) {
   const auto& old_indices = indices_ref;
   // PC-REMAKE 22/09 : COULEUR DES MILIEUX. Les sommets du decor portent un INDEX
   // dans la palette heure du jour ; un milieu d'arete prenait l'index de
@@ -836,16 +963,21 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
 
   std::vector<u32> new_indices;
   new_indices.reserve(old_indices.size() * 6);
-  for (auto& draw : draws) {
+  for (size_t draw_i = 0; draw_i < draws.size(); draw_i++) {
+    auto& draw = draws[draw_i];
     size_t base = draw.unpacked.idx_of_first_idx_in_full_buffer;
     size_t group_start = base;
     u32 new_first = (u32)new_indices.size();
-    const bool skip = is_skipped(draw);
+    // PC-REMAKE : dessin de bois / paille (decor affine) : triangle d'origine garde, coins lisses ;
+    // l'affinage (pc_refine_decor_impl) le redecoupe ensuite
+    const bool decor = decor_classes && draw_i < decor_classes->size() && (*decor_classes)[draw_i];
+    const bool skip = !decor && is_skipped(draw);
     for (auto& g : draw.vis_groups) {
       size_t before = new_indices.size();
       u32 tris = 0;
+      const bool skip_g = skip || proto_remplace(g);
       for_each_tri(group_start, g.num_inds, [&](u32 i0, u32 i1, u32 i2) {
-        if (skip) {
+        if (skip_g) {
           // foliage cutouts: de-strip only (whole tree becomes GL_TRIANGLES),
           // geometry untouched so lamellas keep their authored shape
           const u32 out[3] = {i0, i1, i2};
@@ -870,6 +1002,12 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
           i1 = corner_vertex(i1, n1);
           i2 = corner_vertex(i2, n2);
         }
+        if (decor) {
+          const u32 out[3] = {i0, i1, i2};
+          new_indices.insert(new_indices.end(), out, out + 3);
+          tris += 1;
+          return;
+        }
         u32 m01 = midpoint(i0, i1);
         u32 m12 = midpoint(i1, i2);
         u32 m20 = midpoint(i2, i0);
@@ -885,6 +1023,14 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
   }
 
   indices_ref = std::move(new_indices);
+  // PC-REMAKE : DECOR AFFINE — normales soudees puis redecoupage des dessins de bois et de paille. Aux
+  // aretes partagees avec un dessin subdivise, on reprend EXACTEMENT son milieu (midpoint) : rien
+  // ne s'ouvre entre les deux.
+  if (decor_classes) {
+    pc_prepare_decor_weld(verts, indices_ref, draws);
+    pc_refine_decor_impl(verts, indices_ref, draws, *decor_classes,
+                         [&](u32 a, u32 b) { return midpoint(a, b); }, sculpt_maps);
+  }
 }
 }  // namespace
 
@@ -1092,6 +1238,23 @@ void MercModelGroup::serialize(Serializer& ser) {
   ser.from_pod_vector(&indices);
   ser.from_pod_vector(&vertices);
 
+  // PC-REMAKE : objets remodeles = remplaces par un glTF (tous les dessins hors yeux en liste des
+  // l'extraction). Releve AVANT le decoupage de chargement, qui met aussi les autres en liste.
+  if (!ser.is_saving()) {
+    for (auto& model : models) {
+      bool liste = false, strip = false;
+      for (const auto& effect : model.effects) {
+        for (const auto& draw : effect.all_draws) {
+          if (draw.eye_id != 0xff) {
+            continue;
+          }
+          (draw.no_strip ? liste : strip) = true;
+        }
+      }
+      model.pc_remodele = liste && !strip;
+    }
+  }
+
   // PC-REMAKE: round actor/prop models right after the level file is read
   // (game side only — the extractor never deserializes fr3s).
   if (!ser.is_saving() && g_tfrag_phong_subdiv) {
@@ -1128,7 +1291,19 @@ const char* const kPcCharacterGroups[] = {
 };
 }  // namespace
 
+// PC-REMAKE : objets ranges sous le nom d'un personnage (plates-formes du flutflut, rochers de l'ogre,
+// nids de rats, cage brisee) : ils sont remodeles et rendus comme les autres objets
+const char* const kPcObjetsDePersonnages[] = {
+    "flutflut-plat-", "ogreboss-bounce-boulder-", "ogreboss-column-", "ogreboss-shoot-boulder-",
+    "ogreboss-super-boulder-", "swamp-rat-nest-", "bully-broken-cage-",
+};
+
 bool pc_is_character_model(const std::string& name) {
+  for (const char* o : kPcObjetsDePersonnages) {
+    if (name.compare(0, strlen(o), o) == 0) {
+      return false;
+    }
+  }
   for (const char* g : kPcCharacterGroups) {
     const size_t n = strlen(g);
     if (name.size() > n && name.compare(0, n, g) == 0 && name[n] == '-') {
@@ -1154,6 +1329,966 @@ u32 pc_pack_weld_normal(float x, float y, float z, bool sharp) {
     return (u32)std::clamp((int)std::lround((v * 0.5f + 0.5f) * 32767.f), 0, 32767);
   };
   return 1u | (sharp ? 2u : 0u) | (q(px) << 2) | (q(py) << 17);
+}
+
+// ---- PC-REMAKE : NORMALES SOUDEES DU DECOR (decoupage tfrag3_tess) ----------------------------
+// Pour que la surface courbe (triangles PN) ne s'ouvre jamais, tous les sommets a une meme
+// position doivent utiliser la MEME normale de forme. Regles :
+//  - une seule famille de normales a cette position (surface lisse) : leur moyenne ;
+//  - plusieurs familles (arete vive : rebord d'un rondin, coin d'une caisse) : on garde la
+//    famille qui se COURBE le long de la surface (la face laterale d'un rondin, dont la normale
+//    tourne d'un sommet voisin a l'autre) — le bord du rondin s'arrondit et son disque reste
+//    plat. Si aucune famille ne se courbe (coin d'une boite), l'arete reste droite (bit 1).
+//  - bord (bit 2) : position partagee par plusieurs dessins (deux textures) : l'arete y reste
+//    droite et reprend le milieu du dessin voisin (pc_refine_decor_impl), sans fissure.
+namespace {
+struct DecorKey {
+  int32_t x, y, z;
+  bool operator==(const DecorKey& o) const { return x == o.x && y == o.y && z == o.z; }
+};
+struct DecorKeyHash {
+  size_t operator()(const DecorKey& k) const {
+    return (size_t)k.x * 73856093u ^ (size_t)k.y * 19349663u ^ (size_t)k.z * 83492791u;
+  }
+};
+math::Vector3f decor_unpack_nor(u32 packed) {
+  auto sx = [](u32 v) -> float {
+    int i = (int)(v & 0x3ff);
+    if (i & 0x200) {
+      i -= 0x400;
+    }
+    return (float)i / 511.f;
+  };
+  math::Vector3f n(sx(packed), sx(packed >> 10), sx(packed >> 20));
+  const float l = n.length();
+  return l > 1e-6f ? n / l : math::Vector3f(0.f, 0.f, 0.f);
+}
+u32 decor_pack(const math::Vector3f& n, bool vif, bool border) {
+  const float l = std::abs(n.x()) + std::abs(n.y()) + std::abs(n.z());
+  if (l < 1e-6f) {
+    return 0;
+  }
+  float px = n.x() / l, py = n.y() / l;
+  if (n.z() < 0.f) {
+    const float ox = (1.f - std::abs(py)) * (px >= 0.f ? 1.f : -1.f);
+    const float oy = (1.f - std::abs(px)) * (py >= 0.f ? 1.f : -1.f);
+    px = ox;
+    py = oy;
+  }
+  auto q = [](float v) -> u32 {
+    return (u32)std::clamp((int)std::lround((v * 0.5f + 0.5f) * 16383.f), 0, 16383);
+  };
+  return 1u | (vif ? 2u : 0u) | (border ? 4u : 0u) | (q(px) << 3) | (q(py) << 17);
+}
+}  // namespace
+
+void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
+                           const std::vector<u32>& indices,
+                           const std::vector<StripDraw>& draws) {
+  const size_t nv = verts.size();
+  if (nv == 0) {
+    return;
+  }
+  auto key_of = [](const PreloadedVertex& v) {
+    return DecorKey{(int32_t)std::lround(v.x * 0.25f), (int32_t)std::lround(v.y * 0.25f),
+                    (int32_t)std::lround(v.z * 0.25f)};
+  };
+  std::vector<u32> pos_id(nv);
+  std::unordered_map<DecorKey, u32, DecorKeyHash> ids;
+  ids.reserve(nv);
+  for (size_t i = 0; i < nv; i++) {
+    auto it = ids.emplace(key_of(verts[i]), (u32)ids.size()).first;
+    pos_id[i] = it->second;
+  }
+  const size_t np = ids.size();
+  std::vector<math::Vector3f> nrm(nv);
+  for (size_t i = 0; i < nv; i++) {
+    nrm[i] = decor_unpack_nor(verts[i].nor);
+  }
+  // courbure de chaque sommet dans sa famille (angle max avec ses voisins de triangle)
+  std::vector<float> curv(nv, 0.f);
+  std::vector<int32_t> pos_draw(np, -1);
+  std::vector<u8> pos_border(np, 0);
+  for (size_t di = 0; di < draws.size(); di++) {
+    const auto& d = draws[di];
+    size_t base = d.unpacked.idx_of_first_idx_in_full_buffer;
+    size_t count = 0;
+    for (auto& g : d.vis_groups) {
+      count += g.num_inds;
+    }
+    for (size_t i = base; i + 2 < base + count && i + 2 < indices.size(); i += 3) {
+      const u32 t[3] = {indices[i], indices[i + 1], indices[i + 2]};
+      if (t[0] >= nv || t[1] >= nv || t[2] >= nv) {
+        continue;
+      }
+      for (int k = 0; k < 3; k++) {
+        const u32 a = t[k], b = t[(k + 1) % 3];
+        const float c = nrm[a].dot(nrm[b]);
+        const float ang = std::acos(std::clamp(c, -1.f, 1.f));
+        curv[a] = std::max(curv[a], ang);
+        curv[b] = std::max(curv[b], ang);
+        const u32 pa = pos_id[a];
+        if (pos_draw[pa] == -1) {
+          pos_draw[pa] = (int32_t)di;
+        } else if (pos_draw[pa] != (int32_t)di) {
+          pos_border[pa] = 1;
+        }
+      }
+    }
+  }
+  // par position : somme des normales, meilleure famille courbe, ecart des familles
+  std::vector<math::Vector3f> sum(np, math::Vector3f(0.f, 0.f, 0.f));
+  std::vector<int64_t> best(np, -1);
+  std::vector<float> best_curv(np, -1.f);
+  std::vector<math::Vector3f> first(np, math::Vector3f(0.f, 0.f, 0.f));
+  std::vector<u8> spread(np, 0);
+  std::vector<float> mindot(np, 1.f);  // plus grand ecart entre familles (cosinus)
+  const float cos_same = std::cos(20.f * 3.14159265f / 180.f);
+  // pans d'un objet rond dessine en huit faces (45 degres) : surface lisse, pas un coin de boite
+  const float cos_pans = std::cos(50.f * 3.14159265f / 180.f);
+  for (size_t i = 0; i < nv; i++) {
+    const u32 p = pos_id[i];
+    if (nrm[i].length() < 0.5f) {
+      continue;
+    }
+    sum[p] += nrm[i];
+    if (first[p].length() < 0.5f) {
+      first[p] = nrm[i];
+    } else if (first[p].dot(nrm[i]) < cos_same) {
+      spread[p] = 1;
+    }
+    if (first[p].length() > 0.5f) {
+      mindot[p] = std::min(mindot[p], first[p].dot(nrm[i]));
+    }
+    if (curv[i] > best_curv[p]) {
+      best_curv[p] = curv[i];
+      best[p] = (int64_t)i;
+    }
+  }
+  const float flat = 4.f * 3.14159265f / 180.f;
+  size_t n_vif = 0, n_border = 0;
+  for (size_t i = 0; i < nv; i++) {
+    const u32 p = pos_id[i];
+    math::Vector3f g = sum[p];
+    bool vif = false;
+    if (spread[p]) {
+      if (mindot[p] > cos_pans) {
+        // faces planes d'un objet a pans (cerclage octogonal) : moyenne, l'arete s'arrondit
+      } else if (best_curv[p] < flat || best[p] < 0) {
+        vif = true;
+      } else {
+        g = nrm[(size_t)best[p]];
+      }
+    }
+    const float l = g.length();
+    if (l < 1e-5f) {
+      verts[i].weld = 0;
+      continue;
+    }
+    g /= l;
+    verts[i].weld = decor_pack(g, vif, pos_border[p] != 0);
+    n_vif += vif;
+    n_border += pos_border[p] != 0;
+  }
+  lg::debug("PC-REMAKE decor decoupe : {} sommets ({} aretes vives, {} bords)", nv, n_vif,
+            n_border);
+}
+
+int pc_decor_class_for_texture(const std::string& name) {
+  std::string n = name;
+  std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+  // cerclages et anneaux (pied des poteaux de cabane, tonneaux) : des cercles dessines en huit
+  // pans ; le decoupage par courbure les arrondit, une plaque plate n'en est pas changee
+  if (n.find("precursor") == std::string::npos) {
+    static const char* kCercle[] = {"band", "hoop", "ring", "collar", "brass"};
+    for (auto* k : kCercle) {
+      if (n.find(k) != std::string::npos) {
+        return 1;
+      }
+    }
+  }
+  static const char* kNon[] = {"metal", "precursor", "glass", "lrkr", "crystal", "grate",
+                               "sign",  "paint",     "glow",  "light", "lamp",   "flag",
+                               "cloth", "canvas",    "leaf",  "grass", "fringe", "hang",
+                               "water", "lava",      "eco",   "sky",   "cloud",  "black"};
+  for (auto* k : kNon) {
+    if (n.find(k) != std::string::npos) {
+      return 0;
+    }
+  }
+  static const char* kPaille[] = {"straw", "thatch", "hay"};
+  for (auto* k : kPaille) {
+    if (n.find(k) != std::string::npos) {
+      return 3;
+    }
+  }
+  static const char* kRoche[] = {"rock", "stone", "cliff", "boulder", "sculpt", "cavewall",
+                                 "cave-wall", "rubble", "crag", "pillar-rock"};
+  for (auto* k : kRoche) {
+    if (n.find(k) != std::string::npos) {
+      return 2;
+    }
+  }
+  static const char* kBois[] = {"wood", "plank", "log", "trunk", "bark", "post", "pole",
+                                "beam", "branch", "root", "bamboo", "stick", "rope", "timber",
+                                "bench", "fence", "palmbase", "bedpost", "pier", "dock",
+                                "stump", "twig", "vine"};
+  for (auto* k : kBois) {
+    if (n.find(k) != std::string::npos) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// ---- PC-REMAKE : AFFINAGE DU DECOR AU CHARGEMENT -------------------------------------------------
+// Le decor est fixe : on le redecoupe une fois (le decoupage par la carte graphique, emule sur Mac,
+// coutait 34 images par seconde a lui seul). Dessins de bois, de cordes et de paille seulement (la
+// roche garde ses facettes d'artiste ; son relief reste dans l'eclairage, tfrag3.frag). Appele
+// par phong_subdivide_impl sur les triangles D'ORIGINE de ces dessins (couleurs peintes exactes).
+//  - chaque arete est coupee selon sa COURBURE (angle entre les normales soudees de ses deux
+//    bouts, un morceau tous les ~12 degres) : une longue arete droite (le long d'un rondin) ne se
+//    decoupe pas, le tour d'un rondin a huit pans s'arrondit. Ne depend que de l'arete : les deux
+//    triangles qui la partagent la coupent pareil ;
+//  - surface courbe PN tiree de la normale SOUDEE (pc_prepare_decor_weld) ; aretes vives droites ;
+//  - arete partagee avec un autre dessin : droite, avec EXACTEMENT le milieu que ce dessin calcule
+//    (phong_mid) : aucune fente entre une piece affinee et ses voisines ;
+//  - les points d'une arete moins decoupee que l'interieur sont poses sur sa ligne brisee ;
+//  - couleur peinte : melange des trois coins (PreloadedVertex::color_index3, cw0, cw1).
+// (v1 : apres la subdivision, decoupage selon la longueur + relief geometrique — 172 millions de
+//  triangles au village, plaques de couleur sur les bouts de rondins)
+namespace {
+struct DecorCorner {
+  math::Vector3f p, n, g;  // position, normale d'eclairage, normale soudee
+  bool vif, border;
+  float s, t;
+  u16 col;
+};
+math::Vector3f decor_unpack_weld(u32 w, bool* vif, bool* border) {
+  *vif = (w & 2u) != 0;
+  *border = (w & 4u) != 0;
+  if ((w & 1u) == 0) {
+    *vif = true;
+    return math::Vector3f(0.f, 0.f, 0.f);
+  }
+  float fx = (float)((w >> 3) & 0x3fff) / 16383.f * 2.f - 1.f;
+  float fy = (float)((w >> 17) & 0x3fff) / 16383.f * 2.f - 1.f;
+  math::Vector3f n(fx, fy, 1.f - std::abs(fx) - std::abs(fy));
+  if (n.z() < 0.f) {
+    const float ox = (1.f - std::abs(n.y())) * (n.x() >= 0.f ? 1.f : -1.f);
+    const float oy = (1.f - std::abs(n.x())) * (n.y() >= 0.f ? 1.f : -1.f);
+    n.x() = ox;
+    n.y() = oy;
+  }
+  return n.normalized();
+}
+u32 decor_pack_nor(const math::Vector3f& n) {
+  auto q = [](float v) -> u32 {
+    int i = (int)std::lround(std::clamp(v, -1.f, 1.f) * 511.f);
+    return (u32)i & 0x3ff;
+  };
+  return q(n.x()) | (q(n.y()) << 10) | (q(n.z()) << 20);
+}
+math::Vector3f decor_ctrl(const DecorCorner& i, const DecorCorner& j, bool straight) {
+  math::Vector3f r = i.p * 2.f + j.p;
+  if (!straight) {
+    r -= i.g * (j.p - i.p).dot(i.g);
+  }
+  return r / 3.f;
+}
+
+// PC-REMAKE : SCULPTURE — decoupage d'un triangle d'origine avec un niveau PAR ARETE (ne[e]) et un
+// niveau interieur N, raccordes par une couronne en fermeture eclair : aucune jointure en T, donc
+// aucune fente entre deux triangles qui partagent une arete. Points en barycentriques (u, v, w)
+// des coins c0, c1, c2 ; aretes 0 = c0->c1, 1 = c1->c2, 2 = c2->c0.
+struct PatchPoint {
+  float u, v, w;
+  int arete;  // -1 interieur ou coin ; 0..2 point d'arete
+  int k;      // rang sur l'arete (0..ne)
+};
+void sculpt_patch_topology(int N,
+                           const int ne[3],
+                           std::vector<PatchPoint>& pts,
+                           std::vector<std::array<int, 3>>& tris) {
+  pts.clear();
+  tris.clear();
+  // points d'arete (coins compris, une seule fois chacun)
+  int edge_first[3];
+  int corner[3];
+  for (int e = 0; e < 3; e++) {
+    edge_first[e] = (int)pts.size();
+    for (int k = 0; k < ne[e]; k++) {
+      const float t = (float)k / ne[e];
+      PatchPoint p;
+      if (e == 0) {
+        p = {1.f - t, t, 0.f, k == 0 ? -1 : 0, k};
+      } else if (e == 1) {
+        p = {0.f, 1.f - t, t, k == 0 ? -1 : 1, k};
+      } else {
+        p = {t, 0.f, 1.f - t, k == 0 ? -1 : 2, k};
+      }
+      pts.push_back(p);
+    }
+    corner[e] = edge_first[e];  // coin de depart de l'arete e : c0, c1, c2
+  }
+  auto outer = [&](int e, int k) {
+    if (k == ne[e]) {
+      return corner[(e + 1) % 3];
+    }
+    return edge_first[e] + k;
+  };
+  if (N < 3) {
+    // pas d'interieur : eventail depuis le premier point (ne vaut 1 partout ici)
+    tris.push_back({corner[0], corner[1], corner[2]});
+    return;
+  }
+  // points interieurs (a = indice v, b = indice w ; a, b >= 1, a + b <= N - 1)
+  std::vector<int> inner((size_t)(N + 1) * (N + 1), -1);
+  auto in_at = [&](int a, int b) -> int& { return inner[(size_t)a * (N + 1) + b]; };
+  for (int a = 1; a <= N - 2; a++) {
+    for (int b = 1; a + b <= N - 1; b++) {
+      in_at(a, b) = (int)pts.size();
+      pts.push_back({(float)(N - a - b) / N, (float)a / N, (float)b / N, -1, 0});
+    }
+  }
+  for (int a = 1; a <= N - 2; a++) {
+    for (int b = 1; a + b <= N - 2; b++) {
+      tris.push_back({in_at(a, b), in_at(a + 1, b), in_at(a, b + 1)});
+      if (a + b <= N - 3) {
+        tris.push_back({in_at(a + 1, b), in_at(a + 1, b + 1), in_at(a, b + 1)});
+      }
+    }
+  }
+  // couronne : chaque arete cousue a la rangee interieure qui la longe
+  const int m = N - 2;
+  for (int e = 0; e < 3; e++) {
+    std::vector<int> row(m);
+    for (int j = 0; j < m; j++) {
+      if (e == 0) {
+        row[j] = in_at(j + 1, 1);
+      } else if (e == 1) {
+        row[j] = in_at(N - 2 - j, j + 1);
+      } else {
+        row[j] = in_at(1, N - 2 - j);
+      }
+    }
+    int o = 0, j = 0;
+    while (o < ne[e] || j < m - 1) {
+      const bool can_o = o < ne[e];
+      const bool can_j = j < m - 1;
+      const float to = can_o ? (float)(o + 1) / ne[e] : 2.f;
+      const float tj = can_j ? (float)(j + 2) / (N - 1) : 2.f;
+      if (can_o && (!can_j || to <= tj)) {
+        tris.push_back({outer(e, o), outer(e, o + 1), row[j]});
+        o++;
+      } else {
+        tris.push_back({outer(e, o), row[j + 1], row[j]});
+        j++;
+      }
+    }
+  }
+}
+}  // namespace
+
+size_t g_pc_decor_tris_added = 0;
+size_t g_pc_sculpt_tris_added = 0;
+double g_pc_sculpt_budget = 1.2e6;
+
+float PcSculptHeight::doux_at(float s, float t) const {
+  const float x = (s - std::floor(s)) * w - 0.5f;
+  const float y = (t - std::floor(t)) * h - 0.5f;
+  const int x0 = (int)std::floor(x), y0 = (int)std::floor(y);
+  const float fx = x - x0, fy = y - y0;
+  auto at = [&](int i, int j) { return doux[(size_t)((j % h + h) % h) * w + ((i % w + w) % w)]; };
+  return (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) +
+         (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy;
+}
+
+const PcSculptHeight* pc_sculpt_height(const std::string& debug_name) {
+  static const bool off = std::getenv("QA_NO_SCULPT") != nullptr;
+  if (off) {
+    return nullptr;
+  }
+  static std::mutex mtx;
+  static std::unordered_map<std::string, std::unique_ptr<PcSculptHeight>> cache;
+  std::lock_guard<std::mutex> lk(mtx);
+  auto it = cache.find(debug_name);
+  if (it != cache.end()) {
+    return it->second.get();
+  }
+  std::unique_ptr<PcSculptHeight> m;
+  auto path = file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "sculpture" /
+              (debug_name + ".hgt");
+  if (file_util::file_exists(path.string())) {
+    auto b = file_util::read_binary_file(path);
+    if (b.size() >= 16 && memcmp(b.data(), "HGT1", 4) == 0) {
+      u16 w, h;
+      float amp;
+      memcpy(&w, b.data() + 4, 2);
+      memcpy(&h, b.data() + 6, 2);
+      memcpy(&amp, b.data() + 8, 4);
+      if (w > 0 && h > 0 && b.size() >= 16 + (size_t)w * h && amp > 0.f) {
+        m = std::make_unique<PcSculptHeight>();
+        m->w = w;
+        m->h = h;
+        m->amp = amp;
+        m->famille = b[12];
+        m->data.assign(b.begin() + 16, b.begin() + 16 + (size_t)w * h);
+        // version adoucie (flou en boite repete, rayon ~ 1/20 de la texture) : le volume de la
+        // geometrie suit les pieces et les pierres, pas le grain (le grain reste au pixel)
+        std::vector<float> f(m->data.size());
+        for (size_t i = 0; i < f.size(); i++) {
+          f[i] = m->data[i] / 127.5f - 1.f;
+        }
+        const int r = std::max(1, (int)std::max(w, h) / 20);
+        std::vector<float> tmp(f.size());
+        for (int pass = 0; pass < 2; pass++) {
+          for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+              float acc = 0;
+              for (int d = -r; d <= r; d++) {
+                acc += f[(size_t)y * w + ((x + d) % w + w) % w];
+              }
+              tmp[(size_t)y * w + x] = acc / (2 * r + 1);
+            }
+          }
+          for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+              float acc = 0;
+              for (int d = -r; d <= r; d++) {
+                acc += tmp[(size_t)(((y + d) % h + h) % h) * w + x];
+              }
+              f[(size_t)y * w + x] = acc / (2 * r + 1);
+            }
+          }
+        }
+        m->doux = std::move(f);
+      }
+    }
+  }
+  auto* res = m.get();
+  cache[debug_name] = std::move(m);
+  return res;
+}
+
+namespace {
+struct SculptEdgeKey {
+  s32 ax, ay, az, bx, by, bz;
+  int k, ne;
+  bool operator==(const SculptEdgeKey& o) const {
+    return ax == o.ax && ay == o.ay && az == o.az && bx == o.bx && by == o.by && bz == o.bz &&
+           k == o.k && ne == o.ne;
+  }
+};
+struct SculptEdgeKeyHash {
+  size_t operator()(const SculptEdgeKey& e) const {
+    size_t h = (size_t)(u32)e.ax * 73856093u ^ (size_t)(u32)e.ay * 19349663u ^
+               (size_t)(u32)e.az * 83492791u;
+    h = h * 1000003u ^ ((size_t)(u32)e.bx * 2654435761u ^ (size_t)(u32)e.by * 40503u ^
+                        (size_t)(u32)e.bz * 2246822519u);
+    return h * 31u + (size_t)e.k * 131u + (size_t)e.ne;
+  }
+};
+inline std::array<s32, 3> qkey(const math::Vector3f& p) {
+  return {(s32)std::lround(p.x() * 0.25f), (s32)std::lround(p.y() * 0.25f),
+          (s32)std::lround(p.z() * 0.25f)};
+}
+}  // namespace
+
+// PC-REMAKE : SCULPTURE d'un triangle d'origine du decor. Les coins restent a leur place ; les points
+// nouveaux suivent la surface (plate, ou courbe PN pour le bois et la paille) puis la carte de
+// hauteur adoucie, le long de la normale, a l'echelle reelle de la texture. Les aretes vives,
+// les coutures de texture et les aretes partagees avec un autre dessin restent droites et sans
+// relief ; les points d'une arete sont calcules une fois (cache) : les deux triangles qui la
+// partagent ont exactement les memes.
+u32 pc_sculpt_triangle(std::vector<PreloadedVertex>& verts,
+                       std::vector<u32>& out,
+                       const u32 t3[3],
+                       const DecorCorner c[3],
+                       bool courbe,
+                       const PcSculptHeight& carte,
+                       float r0,
+                       float r1,
+                       float r2,
+                       float pas,
+                       float K,
+                       float CAP,
+                       const std::unordered_set<SculptEdgeKey, SculptEdgeKeyHash>& coutures,
+                       std::unordered_map<SculptEdgeKey, math::Vector3f, SculptEdgeKeyHash>& cache,
+                       const std::function<u32(u32, u32)>& phong_mid,
+                       size_t* added) {
+  bool shared[3], straight[3];
+  int ne[3];
+  float lmax = 0.f;
+  for (int e = 0; e < 3; e++) {
+    const auto& a = c[e];
+    const auto& b = c[(e + 1) % 3];
+    shared[e] = a.border && b.border;
+    auto ka = qkey(a.p), kb = qkey(b.p);
+    if (kb < ka) {
+      std::swap(ka, kb);
+    }
+    const bool couture = coutures.count({ka[0], ka[1], ka[2], kb[0], kb[1], kb[2], 0, 0}) > 0;
+    straight[e] = a.vif || b.vif || shared[e] || couture;
+    const float len = (b.p - a.p).length();
+    lmax = std::max(lmax, len);
+    if (shared[e]) {
+      ne[e] = 2;
+    } else if (straight[e]) {
+      ne[e] = 1;
+    } else {
+      int n = std::clamp((int)std::ceil(len / pas), 1, 16);
+      if (courbe) {
+        const float ang = std::acos(std::clamp(a.g.dot(b.g), -1.f, 1.f)) * 57.29578f;
+        n = std::max(n, std::clamp((int)std::ceil(ang / 12.f - 0.15f), 1, 6));
+      }
+      ne[e] = n;
+    }
+  }
+  int N = std::clamp((int)std::ceil(lmax / pas), 1, 16);
+  N = std::max(N, std::max(ne[0], std::max(ne[1], ne[2])));
+  if (N > 1) {
+    N = std::max(N, 3);
+  }
+  // milieux exacts des aretes partagees (le dessin voisin les a deja), avant tout ajout de sommet
+  math::Vector3f shared_mid[3];
+  for (int e = 0; e < 3; e++) {
+    if (shared[e]) {
+      const u32 m = phong_mid(t3[e], t3[(e + 1) % 3]);
+      shared_mid[e] = math::Vector3f(verts[m].x, verts[m].y, verts[m].z);
+    }
+  }
+  // surface : plate, ou courbe (triangle PN) pour le bois et la paille
+  const math::Vector3f b01 = decor_ctrl(c[0], c[1], straight[0]),
+                       b10 = decor_ctrl(c[1], c[0], straight[0]),
+                       b12 = decor_ctrl(c[1], c[2], straight[1]),
+                       b21 = decor_ctrl(c[2], c[1], straight[1]),
+                       b20 = decor_ctrl(c[2], c[0], straight[2]),
+                       b02 = decor_ctrl(c[0], c[2], straight[2]);
+  const math::Vector3f E = (b01 + b10 + b12 + b21 + b20 + b02) / 6.f;
+  const math::Vector3f Vc = (c[0].p + c[1].p + c[2].p) / 3.f;
+  const math::Vector3f b111 = E + (E - Vc) * 0.5f;
+  auto surface = [&](float u, float v, float w) {
+    if (!courbe) {
+      return c[0].p * u + c[1].p * v + c[2].p * w;
+    }
+    return c[0].p * (u * u * u) + c[1].p * (v * v * v) + c[2].p * (w * w * w) +
+           b01 * (3.f * u * u * v) + b10 * (3.f * u * v * v) + b02 * (3.f * u * u * w) +
+           b20 * (3.f * u * w * w) + b12 * (3.f * v * v * w) + b21 * (3.f * v * w * w) +
+           b111 * (6.f * u * v * w);
+  };
+  math::Vector3f fn = (c[1].p - c[0].p).cross(c[2].p - c[0].p);
+  const float fl = fn.length();
+  fn = fl > 1e-9f ? fn / fl : c[0].n;
+  auto relief = [&](float u, float v, float w) {
+    const float r = r0 * u + r1 * v + r2 * w;
+    if (r <= 0.f) {
+      return math::Vector3f(0.f, 0.f, 0.f);
+    }
+    math::Vector3f dir = fn;
+    if (courbe) {
+      math::Vector3f g = c[0].g * u + c[1].g * v + c[2].g * w;
+      const float gl = g.length();
+      if (gl > 1e-6f) {
+        dir = g / gl;
+      }
+    }
+    const float A = std::min(carte.amp * r * K, CAP);
+    const float h = carte.doux_at(c[0].s * u + c[1].s * v + c[2].s * w,
+                                  c[0].t * u + c[1].t * v + c[2].t * w);
+    return dir * (h * A);
+  };
+  std::vector<PatchPoint> pts;
+  std::vector<std::array<int, 3>> tris;
+  sculpt_patch_topology(N, ne, pts, tris);
+
+  auto mid_n = [&](const DecorCorner& a, const DecorCorner& b, bool st) {
+    math::Vector3f s2 = a.n + b.n;
+    if (!st) {
+      math::Vector3f dd = b.p - a.p;
+      const float l2 = std::max(dd.dot(dd), 1e-8f);
+      s2 -= dd * (2.f * dd.dot(a.n + b.n) / l2);
+    }
+    const float l = s2.length();
+    return l > 1e-6f ? s2 / l : a.n;
+  };
+  const math::Vector3f m01 = mid_n(c[0], c[1], straight[0]), m12 = mid_n(c[1], c[2], straight[1]),
+                       m20 = mid_n(c[2], c[0], straight[2]);
+  const u32 base = (u32)verts.size();
+  const PreloadedVertex modele = verts[t3[0]];
+  for (const auto& pt : pts) {
+    const float u = pt.u, v = pt.v, w = pt.w;
+    math::Vector3f p;
+    if (pt.arete < 0 && ((u == 1.f) || (v == 1.f) || (w == 1.f))) {
+      p = u == 1.f ? c[0].p : (v == 1.f ? c[1].p : c[2].p);  // coin : ne bouge pas
+    } else if (pt.arete >= 0) {
+      const int e = pt.arete;
+      if (shared[e]) {
+        p = shared_mid[e];
+      } else {
+        auto ka = qkey(c[e].p), kb = qkey(c[(e + 1) % 3].p);
+        const bool flip = kb < ka;
+        SculptEdgeKey key = flip ? SculptEdgeKey{kb[0], kb[1], kb[2], ka[0], ka[1], ka[2],
+                                                 ne[e] - pt.k, ne[e]}
+                                 : SculptEdgeKey{ka[0], ka[1], ka[2], kb[0], kb[1], kb[2], pt.k,
+                                                 ne[e]};
+        auto it = cache.find(key);
+        if (it != cache.end()) {
+          p = it->second;
+        } else {
+          p = surface(u, v, w);
+          if (!straight[e]) {
+            p += relief(u, v, w);
+          }
+          cache.emplace(key, p);
+        }
+      }
+    } else {
+      p = surface(u, v, w) + relief(u, v, w);
+    }
+    math::Vector3f nl = c[0].n * (u * u) + c[1].n * (v * v) + c[2].n * (w * w) + m01 * (u * v) +
+                        m12 * (v * w) + m20 * (w * u);
+    const float nll = nl.length();
+    nl = nll > 1e-6f ? nl / nll : c[0].n;
+    PreloadedVertex nvx = modele;
+    nvx.x = p.x();
+    nvx.y = p.y();
+    nvx.z = p.z();
+    nvx.s = c[0].s * u + c[1].s * v + c[2].s * w;
+    nvx.t = c[0].t * u + c[1].t * v + c[2].t * w;
+    nvx.nor = decor_pack_nor(nl);
+    nvx.weld = 0;
+    nvx.color_index = c[0].col;
+    nvx.color_index2 = c[1].col;
+    nvx.color_index3 = c[2].col;
+    nvx.cw0 = (u8)std::clamp((int)std::lround(u * 255.f), 0, 255);
+    nvx.cw1 = (u8)std::clamp((int)std::lround(v * 255.f), 0, 255 - nvx.cw0);
+    if (nvx.cw0 == 0 && nvx.cw1 == 0) {
+      nvx.color_index = c[2].col;
+      nvx.color_index2 = c[2].col;
+    }
+    verts.push_back(nvx);
+  }
+  for (const auto& t : tris) {
+    out.push_back(base + t[0]);
+    out.push_back(base + t[1]);
+    out.push_back(base + t[2]);
+  }
+  *added += tris.size() > 0 ? tris.size() - 1 : 0;
+  g_pc_sculpt_tris_added += tris.size() > 0 ? tris.size() - 1 : 0;
+  return (u32)tris.size();
+}
+
+size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
+                            std::vector<u32>& indices,
+                            std::vector<StripDraw>& draws,
+                            const std::vector<u8>& classes,
+                            const std::function<u32(u32, u32)>& phong_mid,
+                            const std::vector<const PcSculptHeight*>* maps) {
+  const float M = 4096.f;
+  std::vector<u32> out;
+  out.reserve(indices.size() * 2);
+  size_t added = 0;
+  const size_t nv0 = verts.size();
+
+  // ---- PC-REMAKE : SCULPTURE, preparation (si des dessins ont une carte de hauteur) ----
+  // echelle reelle par sommet (unites du jeu par unite de texture), coutures de texture (memes
+  // positions, coordonnees differentes : l'arete y reste droite, sans relief) et pas du
+  // decoupage, regle pour tenir un budget de triangles
+  std::vector<float> rep_v;
+  std::unordered_set<SculptEdgeKey, SculptEdgeKeyHash> coutures;
+  std::unordered_map<SculptEdgeKey, math::Vector3f, SculptEdgeKeyHash> edge_cache;
+  float pas = 0.35f * M;  // 35 cm
+  const float K_GEO = 0.8f, CAP_GEO = 0.035f * M;  // volume : 80 % de la carte, 3,5 cm au plus
+  auto sculpt_map = [&](size_t di) -> const PcSculptHeight* {
+    return (maps && di < maps->size()) ? (*maps)[di] : nullptr;
+  };
+  bool any_sculpt = false;
+  for (size_t di = 0; maps && di < draws.size(); di++) {
+    any_sculpt |= sculpt_map(di) != nullptr;
+  }
+  if (any_sculpt) {
+    std::vector<float> rep_n(nv0, 0.f);
+    rep_v.assign(nv0, 0.f);
+    std::unordered_map<SculptEdgeKey, std::array<float, 4>, SculptEdgeKeyHash> uv_edge;
+    double tris_estimes = 0;
+    std::vector<float> longueurs;
+    for (size_t di = 0; di < draws.size(); di++) {
+      if (!sculpt_map(di)) {
+        continue;
+      }
+      size_t src = draws[di].unpacked.idx_of_first_idx_in_full_buffer;
+      size_t count = 0;
+      for (auto& g : draws[di].vis_groups) {
+        count += g.num_inds;
+      }
+      for (size_t i = src; i + 2 < src + count && i + 2 < indices.size(); i += 3) {
+        const u32 t3[3] = {indices[i], indices[i + 1], indices[i + 2]};
+        if (t3[0] >= nv0 || t3[1] >= nv0 || t3[2] >= nv0) {
+          continue;
+        }
+        const auto &a = verts[t3[0]], &b = verts[t3[1]], &c = verts[t3[2]];
+        math::Vector3f e1(b.x - a.x, b.y - a.y, b.z - a.z), e2(c.x - a.x, c.y - a.y, c.z - a.z);
+        const float aire = e1.cross(e2).length() * 0.5f;
+        const float auv = std::abs((b.s - a.s) * (c.t - a.t) - (c.s - a.s) * (b.t - a.t)) * 0.5f;
+        if (aire > 1e-6f && auv > 1e-12f) {
+          const float r = std::sqrt(aire / auv);
+          for (u32 k : t3) {
+            rep_v[k] += r;
+            rep_n[k] += 1.f;
+          }
+        }
+        float lmax = 0.f;
+        for (int e = 0; e < 3; e++) {
+          const auto& p = verts[t3[e]];
+          const auto& q = verts[t3[(e + 1) % 3]];
+          math::Vector3f pp(p.x, p.y, p.z), qq(q.x, q.y, q.z);
+          lmax = std::max(lmax, (qq - pp).length());
+          auto ka = qkey(pp), kb = qkey(qq);
+          std::array<float, 4> uv = {p.s, p.t, q.s, q.t};
+          if (kb < ka) {
+            std::swap(ka, kb);
+            uv = {q.s, q.t, p.s, p.t};
+          }
+          SculptEdgeKey key{ka[0], ka[1], ka[2], kb[0], kb[1], kb[2], 0, 0};
+          auto it = uv_edge.find(key);
+          if (it == uv_edge.end()) {
+            uv_edge.emplace(key, uv);
+          } else {
+            float d = 0.f;
+            for (int j = 0; j < 4; j++) {
+              d = std::max(d, std::abs(it->second[j] - uv[j]));
+            }
+            if (d > 1e-4f) {
+              coutures.insert(key);
+            }
+          }
+        }
+        longueurs.push_back(lmax);
+      }
+    }
+    for (size_t k = 0; k < nv0; k++) {
+      if (rep_n[k] > 0.f) {
+        rep_v[k] /= rep_n[k];
+      }
+    }
+    // budget : environ N^2 - 1 triangles AJOUTES par triangle d'origine, N = longueur / pas (16 au
+    // plus) ; part du budget du niveau qui reste
+    const double budget = std::max(0.0, g_pc_sculpt_budget);
+    for (int iter = 0; iter < 8; iter++) {
+      tris_estimes = 0;
+      for (float l : longueurs) {
+        const float n = std::clamp(std::ceil(l / pas), 1.f, 16.f);
+        tris_estimes += n > 1.f ? std::max(9.f, n * n) - 1.f : 0.f;
+      }
+      if (tris_estimes <= budget) {
+        break;
+      }
+      pas *= (float)std::sqrt(tris_estimes / budget);
+    }
+    g_pc_sculpt_budget -= tris_estimes;
+    lg::info("PC-REMAKE sculpture du decor : {} triangles d'origine, pas {:.0f} cm, ~{:.0f} k triangles",
+             longueurs.size(), pas / M * 100.f, tris_estimes / 1000.0);
+  }
+
+  for (size_t di = 0; di < draws.size(); di++) {
+    auto& d = draws[di];
+    const int classe = di < classes.size() ? classes[di] : 0;
+    const PcSculptHeight* carte = sculpt_map(di);
+    size_t src = d.unpacked.idx_of_first_idx_in_full_buffer;
+    d.unpacked.idx_of_first_idx_in_full_buffer = out.size();
+    for (auto& g : d.vis_groups) {
+      const size_t before = out.size();
+      u32 tris = 0;
+      const bool remplace = proto_remplace(g);
+      for (size_t i = src; i + 2 < src + g.num_inds && i + 2 < indices.size(); i += 3) {
+        const u32 t3[3] = {indices[i], indices[i + 1], indices[i + 2]};
+        if (classe == 0 || remplace || t3[0] >= nv0 || t3[1] >= nv0 || t3[2] >= nv0) {
+          out.insert(out.end(), t3, t3 + 3);
+          tris++;
+          continue;
+        }
+        DecorCorner c[3];
+        for (int k = 0; k < 3; k++) {
+          const auto& v = verts[t3[k]];
+          c[k].p = math::Vector3f(v.x, v.y, v.z);
+          c[k].n = decor_unpack_nor(v.nor);
+          c[k].g = decor_unpack_weld(v.weld, &c[k].vif, &c[k].border);
+          if (c[k].g.length() < 0.5f) {
+            c[k].g = c[k].n;
+          }
+          c[k].s = v.s;
+          c[k].t = v.t;
+          c[k].col = v.color_index;
+        }
+        if (carte && !(c[0].border && c[1].border && c[2].border)) {
+          tris += pc_sculpt_triangle(verts, out, t3, c, classe == 1 || classe == 3, *carte,
+                                     rep_v.empty() ? 0.f : rep_v[t3[0]],
+                                     rep_v.empty() ? 0.f : rep_v[t3[1]],
+                                     rep_v.empty() ? 0.f : rep_v[t3[2]], pas, K_GEO, CAP_GEO,
+                                     coutures, edge_cache, phong_mid, &added);
+          continue;
+        }
+        bool straight[3], shared[3];
+        int ne[3];
+        for (int e = 0; e < 3; e++) {
+          const auto& a = c[e];
+          const auto& b = c[(e + 1) % 3];
+          shared[e] = a.border && b.border;
+          straight[e] = a.vif || b.vif || shared[e];
+          const float len = (b.p - a.p).length() / M;
+          if (shared[e]) {
+            ne[e] = 2;  // milieu du dessin voisin
+          } else if (straight[e] || len < 0.03f) {
+            ne[e] = 1;
+          } else {
+            const float ang = std::acos(std::clamp(a.g.dot(b.g), -1.f, 1.f)) * 57.29578f;
+            ne[e] = std::clamp((int)std::ceil(ang / 12.f - 0.15f), 1, 6);
+          }
+        }
+        int N = std::max(ne[0], std::max(ne[1], ne[2]));
+        bool any_curve = false;
+        for (int e = 0; e < 3; e++) {
+          any_curve |= !shared[e] && ne[e] > 1;
+        }
+        if (!any_curve) {
+          // rien a arrondir : decoupage d'origine (milieux du voisinage aux aretes partagees)
+          N = 2;
+          ne[0] = ne[1] = ne[2] = 2;
+        }
+        const math::Vector3f b01 = decor_ctrl(c[0], c[1], straight[0]),
+                             b10 = decor_ctrl(c[1], c[0], straight[0]),
+                             b12 = decor_ctrl(c[1], c[2], straight[1]),
+                             b21 = decor_ctrl(c[2], c[1], straight[1]),
+                             b20 = decor_ctrl(c[2], c[0], straight[2]),
+                             b02 = decor_ctrl(c[0], c[2], straight[2]);
+        const math::Vector3f E = (b01 + b10 + b12 + b21 + b20 + b02) / 6.f;
+        const math::Vector3f Vc = (c[0].p + c[1].p + c[2].p) / 3.f;
+        const math::Vector3f b111 = E + (E - Vc) * 0.5f;
+        auto pn_at = [&](float u, float v, float w) {
+          return c[0].p * (u * u * u) + c[1].p * (v * v * v) + c[2].p * (w * w * w) +
+                 b01 * (3.f * u * u * v) + b10 * (3.f * u * v * v) + b02 * (3.f * u * u * w) +
+                 b20 * (3.f * u * w * w) + b12 * (3.f * v * v * w) + b21 * (3.f * v * w * w) +
+                 b111 * (6.f * u * v * w);
+        };
+        // milieux du voisinage (aretes partagees), calcules une fois
+        math::Vector3f shared_mid[3];
+        for (int e = 0; e < 3; e++) {
+          if (shared[e]) {
+            const u32 m = phong_mid(t3[e], t3[(e + 1) % 3]);
+            shared_mid[e] = math::Vector3f(verts[m].x, verts[m].y, verts[m].z);
+          }
+        }
+        // point d'une arete a son parametre te (0 = debut de l'arete, 1 = fin)
+        auto edge_curve = [&](int e, float te) {
+          float bu = 0, bv = 0, bw = 0;
+          if (e == 0) {
+            bu = 1 - te;
+            bv = te;
+          } else if (e == 1) {
+            bv = 1 - te;
+            bw = te;
+          } else {
+            bw = 1 - te;
+            bu = te;
+          }
+          return pn_at(bu, bv, bw);
+        };
+        auto edge_pt = [&](int e, float te) {
+          const int n = ne[e];
+          if (shared[e]) {
+            const math::Vector3f a = c[e].p, b = c[(e + 1) % 3].p;
+            return te < 0.5f ? a + (shared_mid[e] - a) * (te * 2.f)
+                             : shared_mid[e] + (b - shared_mid[e]) * (te * 2.f - 1.f);
+          }
+          const float x = te * n;
+          const int k0 = std::min((int)std::floor(x), n - 1);
+          const float f = x - k0;
+          return edge_curve(e, (float)k0 / n) * (1.f - f) + edge_curve(e, (float)(k0 + 1) / n) * f;
+        };
+        auto mid_n = [&](const DecorCorner& a, const DecorCorner& b, bool st) {
+          math::Vector3f s2 = a.n + b.n;
+          if (!st) {
+            math::Vector3f dd = b.p - a.p;
+            const float l2 = std::max(dd.dot(dd), 1e-8f);
+            s2 -= dd * (2.f * dd.dot(a.n + b.n) / l2);
+          }
+          const float l = s2.length();
+          return l > 1e-6f ? s2 / l : a.n;
+        };
+        const math::Vector3f m01 = mid_n(c[0], c[1], straight[0]),
+                             m12 = mid_n(c[1], c[2], straight[1]),
+                             m20 = mid_n(c[2], c[0], straight[2]);
+        const u32 base = (u32)verts.size();
+        auto vid = [&](int i, int j) { return base + (u32)(i * (2 * N + 3 - i) / 2 + j); };
+        for (int i = 0; i <= N; i++) {
+          for (int j = 0; j <= N - i; j++) {
+            const float v = (float)i / N, w = (float)j / N, u = 1.f - v - w;
+            math::Vector3f p;
+            if (j == 0) {
+              p = edge_pt(0, v);
+            } else if (i + j == N) {
+              p = edge_pt(1, w);
+            } else if (i == 0) {
+              p = edge_pt(2, 1.f - w);
+            } else {
+              p = pn_at(u, v, w);
+            }
+            math::Vector3f nl = c[0].n * (u * u) + c[1].n * (v * v) + c[2].n * (w * w) +
+                                m01 * (u * v) + m12 * (v * w) + m20 * (w * u);
+            const float nll = nl.length();
+            if (nll > 1e-6f) {
+              nl /= nll;
+            } else {
+              nl = c[0].n;
+            }
+            PreloadedVertex nvx = verts[t3[0]];
+            nvx.x = p.x();
+            nvx.y = p.y();
+            nvx.z = p.z();
+            nvx.s = c[0].s * u + c[1].s * v + c[2].s * w;
+            nvx.t = c[0].t * u + c[1].t * v + c[2].t * w;
+            nvx.nor = decor_pack_nor(nl);
+            nvx.weld = 0;
+            nvx.color_index = c[0].col;
+            nvx.color_index2 = c[1].col;
+            nvx.color_index3 = c[2].col;
+            nvx.cw0 = (u8)std::clamp((int)std::lround(u * 255.f), 0, 255);
+            nvx.cw1 = (u8)std::clamp((int)std::lround(v * 255.f), 0, 255 - nvx.cw0);
+            if (nvx.cw0 == 0 && nvx.cw1 == 0) {
+              // tout le poids sur le 3e coin : (0, 0) est le code du melange d'origine
+              nvx.color_index = c[2].col;
+              nvx.color_index2 = c[2].col;
+            }
+            verts.push_back(nvx);
+          }
+        }
+        for (int i = 0; i < N; i++) {
+          for (int j = 0; j < N - i; j++) {
+            const u32 a = vid(i, j), b = vid(i + 1, j), cc = vid(i, j + 1);
+            out.push_back(a);
+            out.push_back(b);
+            out.push_back(cc);
+            tris++;
+            if (j < N - i - 1) {
+              const u32 d2 = vid(i + 1, j + 1);
+              out.push_back(b);
+              out.push_back(d2);
+              out.push_back(cc);
+              tris++;
+            }
+          }
+        }
+        added += (size_t)N * N - 1;
+      }
+      src += g.num_inds;
+      g.num_inds = (u32)(out.size() - before);
+      g.num_tris = tris;
+    }
+  }
+  indices = std::move(out);
+  g_pc_decor_tris_added += added;
+  return added;
 }
 
 void MercModelGroup::pc_prepare_characters() {
@@ -2386,6 +3521,12 @@ void MercModelGroup::subdivide_phong() {
     if (merc_model_keeps_original_shape(model.name)) {
       continue;
     }
+    // PC-REMAKE : un modele remplace par un glTF remodele (tous ses dessins en liste) est deja au
+    // detail voulu ; le redecouper quadruplerait ses triangles pour rien. Ses dessins sont
+    // recales a la fin avec les autres dessins non touches.
+    if (model.pc_remodele) {
+      continue;
+    }
     for (auto& effect : model.effects) {
       if (effect.has_mod_draw) {
         continue;  // blendshape-streamed vertices: leave untouched
@@ -2470,7 +3611,7 @@ void MercModelGroup::subdivide_phong() {
     for (auto& effect : model.effects) {
       for (auto& draw : effect.all_draws) {
         bool untouched = (draw.eye_id != 0xff) || effect.has_mod_draw ||
-                         merc_model_keeps_original_shape(model.name);
+                         merc_model_keeps_original_shape(model.name) || model.pc_remodele;
         if (untouched) {
           draw.first_index += old_base;
         }

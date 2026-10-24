@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "common/custom_data/Tfrag3Data.h"
 #include "common/math/Vector.h"
 
 #include "game/graphics/opengl_renderer/BucketRenderer.h"
@@ -97,6 +98,9 @@ unsigned int pc_snow_cells_tex();
 // le sol de neige a ete vraiment creuse cette image (passe decoupee de TFragment) : le post
 // ne simule plus le relief (parallaxe), il garde la teinte et l'ombre du sillon
 extern bool g_snow_geom_drawn;
+// 22/10 : image ou la neige decoupee a ete dessinee (la capture d'ecran rejoue le post dans
+// la meme image : le drapeau seul, remis a zero apres le premier post, la faisait mentir)
+extern u64 g_snow_geom_frame;
 // 21/10 : incremente a chaque rechargement a chaud des shaders des personnages
 extern int g_pc_merc_shaders_seq;
 // PC-REMAKE 20/10 : faisceaux d'eco (segments monde) — lumiere en tube dans le post.
@@ -135,6 +139,22 @@ void pc_emissive_fold_into_all();
 // boost d'auto-illumination pour une texture (0 = pas émissive) : la surface
 // garde sa pleine luminosité, ni nuit ni ombre dessus — la lave EST sa lumière
 float pc_emissive_texture_boost(const std::string& debug_name);
+// 22/10 : lave animee (tfrag3.frag, lava_kind) — 0 = rien, 1 = croute craquelee (seule la lave
+// des fissures coule), 2 = lave en fusion (toute la surface coule)
+float pc_lava_texture_kind(const std::string& debug_name);
+// PC-REMAKE : SCULPTURE DU DECOR — carte de hauteur par texture (custom_assets/jak1/sculpture/<nom>.hgt,
+// ecrite par l'outil sculpture_decor.py) : relief par pixel avec parallaxe dans tfrag3.frag.
+// QA_NO_SCULPT=1 au lancement ou /tmp/qa_no_sculpt a chaud = coupe (A/B).
+using PcSculptMap = tfrag3::PcSculptHeight;  // chargee dans common (aussi pour la geometrie)
+const PcSculptMap* pc_sculpt_map(const std::string& debug_name);
+void pc_sculpt_register_texture(GLuint color_tex, const std::string& debug_name);
+void pc_sculpt_forget_texture(GLuint color_tex);
+void pc_sculpt_bind(GLuint color_tex, GLuint program);
+bool pc_sol_melange_off();
+float pc_sol_kind(const std::string& debug_name);
+bool pc_vert_off();
+float pc_fronde_dose();
+bool pc_is_palm_leaf_texture(const std::string& n);
 bool pc_remake_mat_inverse(const float* m, float* inv);
 // inverse of the background vertex transform; (ndc,1) -> (world - cam_trans, 1)
 extern float g_world_from_clip[16];

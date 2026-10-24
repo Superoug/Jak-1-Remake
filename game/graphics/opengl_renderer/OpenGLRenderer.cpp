@@ -1192,6 +1192,110 @@ void qa_glerr_check(const char* where) {
   }
 }
 namespace {
+// PC-REMAKE : CARTES DU RIVAGE (outils/rivages.py) : distance signee au trait de cote (m, > 0 en
+// mer), une par niveau cotier, chargee quand le niveau sert. Le post en tire les vagues.
+struct Rivage {
+  GLuint tex = 0;
+  float box[4] = {0, 0, 0, 0};  // x0, z0 (m), 1 / largeur, 1 / profondeur (1/m)
+};
+std::unordered_map<std::string, Rivage> g_rivages;
+int g_rivage_poll = 0;
+
+Rivage pc_rivage_load(const std::string& level) {
+  Rivage r;
+  // cartes ecrites par l'extraction (out/jak1/rivages), sinon fournies dans custom_assets
+  auto path = file_util::get_jak_project_dir() / "out" / "jak1" / "rivages" / (level + ".riv");
+  if (!fs::exists(path)) {
+    path = file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "rivages" /
+           (level + ".riv");
+  }
+  if (!fs::exists(path)) {
+    return r;
+  }
+  auto data = file_util::read_binary_file(path);
+  if (data.size() < 28 || memcmp(data.data(), "RIV1", 4) != 0) {
+    return r;
+  }
+  float x0, z0, pas;
+  u32 w, h;
+  memcpy(&x0, data.data() + 4, 4);
+  memcpy(&z0, data.data() + 8, 4);
+  memcpy(&pas, data.data() + 12, 4);
+  memcpy(&w, data.data() + 16, 4);
+  memcpy(&h, data.data() + 20, 4);
+  if (w == 0 || h == 0 || !(pas > 0.f) || data.size() < 28 + (size_t)w * h * 2) {
+    return r;
+  }
+  glGenTextures(1, &r.tex);
+  glBindTexture(GL_TEXTURE_2D, r.tex);
+  GLint align = 4;
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, w, h, 0, GL_RED, GL_HALF_FLOAT, data.data() + 28);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, align);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  r.box[0] = x0;
+  r.box[1] = z0;
+  r.box[2] = 1.f / (w * pas);
+  r.box[3] = 1.f / (h * pas);
+  lg::info("remake rivage : carte de {} chargee ({}x{})", level, w, h);
+  return r;
+}
+
+}  // namespace
+// cartes liees a la derniere image (lues par l'eau, voir CommonOceanRenderer)
+unsigned int g_rivage_tex[2] = {0, 0};
+float g_rivage_box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int g_rivage_n = 0;
+namespace {
+// garde les cartes des niveaux en cours d'utilisation, lie les deux premieres aux unites
+// `unite` et `unite + 1` ; rend leur nombre et leurs boites
+int pc_rivage_bind(Loader* loader, int unite, float* boites) {
+  if (loader && (g_rivage_poll++ % 30) == 0) {
+    std::vector<std::string> noms;
+    for (auto* lev : loader->get_in_use_levels()) {
+      if (lev && lev->level) {
+        noms.push_back(lev->level->level_name);
+      }
+    }
+    for (auto it = g_rivages.begin(); it != g_rivages.end();) {
+      if (std::find(noms.begin(), noms.end(), it->first) == noms.end()) {
+        if (it->second.tex) {
+          glDeleteTextures(1, &it->second.tex);
+        }
+        it = g_rivages.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    for (auto& n : noms) {
+      if (!g_rivages.count(n)) {
+        g_rivages[n] = pc_rivage_load(n);
+      }
+    }
+  }
+  int n = 0;
+  for (auto& [nom, r] : g_rivages) {
+    if (!r.tex || n >= 2) {
+      continue;
+    }
+    glActiveTexture(GL_TEXTURE0 + unite + n);
+    glBindTexture(GL_TEXTURE_2D, r.tex);
+    memcpy(boites + 4 * n, r.box, sizeof(r.box));
+    g_rivage_tex[n] = r.tex;
+    n++;
+  }
+  for (int i = n; i < 2; i++) {
+    boites[4 * i] = boites[4 * i + 1] = boites[4 * i + 2] = boites[4 * i + 3] = 0.f;
+    g_rivage_tex[i] = 0;
+  }
+  memcpy(g_rivage_box, boites, sizeof(g_rivage_box));
+  g_rivage_n = n;
+  return n;
+}
 }  // namespace
 
 void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings_in) {
@@ -2302,7 +2406,12 @@ GLuint pc_bloom_run(GameVersion version,
 // le post, profondeur liee sur l'unite 15 et VAO plein ecran lie. Rend la texture (R = dose
 // avant epaule) ou 0. Etat restaure comme pc_bloom_run (unite 0 a relier par l'appelant).
 BloomTarget g_shaft_a, g_shaft_b;
-GLuint pc_shaft_run(GameVersion version, bool reload, const float* cam_pos, int full_w, int full_h) {
+GLuint pc_shaft_run(GameVersion version,
+                    bool reload,
+                    const float* cam_pos,
+                    int full_w,
+                    int full_h,
+                    float time_s) {
   extern float g_shaft_amt;
   if (g_shaft_amt <= 0.001f || !g_sun_shadow.ready || !g_sun_shadow.enabled() ||
       !g_world_from_clip_ok) {
@@ -2361,6 +2470,8 @@ GLuint pc_shaft_run(GameVersion version, bool reload, const float* cam_pos, int 
   glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
   glUniform4fv(pc_uniform_loc(pr, "sun_dir"), 1, sd);
   glUniform1f(pc_uniform_loc(pr, "shaft_indoor"), std::clamp(g_grade_amt2[3], 0.f, 1.f));
+  // 22/10 : faisceaux de canopee (mouvement du feuillage)
+  glUniform1f(pc_uniform_loc(pr, "shaft_time"), time_s);
   glBindFramebuffer(GL_FRAMEBUFFER, g_shaft_a.fbo);
   glViewport(0, 0, w, h);
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -2775,6 +2886,19 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       POST_U(4fv, "sun_dir", 1, sd);
     }
     POST_U(4fv, "light_fx", 1, g_light_fx);
+    // PC-REMAKE : translucidite du feuillage — /tmp/qa_no_transl = coupee (A/B)
+    {
+      static int poll = 0;
+      static bool transl_off = false;
+      if ((poll++ % 64) == 0) {
+        FILE* f = fopen("/tmp/qa_no_transl", "r");
+        transl_off = f != nullptr;
+        if (f) {
+          fclose(f);
+        }
+      }
+      POST_U(1f, "foliage_transl", transl_off ? 0.f : 1.f);
+    }
     POST_U(4fv, "grade_fx", 1, g_grade_fx);
     POST_U(4fv, "grade_amt2", 1, g_grade_amt2);
     POST_U(4fv, "sun_screen", 1, sun_screen);
@@ -3207,7 +3331,8 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     GLuint stex = bloom_has_depth
                       ? pc_shaft_run(render_state->version, post_reloaded,
                                      m_render_state.camera_pos.data(),
-                                     m_fbo_state.render_fbo->width, m_fbo_state.render_fbo->height)
+                                     m_fbo_state.render_fbo->width, m_fbo_state.render_fbo->height,
+                                     (float)(m_render_state.frame_idx % 216000) / 60.f)
                       : 0;
     glActiveTexture(GL_TEXTURE8);
     glBindTexture(GL_TEXTURE_2D, stex);
@@ -3225,8 +3350,21 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     POST_U(1i, "snow_trail_tex", 7);
     POST_U(4f, "snow_trail", snow_tex ? 1.f : 0.f, g_snow_step[0], g_snow_step[2],
            (float)(render_state->frame_idx % 216000) / 60.f);
-    POST_U(1f, "snow_geom", g_snow_geom_drawn ? 1.f : 0.f);
+    // (original : g_snow_geom_drawn ? 1.f : 0.f)
+    POST_U(1f, "snow_geom",
+           (g_snow_geom_drawn || g_snow_geom_frame == render_state->frame_idx) ? 1.f : 0.f);
     g_snow_geom_drawn = false;
+    // PC-REMAKE : cartes du rivage -> unites 5 et 6
+    {
+      float boites[8];
+      int nriv = pc_rivage_bind(m_render_state.loader.get(), 5, boites);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
+      POST_U(1i, "riv_tex0", 5);
+      POST_U(1i, "riv_tex1", 6);
+      POST_U(4fv, "riv_box", 2, boites);
+      POST_U(1i, "riv_n", nriv);
+    }
   }
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

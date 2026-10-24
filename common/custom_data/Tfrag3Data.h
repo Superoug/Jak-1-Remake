@@ -18,7 +18,7 @@ namespace tfrag3 {
 // - if changing any large things (vertices, vis, bvh, colors, textures) update get_memory_usage
 // - if adding a new category to the memory usage, update extract_level to print it.
 
-constexpr int TFRAG3_VERSION = 43;
+constexpr int TFRAG3_VERSION = 44;  // 44 : couleurs a 3 indices des prototypes remodeles
 
 enum MemoryUsageCategory {
   TEXTURE,
@@ -104,6 +104,18 @@ struct PreloadedVertex {
   // pans plats a bords droits sur les ombres peintes). Sommets d'origine : = color_index.
   u16 color_index2 = 0;
 
+  // PC-REMAKE : decor decoupe (tfrag3_tess) — normale SOUDEE pour la forme (la meme pour tous les
+  // sommets a cette position : pas de fissure) + drapeaux. Calcule au chargement
+  // (pc_prepare_decor_weld). Bits : 0 valide, 1 arete vive (aretes droites), 2 bord (pas de
+  // relief : limite entre dessins, couture de texture, bord ouvert), 3-16 x, 17-30 y (octaedre).
+  // Pas utilise dans == ni dans le hachage.
+  u32 weld = 0;
+  // PC-REMAKE : decor affine (pc_refine_decor) — melange de couleur peinte a TROIS sommets :
+  // color_index (poids cw0), color_index2 (poids cw1), color_index3 (le reste). cw0 = cw1 = 0 :
+  // melange d'origine a deux (0,5 / 0,5).
+  u16 color_index3 = 0;
+  u8 cw0 = 0, cw1 = 0;
+
   struct hash {
     std::size_t operator()(const PreloadedVertex& x) const;
   };
@@ -113,7 +125,8 @@ struct PreloadedVertex {
            color_index == other.color_index;
   }
 };
-static_assert(sizeof(PreloadedVertex) == 32, "PreloadedVertex size");
+// (original : 32 octets, sans weld ni melange a trois)
+static_assert(sizeof(PreloadedVertex) == 40, "PreloadedVertex size");
 
 struct PackedTieVertices {
   struct Vertex {
@@ -144,6 +157,12 @@ struct PackedTieVertices {
   std::vector<std::array<math::Vector4f, 4>> matrices;
   std::vector<MatrixGroup> matrix_groups;  // todo pack
   std::vector<Vertex> vertices;
+  // PC-REMAKE : prototypes du decor remodeles — couleur d'un sommet = melange de 3 couleurs du jour
+  // (celles des coins du triangle d'origine le plus proche), poids cw0 | cw1 << 8. Vides si aucun
+  // prototype remplace ; sinon paralleles a color_indices (poids 0 = couleur d'origine).
+  std::vector<u16> color_indices2;
+  std::vector<u16> color_indices3;
+  std::vector<u16> color_weights;
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
 };
@@ -354,7 +373,9 @@ struct TfragTree {
   } unpacked;
   void unpack();
   // PC-REMAKE: runtime Phong subdivision — rounds faceted geometry at load
-  void subdivide_phong();
+  // PC-REMAKE : textures (facultatif) = affinage du decor (bois, paille) selon le nom des textures
+  // sculpture : volume de la geometrie, seulement pour la geometrie la plus detaillee
+  void subdivide_phong(const std::vector<Texture>* textures = nullptr, bool sculpture = false);
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
 };
@@ -449,7 +470,7 @@ struct TieTree {
   void unpack();
   // PC-REMAKE: runtime Phong subdivision of static TIE geometry. Needs the
   // level textures to leave foliage draws (palms etc.) untouched.
-  void subdivide_phong(const std::vector<Texture>& textures);
+  void subdivide_phong(const std::vector<Texture>& textures, bool sculpture = false);
 };
 
 struct ShrubTree {
@@ -628,6 +649,9 @@ struct MercModel {
   // PC-REMAKE 21/10 : personnage (Jak, Daxter, PNJ, creatures, ennemis) — rendu remodele
   // (decoupage sur la carte graphique, matieres, fourrure). Pas serialise : pose au chargement.
   bool pc_character = false;
+  // PC-REMAKE : objet remplace par un glTF remodele (tous ses dessins en liste a l'extraction) :
+  // deja au detail voulu, rendu des matieres. Pas serialise : pose au chargement.
+  bool pc_remodele = false;
   void serialize(Serializer& ser);
   void memory_usage(MemoryUsageTracker* tracker) const;
 };
@@ -656,6 +680,33 @@ bool pc_is_character_model(const std::string& model_name);
 // pad0 d'un MercVertex de personnage : bit 0 = valide, bit 1 = arete vive, bits 2-16 et 17-31 =
 // normale soudee (octaedre, 15 bits par axe)
 u32 pc_pack_weld_normal(float x, float y, float z, bool sharp);
+// PC-REMAKE : normales soudees du decor (voir PreloadedVertex::weld). Triangles en liste (apres la
+// subdivision) : pour chaque dessin, ses groupes de visibilite sont contigus a partir de
+// unpacked.idx_of_first_idx_in_full_buffer.
+void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
+                           const std::vector<u32>& indices,
+                           const std::vector<StripDraw>& draws);
+// PC-REMAKE : matiere d'une texture pour le decor affine : 0 rien, 1 bois/corde, 2 roche, 3 paille
+int pc_decor_class_for_texture(const std::string& name);
+// PC-REMAKE : triangles ajoutes par l'affinage du decor (fait dans subdivide_phong), pour le journal
+extern size_t g_pc_decor_tris_added;
+// PC-REMAKE : SCULPTURE DU DECOR — carte de hauteur sculptee d'une texture (custom_assets/jak1/
+// sculpture/<nom>.hgt, ecrite par l'outil sculpture_decor.py). Chargee une fois, lecture seule,
+// sure entre fils. Sert au relief par pixel (tfrag3.frag) et au volume de la geometrie
+// (subdivide_phong). QA_NO_SCULPT=1 : aucune carte.
+struct PcSculptHeight {
+  int w = 0, h = 0;
+  float amp = 0.f;          // hauteur maxi, en fraction d'une repetition de la texture
+  int famille = 0;          // 1 bois, 2 roche, 3 metal, 4 autre
+  std::vector<u8> data;     // w x h, 0..255 <-> -1..1 (ligne 0 = t = 0)
+  std::vector<float> doux;  // meme carte adoucie (volume de la geometrie), -1..1
+  float doux_at(float s, float t) const;  // bilineaire, repetee
+};
+const PcSculptHeight* pc_sculpt_height(const std::string& debug_name);
+extern size_t g_pc_sculpt_tris_added;
+// budget de triangles ajoutes par la sculpture pour le niveau en cours de chargement (le chargeur
+// le pose avant de decouper les arbres ; chaque arbre en consomme une part)
+extern double g_pc_sculpt_budget;
 
 //
 

@@ -59,6 +59,40 @@ vec3 water_world(vec2 uv, float d) {
   return p.xyz / p.w + water_cam.xyz;
 }
 
+// PC-REMAKE : CARTES DU RIVAGE (distance signee au trait de cote, m, > 0 en mer ; outils/rivages.py).
+// La mer d'origine monte et descend de quelques dizaines de centimetres : sur la plage, ses
+// polygones depassaient alors sur le sable en marches d'escalier. La surface s'efface sur la
+// terre ; la nappe des vagues (post) dessine l'eau sur le sable.
+uniform sampler2D riv_tex0;
+uniform sampler2D riv_tex1;
+uniform vec4 riv_box[2];
+uniform int riv_n;
+float riv_dist(vec2 xz_m) {
+  float d = 99.0;
+  if (riv_n > 0) {
+    vec2 uv = (xz_m - riv_box[0].xy) * riv_box[0].zw;
+    if (uv.x > 0.002 && uv.x < 0.998 && uv.y > 0.002 && uv.y < 0.998) {
+      d = texture(riv_tex0, uv).r;
+    }
+  }
+  if (riv_n > 1) {
+    vec2 uv = (xz_m - riv_box[1].xy) * riv_box[1].zw;
+    if (uv.x > 0.002 && uv.x < 0.998 && uv.y > 0.002 && uv.y < 0.998) {
+      d = min(d, texture(riv_tex1, uv).r);
+    }
+  }
+  return d;
+}
+// part d'eau de ce point de la surface (1 = mer, 0 = sur la terre)
+float water_on_land() {
+  if (riv_n == 0) {
+    return 1.0;
+  }
+  vec3 ps = water_world(gl_FragCoord.xy / water_murk.zw, gl_FragCoord.z);
+  float d = riv_dist(ps.xz / 4096.0);
+  return d > 90.0 ? 1.0 : smoothstep(-0.6, 0.4, d);
+}
+
 // metres d'eau traverses par le regard, de la surface au fond (rien derriere = tres profond)
 // 17/10 v2 : borne a 2 x la profondeur VERTICALE — vu en rasant, le trajet devenait tres long
 // (2 m de fond = 20 m de trajet) et la brume noyait les hauts-fonds (rochers peints sans texture)
@@ -74,6 +108,43 @@ float water_column_m() {
   float path = length(pb - ps) / 4096.0;
   float depth = max(ps.y - pb.y, 0.0) / 4096.0;
   return min(path, depth * 2.0);
+}
+
+// 22/10 : TRANSMISSION ADOUCIE. Sous l'eau, le terrain d'origine a des marches nettes (le banc
+// de sable clair s'arrete d'un coup sur un fond de 6 m) : vue a travers l'eau, cette arete
+// faisait une nappe claire a bords droits. La transmission (ce qui passe du fond, par canal) est
+// moyennee sur un disque d'environ 4 m autour du point (2 anneaux de 8 tirages, rayon a l'ecran
+// selon la distance). Le centre pese double.
+vec3 water_transmission_soft(vec3 k) {
+  vec2 uv0 = gl_FragCoord.xy / water_murk.zw;
+  vec3 ps = water_world(uv0, gl_FragCoord.z);
+  float dist = max(length(ps - water_cam.xyz) / 4096.0, 1.0);
+  // ~4 m a l'ecran (champ vertical d'environ 60 degres)
+  float rpx = clamp(4.0 / dist * water_murk.w * 0.95, 0.0, 260.0);
+  vec3 acc = 2.0 * exp(-water_column_m() * k);
+  float wsum = 2.0;
+  for (int k2 = 0; k2 < 16; k2++) {
+    float a = 0.7854 * float(k2) + (k2 < 8 ? 0.39 : 0.0);
+    float r = k2 < 8 ? 1.0 : 0.5;
+    vec2 uv = uv0 + vec2(cos(a), sin(a)) * (rpx * r) / water_murk.zw;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+      continue;
+    }
+    float db = texture(water_depth, uv).r;
+    float col = 1000.0;
+    if (db > 1e-6) {
+      vec3 pb = water_world(uv, db);
+      // un objet AU-DESSUS de l'eau (rocher emerge, Jak) ne compte pas
+      if (pb.y > ps.y) {
+        continue;
+      }
+      // le fond voisin, ramene sous CE point de la surface (profondeur verticale x 2)
+      col = max(ps.y - pb.y, 0.0) / 4096.0 * 2.0;
+    }
+    acc += exp(-col * k);
+    wsum += 1.0;
+  }
+  return acc / wsum;
 }
 
 void main() {
@@ -152,15 +223,26 @@ void main() {
       //   final = a*S + (1-a)*(fond*T + deep*(1-T))  — melange a deux sources (C++).
       // (v1, fondu : couleur (a*S + (1-a)*f*deep)/a', alpha a' = a + (1-a)*f — les rochers
       //  sous l'eau n'etaient plus qu'un aplat cyan)
-      vec3 T = exp(-water_column_m() * water_murk.y * vec3(1.6, 0.55, 0.45));
+      // 22/10 : le fond vu a travers garde son arete (sable clair contre fond profond) : on
+      // l'efface en approchant de la marche — la transmission descend jusqu'a 0 au bord du banc
+      // (moyenne = moitie de la locale) et reste entiere a 4 m du bord (moyenne = locale)
+      // (original : vec3 T = exp(-water_column_m() * water_murk.y * vec3(1.6, 0.55, 0.45));)
+      vec3 Tc = exp(-water_column_m() * water_murk.y * vec3(1.6, 0.55, 0.45));
+      vec3 Ts = water_transmission_soft(water_murk.y * vec3(1.6, 0.55, 0.45));
+      vec3 T = clamp(2.0 * Ts - Tc, vec3(0.0), Tc);
       color.rgb = a * color.rgb + (1.0 - a) * deep * (1.0 - T);
       color_t = vec4((1.0 - a) * T, 0.0);
       color.a = 1.0;
+      // PC-REMAKE : sur la terre, plus d'eau (couleur nulle, fond transmis entier)
+      float k = water_on_land();
+      color.rgb *= k;
+      color_t = mix(vec4(1.0, 1.0, 1.0, 0.0), color_t, k);
     }
   } else if (bucket == 5) {
     // depot d'alpha destination (passe B du mid transparent) : dose du reflet
     // additif bucket 4 — formule d'origine PS2, le MOTIF alphamod pleine force
     // (fragment_color.a arrive x2 du vertex shader : 0.502 x 2 = 1.0 en eau libre)
-    color = vec4(0.0, 0.0, 0.0, clamp(fragment_color.a * T0.a, 0.0, 1.0));
+    // PC-REMAKE : pas de reflet du large sur la terre (original : sans le facteur water_on_land)
+    color = vec4(0.0, 0.0, 0.0, clamp(fragment_color.a * T0.a, 0.0, 1.0) * water_on_land());
   }
 }

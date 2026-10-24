@@ -27,6 +27,7 @@ out vec3 w_nor;
 flat out float v_foliage;
 out float v_dist;
 out vec3 v_pos_w;
+out vec3 v_vue;  // PC-REMAKE : camera -> sommet (parallaxe de la sculpture du decor)
 
 // ---- TRACE DANS LA NEIGE : profil du sillon (meme code dans tfrag3_snow.tese et
 // post_processing.frag). La carte (unite 7) garde, par texel de 10 cm : R = distance au chemin
@@ -109,6 +110,11 @@ void main() {
   // raisonne avec la normale tournee vers le haut, et on rend la normale dans son sens d'origine
   // (le post la retourne vers la camera, comme avant)
   // (v1 : nor.y > 0.45 — ces sols etaient pris pour des parois : pas de creux par endroits)
+  // 22/10 : point de la surface AVANT le creusement, pour l'ombre du soleil. La carte d'ombres
+  // est rendue avec la neige intacte : le fond d'un sillon se croyait a l'ombre de sa propre
+  // surface, plus sombre, et la relumiere chaude du soleil (post) le teintait en brun. Le creux
+  // recoit desormais l'ombre (ou le soleil) de la neige qui le borde : il reste blanc.
+  vec3 pos_ombre = pos_w;
   float nsign = nor.y < 0.0 ? -1.0 : 1.0;
   vec3 nup = nor * nsign;
   if (snow_trail.x > 0.5 && nup.y > 0.45) {
@@ -128,6 +134,7 @@ void main() {
   vec3 vert = pos_w - cam_trans.xyz;
   v_dist = length(vert);
   v_pos_w = pos_w;
+  v_vue = vert;
   vec4 transformed = -pc_camera[3];
   transformed.w = 0;
   transformed -= pc_camera[0] * vert.x;
@@ -136,7 +143,8 @@ void main() {
   fogginess = 255 - clamp(-transformed.w + hvdf_offset.w, fog_min, fog_max);
   transformed.y *= SCISSOR_ADJUST * HEIGHT_SCALE;
   gl_Position = transformed;
-  sun_light_pos = sun_light_vp * vec4(pos_w, 1.0);
+  // (original : sun_light_vp * vec4(pos_w, 1.0))
+  sun_light_pos = sun_light_vp * vec4(pos_ombre, 1.0);
   w_nor = nor;
   v_foliage = 0.0;
   fragment_color = bc.x * tc_color[0] + bc.y * tc_color[1] + bc.z * tc_color[2];

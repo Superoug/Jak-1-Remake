@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <set>
 
 #include "Tie3.h"
 
@@ -192,6 +193,10 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
                             sizeof(tfrag3::PreloadedVertex),             // stride
                             (void*)offsetof(tfrag3::PreloadedVertex, r)  // offset (0)
       );
+      // PC-REMAKE : decor affine : 3e couleur peinte + poids (tfrag3.vert)
+      glEnableVertexAttribArray(6);
+      glVertexAttribIPointer(6, 1, GL_UNSIGNED_INT, sizeof(tfrag3::PreloadedVertex),
+                             (void*)offsetof(tfrag3::PreloadedVertex, color_index3));
 
       // allocate dynamic index buffer for the fallback "not multidraw" mode.
       glGenBuffers(1, &lod_tree[l_tree].single_draw_index_buffer);
@@ -715,11 +720,13 @@ void Tie3::draw_matching_draws_for_tree(int idx,
   if (tree.draws && tree.tex_names &&
       tree.static_draw_emissive.size() != tree.draws->size()) {
     tree.static_draw_emissive.assign(tree.draws->size(), 0.f);
+    tree.static_draw_lava.assign(tree.draws->size(), 0.f);
     for (size_t i = 0; i < tree.draws->size(); i++) {
       s32 ti = (*tree.draws)[i].tree_tex_id;
       if (ti >= 0 && ti < (int)tree.tex_names->size()) {
         tree.static_draw_emissive[i] =
             pc_emissive_texture_boost((*tree.tex_names)[ti].debug_name);
+        tree.static_draw_lava[i] = pc_lava_texture_kind((*tree.tex_names)[ti].debug_name);
       }
     }
   }
@@ -787,6 +794,20 @@ void Tie3::draw_matching_draws_for_tree(int idx,
 
     auto double_draw = setup_tfrag_shader(render_state, draw.mode,
                                           use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3);
+    // PC-REMAKE : carte de hauteur sculptee de cette texture (relief par pixel ; 0 = sans)
+    if (!use_envmap) {
+      pc_sculpt_bind(draw.tree_tex_id >= 0 ? m_textures->at(draw.tree_tex_id) : 0,
+                     render_state->shaders[ShaderId::TFRAG3].id());
+      // PC-REMAKE : palmes pliees + relief des folioles
+      const float pli = (draw.tree_tex_id >= 0 && tree.tex_names &&
+                         draw.tree_tex_id < (int)tree.tex_names->size() &&
+                         pc_is_palm_leaf_texture((*tree.tex_names)[draw.tree_tex_id].debug_name))
+                            ? pc_fronde_dose()
+                            : 0.f;
+      const GLuint prog = render_state->shaders[ShaderId::TFRAG3].id();
+      glUniform1f(pc_uniform_loc(prog, "fronde_pli"), pli);
+      glUniform1f(pc_uniform_loc(prog, "fronde_pli_f"), pli);
+    }
 
     glUniform1i(use_envmap ? m_etie_base_uniforms.decal : m_uniforms.decal,
                 draw.mode.get_decal() ? 1 : 0);
@@ -804,6 +825,11 @@ void Tie3::draw_matching_draws_for_tree(int idx,
             render_state->shaders[use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3].id(),
             "emissive_boost"),
         draw_idx < tree.static_draw_emissive.size() ? tree.static_draw_emissive[draw_idx] : 0.f);
+    glUniform1f(
+        pc_uniform_loc(
+            render_state->shaders[use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3].id(),
+            "lava_kind"),
+        draw_idx < tree.static_draw_lava.size() ? tree.static_draw_lava[draw_idx] : 0.f);
     // 21/09 : le detail intrinseque des sols est reserve au terrain (programme partage)
     if (!use_envmap) {
       glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "detail_amt"),
@@ -1455,6 +1481,35 @@ void Tie3::render_tree_wind(int idx,
                     ? 1.f
                     : 0.f);
     const auto loc_wind_phase = s_locs.phase;
+    // PC-REMAKE : palmes pliees en V et relief par pixel (palmes : dessin ; troncs : carte sculptee)
+    {
+      const GLuint prog = render_state->shaders[shader_id].id();
+      std::string tn;
+      if (draw.tree_tex_id >= 0 && draw.tree_tex_id < (int)tree.tex_names->size()) {
+        tn = (*tree.tex_names)[draw.tree_tex_id].debug_name;
+      }
+      const bool tronc = draw_idx < tree.wind_draw_is_trunk.size() && tree.wind_draw_is_trunk[draw_idx];
+      const bool palme = !tronc && (tn.find("palm-leaf") != std::string::npos ||
+                                    tn.find("palmleaf") != std::string::npos ||
+                                    tn.find("frond") != std::string::npos);
+      static int poll = 0;
+      static bool off = false;
+      static float dose = 1.f;  // /tmp/pc_fronde : dose du pli (essais), 1 par defaut
+      if ((poll++ % 256) == 0) {
+        off = file_util::file_exists("/tmp/qa_no_fronde");
+        dose = 1.f;
+        if (FILE* f = fopen("/tmp/pc_fronde", "r")) {
+          if (fscanf(f, "%f", &dose) != 1) {
+            dose = 1.f;
+          }
+          fclose(f);
+        }
+      }
+      glUniform1f(pc_uniform_loc(prog, "fronde_pli"), (palme && !off) ? dose : 0.f);
+      glUniform1f(pc_uniform_loc(prog, "relief_feuille"), (!tronc && !off) ? 1.f : 0.f);
+      pc_sculpt_bind((tronc && !off && draw.tree_tex_id >= 0) ? m_textures->at(draw.tree_tex_id) : 0,
+                     prog);
+    }
 
     int off = 0;
     for (auto& grp : draw.instance_groups) {

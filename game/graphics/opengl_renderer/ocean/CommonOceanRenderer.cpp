@@ -15,6 +15,10 @@ constexpr int OCEAN_TEX_TBP_JAK2 = 672;
 // de la profondeur de la scene prise juste avant l'eau. La surface garde sa couleur, ses
 // vagues et son reflet d'origine ; les reflets du remake (post) restent par-dessus.
 u64 g_water_murk_frame = ~0ull;  // image ou l'eau a pose sa brume (le post saute la sienne)
+// PC-REMAKE : cartes du rivage (OpenGLRenderer.cpp) : la surface s'efface au-dessus de la terre
+extern unsigned int g_rivage_tex[2];
+extern float g_rivage_box[8];
+extern int g_rivage_n;
 namespace {
 struct WaterDepthCopy {
   GLuint fbo = 0;
@@ -496,6 +500,16 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
     // sous 1 a 3 m d'eau n'etaient plus qu'un aplat cyan sans texture
     glUniform4f(pc_uniform_loc(id, "water_murk"), murk ? 1.f : 0.f, 0.2f,
                 (float)render_state->render_fb_w, (float)render_state->render_fb_h);
+    // PC-REMAKE : cartes du rivage -> unites 20 et 21
+    for (int i = 0; i < 2; i++) {
+      glActiveTexture(GL_TEXTURE20 + i);
+      glBindTexture(GL_TEXTURE_2D, i < g_rivage_n ? g_rivage_tex[i] : 0);
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(pc_uniform_loc(id, "riv_tex0"), 20);
+    glUniform1i(pc_uniform_loc(id, "riv_tex1"), 21);
+    glUniform4fv(pc_uniform_loc(id, "riv_box"), 2, g_rivage_box);
+    glUniform1i(pc_uniform_loc(id, "riv_n"), murk ? g_rivage_n : 0);
     // Couleur de la PLEINE MER des artistes (sommets du large, alpha plein) : pres des
     // cotes le large est transparent (alpha 0, couleur noire — le near prenait le relais
     // sur PS2) ; l'eau profonde y prend cette couleur au lieu du noir local. Moyenne des

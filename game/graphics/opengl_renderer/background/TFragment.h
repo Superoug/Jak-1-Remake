@@ -129,7 +129,9 @@ class TFragment : public BucketRenderer {
     // PC-REMAKE émissives : boost d'auto-illumination par draw (0 = normal),
     // bâti une fois par arbre depuis le registre des textures qui brillent
     std::vector<float> draw_emissive;
+    std::vector<float> draw_lava;  // 22/10 : lave animee (pc_lava_texture_kind)
     std::vector<float> draw_detail;  // 21/09 : detail intrinseque des sols (0/1)
+    std::vector<float> draw_sol;     // PC-REMAKE : 0 rien, 1 sol, 2 sol d'herbe (etalonnage du vert)
     std::vector<u8> draw_snow;       // 20/10 : sol de neige deformable (traces de Jak)
     const std::vector<tfrag3::Texture>* tex_names = nullptr;
     u32 palm_debug_seq_built = 0;

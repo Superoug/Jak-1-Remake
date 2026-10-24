@@ -799,7 +799,14 @@ s32 find_or_add_texture_to_level(tfrag3::Level& out,
       // visage de Daxter ; le detail vient de la fourrure en couches du rendu)
       const bool personnage = tfrag3::pc_is_character_model(debug_name) &&
                               new_tex.debug_name.find("fur") == std::string::npos;
-      if (merc_replacement_allowed(new_tex.debug_tpage_name, new_tex.debug_name) || personnage) {
+      // PC-REMAKE : avec la retexture complete, les OBJETS prennent aussi leur texture refaite. Fichier
+      // marqueur custom_assets/jak1/merc_objets_remake (le retirer = textures PS2 du 13/10).
+      static const bool objets_remake = file_util::file_exists(
+          (file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "merc_objets_remake")
+              .string());
+      const bool objet = objets_remake && !tfrag3::pc_is_character_model(debug_name);
+      if (merc_replacement_allowed(new_tex.debug_tpage_name, new_tex.debug_name) || personnage ||
+          objet) {
         auto resolved = tex_db.resolve_texture(pc_combo_tex_id);
         new_tex.w = resolved.w;
         new_tex.h = resolved.h;
@@ -1679,10 +1686,56 @@ void replace_model(tfrag3::Level& lvl, tfrag3::MercModel& model, const fs::path&
       }
     }
 
+    // PC-REMAKE : un modele remodele ne change que la GEOMETRIE. Chaque dessin reprend la matiere
+    // d'origine portant le meme nom de texture : texture du jeu, mode de dessin (decalque,
+    // transparence, filtrage) et reflet. Sans ca, le mode par defaut du glTF eclaire une lampe
+    // qui etait dessinee en decalque (pleine luminosite) et elle sort terne.
+    struct MatiereOrigine {
+      s32 tex;
+      DrawMode mode;
+      bool envmap;
+      u32 env_tex;
+      DrawMode env_mode;
+    };
+    std::unordered_map<std::string, MatiereOrigine> matieres;
+    for (auto& e : model.effects) {
+      for (auto& d : e.all_draws) {
+        if (d.eye_id != 0xff || d.tree_tex_id < 0 || d.tree_tex_id >= (s32)lvl.textures.size()) {
+          continue;
+        }
+        matieres.emplace(lvl.textures[d.tree_tex_id].debug_name,
+                         MatiereOrigine{d.tree_tex_id, d.mode, e.has_envmap, e.envmap_texture,
+                                        e.envmap_mode});
+      }
+    }
+    const s32 tex_offset = (s32)lvl.textures.size();
+
     auto swap_info = load_replacement_merc_model(model, lvl.merc_data.indices.size(),
                                                  lvl.merc_data.vertices.size(), lvl.textures.size(),
                                                  mdl_path.string(), old_verts, false);
     model = swap_info.new_model;
+    int reprises = 0;
+    for (auto& e : model.effects) {
+      for (auto& d : e.all_draws) {
+        const s32 k = d.tree_tex_id - tex_offset;
+        if (k < 0 || k >= (s32)swap_info.new_textures.size()) {
+          continue;
+        }
+        auto it = matieres.find(swap_info.new_textures[k].debug_name);
+        if (it == matieres.end()) {
+          continue;
+        }
+        d.tree_tex_id = it->second.tex;
+        d.mode = it->second.mode;
+        if (it->second.envmap) {
+          e.has_envmap = true;
+          e.envmap_texture = it->second.env_tex;
+          e.envmap_mode = it->second.env_mode;
+        }
+        reprises++;
+      }
+    }
+    lg::info("{} : {} dessins reprennent la matiere d'origine", model.name, reprises);
     size_t old_start = lvl.merc_data.vertices.size();
     for (auto& ind : swap_info.new_indices) {
       ASSERT(ind >= old_start);

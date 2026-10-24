@@ -5,6 +5,8 @@ layout (location = 1) in vec3 tex_coord_in;
 layout (location = 2) in ivec2 time_of_day_index;  // (index A, index B) : milieux de subdivision = moyenne
 layout (location = 3) in vec4 normal_in;  // normales lissées (subdiv Phong)
 layout (location = 4) in vec4 crown_in;   // squelette de couronne : fr, az, hn, id
+// PC-REMAKE : decor affine — 3e index de couleur peinte + poids (index3 | poids0 << 16 | poids1 << 24)
+layout (location = 6) in uint color3_in;
 
 uniform vec4 hvdf_offset;
 uniform vec4 cam_trans;
@@ -20,6 +22,7 @@ uniform int decal;
 uniform float wind_time;
 uniform float tfrag_wind_amp;  // amplitude réglable au REPL, 0 = figé
 uniform float palm_debug;      // 1 = draw ciblé par la chirurgie : peint en violet
+uniform float fronde_pli;      // PC-REMAKE : palmes pliees en V (voir tie_wind.vert), 0 = cartes d'origine
 
 out vec4 fragment_color;
 out vec3 tex_coord;
@@ -34,6 +37,7 @@ flat out float v_foliage;  // 17/10 : 1 = feuille marquee (s > 50), voir tfrag3.
 // 21/09 : distance camera->sommet (unites jeu) pour le fondu du detail des sols
 out float v_dist;
 out vec3 v_pos_w;  // position monde (grain procedural des sols, ancre au monde)
+out vec3 v_vue;    // PC-REMAKE : camera -> sommet (parallaxe de la sculpture du decor)
 
 void main() {
   // old system:
@@ -59,6 +63,7 @@ void main() {
   if (tc_in.x > 50.0) {
     tc_in.x -= 100.0;
     v_foliage = 1.0;
+
     // Palmiers fondus dans le terrain : MÊME recette que les palmiers TIE
     // validés — battement feuille à feuille le long de la NORMALE (phases
     // courtes entre feuilles) + houle de couronne légère. Amplitude pilotée
@@ -84,9 +89,16 @@ void main() {
     }
   }
 
+  // PC-REMAKE : palme pliee en V le long de sa nervure (s = 0), folioles retombantes vers la pointe
+  // (dessins a texture de palme seulement : fronde_pli pose par dessin)
+  if (fronde_pli > 0.0) {
+    float sp = clamp(tc_in.x, 0.0, 1.0);
+    pos_w.y += fronde_pli * 0.22 * 4096.0 * (1.6 * sp - 0.9 * sp * sp);
+  }
   vec3 vert = pos_w - cam_trans.xyz;
   v_dist = length(vert);
   v_pos_w = pos_w;
+  v_vue = vert;
   vec4 transformed = -pc_camera[3];
   transformed.w = 0;
   transformed -= pc_camera[0] * vert.x;
@@ -104,7 +116,17 @@ void main() {
   w_nor = normal_in.xyz;
 
   // time of day lookup
-  fragment_color = (0.5 * (texelFetch(tex_T10, time_of_day_index.x, 0) + texelFetch(tex_T10, time_of_day_index.y, 0)));
+  // (original : 0.5 * (A + B) seulement)
+  uint cw0 = (color3_in >> 16) & 0xffu, cw1 = (color3_in >> 24) & 0xffu;
+  if (cw0 + cw1 > 0u) {
+    // PC-REMAKE : sommet du decor affine — melange des couleurs des trois coins du triangle d'origine
+    float a = float(cw0) / 255.0, b = float(cw1) / 255.0;
+    fragment_color = a * texelFetch(tex_T10, time_of_day_index.x, 0) +
+                     b * texelFetch(tex_T10, time_of_day_index.y, 0) +
+                     max(1.0 - a - b, 0.0) * texelFetch(tex_T10, int(color3_in & 0xffffu), 0);
+  } else {
+    fragment_color = (0.5 * (texelFetch(tex_T10, time_of_day_index.x, 0) + texelFetch(tex_T10, time_of_day_index.y, 0)));
+  }
   // color adjustment
   fragment_color *= 2;
   fragment_color.a *= 2;

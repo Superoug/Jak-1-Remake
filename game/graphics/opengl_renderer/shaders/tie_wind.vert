@@ -4,6 +4,7 @@ layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;
 layout (location = 2) in ivec2 time_of_day_index;  // (index A, index B) : milieux de subdivision = moyenne
 layout (location = 3) in vec4 normal_in;  // normales lissées (déjà dans le VAO)
+layout (location = 6) in uint color3_in;  // PC-REMAKE : 3e couleur + poids (prototypes remodeles)
 
 uniform vec4 hvdf_offset;
 uniform mat4 camera;
@@ -30,6 +31,12 @@ out vec4 fragment_color;
 out vec3 tex_coord;
 out float fogginess;
 out vec3 w_nor;  // PC-REMAKE 21/09 : G-buffer de normales
+// PC-REMAKE : PALMES PLIEES — une palme est une carte plate ; ici chaque demi-palme se releve en V le
+// long de sa nervure (la nervure est le bord s = 0 de la texture, les folioles vont vers s = 1),
+// les folioles retombent un peu vers la pointe. Hauteur proportionnelle a l'arbre. 0 = carte
+// d'origine (troncs, autres dessins, /tmp/qa_no_fronde).
+uniform float fronde_pli;
+out vec3 v_pos_p;  // PC-REMAKE : position dans l'espace du modele (relief par pixel)
 
 void main() {
   float span = max(wind_yrange.y - wind_yrange.x, 1.0);
@@ -95,6 +102,14 @@ void main() {
   // les sens sur les couronnes inclinées)
   vec3 leaf_dir = normalize(normal_in.xyz + vec3(0.0, 0.25, 0.0));
   p_in += leaf_dir * (flap * leaf_w * leaf_amp * 0.8);
+  if (fronde_pli > 0.0) {
+    float sp = clamp(tex_coord_in.x, 0.0, 1.0);
+    // 22 cm reels au bord des folioles (l'etendue du dessin ne donne pas la taille de la palme)
+    float pli = 0.22 * 4096.0 * fronde_pli;
+    // V : monte avec l'eloignement de la nervure ; pointe des folioles retombante
+    p_in.y += pli * (1.6 * sp - 0.9 * sp * sp);
+  }
+  v_pos_p = p_in;
 
   vec4 t_wind = -camera[3];
   t_wind -= camera[0] * p_in.x;
@@ -137,7 +152,17 @@ void main() {
   w_nor = normalize(normal_in.xyz + vec3(0.0, 0.25, 0.0));
 
   // time of day lookup
-  fragment_color = (0.5 * (texelFetch(tex_T10, time_of_day_index.x, 0) + texelFetch(tex_T10, time_of_day_index.y, 0)));
+  // PC-REMAKE : prototype remodele : melange des couleurs des trois coins du triangle d'origine
+  // (original : 0.5 * (A + B) seulement)
+  uint cw0 = (color3_in >> 16) & 0xffu, cw1 = (color3_in >> 24) & 0xffu;
+  if (cw0 + cw1 > 0u) {
+    float a = float(cw0) / 255.0, b = float(cw1) / 255.0;
+    fragment_color = a * texelFetch(tex_T10, time_of_day_index.x, 0) +
+                     b * texelFetch(tex_T10, time_of_day_index.y, 0) +
+                     max(1.0 - a - b, 0.0) * texelFetch(tex_T10, int(color3_in & 0xffffu), 0);
+  } else {
+    fragment_color = (0.5 * (texelFetch(tex_T10, time_of_day_index.x, 0) + texelFetch(tex_T10, time_of_day_index.y, 0)));
+  }
   // color adjustment
   fragment_color *= 2;
   fragment_color.a *= 2;

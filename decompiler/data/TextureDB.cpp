@@ -16,6 +16,39 @@
 
 namespace decompiler {
 
+namespace {
+// PC-REMAKE 21/10 : BORDS TRANSPARENTS FIDELES. L'agrandissement voit la texture comme un motif
+// qui se repete : il reporte sur la derniere rangee un peu de la premiere. Sur une frange d'herbe
+// (haut opaque, bas transparent), cette rangee devenait a demi opaque ; etiree par le mode clamp
+// sous la frange, elle tracait un fil vert le long de nombreux bords d'herbe. Partout ou le bord
+// de l'original est transparent, la bande correspondante de la version HD le redevient.
+// Le reste de la texture n'est pas touche.
+void pc_restore_transparent_border(const std::vector<u32>& orig,
+                                   int w,
+                                   int h,
+                                   ResolvedTextureData& hd) {
+  const int W = hd.w, H = hd.h;
+  if (w <= 0 || h <= 0 || (int)orig.size() != w * h || (int)hd.rgba.size() != W * H) {
+    return;
+  }
+  if (W < w || H < h || W % w || H % h || (W == w && H == h)) {
+    return;
+  }
+  const int sx = W / w, sy = H / h;
+  for (int y = 0; y < H; y++) {
+    const bool rangee_bord = y < sy || y >= H - sy;
+    for (int x = 0; x < W; x++) {
+      if (!rangee_bord && x >= sx && x < W - sx) {
+        continue;
+      }
+      if ((orig[(size_t)(y / sy) * w + (x / sx)] >> 24) == 0) {
+        hd.rgba[(size_t)y * W + x] &= 0x00ffffffu;
+      }
+    }
+  }
+}
+}  // namespace
+
 TextureDB::TextureDB() {
   std::vector<u32> data(16 * 16, 0xffffffff);
   add_texture(kPlaceholderWhiteTexturePage, kPlaceholderWhiteTextureId, data, 16, 16,
@@ -208,6 +241,7 @@ ResolvedTextureData TextureDB::resolve_texture(u32 id, bool allow_faithful) cons
 
   if (auto replacement = replace_texture(id)) {
     result = std::move(*replacement);
+    pc_restore_transparent_border(tex.rgba_bytes, tex.w, tex.h, result);
   } else if (faithful_hd && allow_faithful && !faithful_upscale_frozen(tex.name)) {
     // PC-REMAKE 14/10 : version HD FIDELE calculee ici depuis l'original du joueur
     // (cache borne : une texture partagee par plusieurs niveaux n'est calculee
@@ -238,6 +272,7 @@ ResolvedTextureData TextureDB::resolve_texture(u32 id, bool allow_faithful) cons
       result.w = (u16)up->w;
       result.h = (u16)up->h;
       result.rgba = std::move(up->rgba);
+      pc_restore_transparent_border(tex.rgba_bytes, tex.w, tex.h, result);
       if (const char* dump = std::getenv("PC_FAITHFUL_DUMP")) {
         auto path = fs::path(dump) / tpage_name / (tex.name + ".png");
         file_util::create_dir_if_needed_for_file(path);

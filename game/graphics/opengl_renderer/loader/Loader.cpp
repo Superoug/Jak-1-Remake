@@ -954,9 +954,17 @@ void Loader::loader_thread() {
       // and finally "unpack", which creates the vertex data we'll upload to the GPU
 
       Timer unpack_timer;
+      const size_t n_decor0 = tfrag3::g_pc_decor_tris_added;  // PC-REMAKE : affinage du decor
+      const size_t n_sculpt0 = tfrag3::g_pc_sculpt_tris_added;
+      // PC-REMAKE : budget de la sculpture du decor pour ce niveau (objets du decor d'abord, puis terrain)
+      tfrag3::g_pc_sculpt_budget = [] {
+        const char* e = std::getenv("QA_SCULPT_BUDGET");
+        return e ? std::atof(e) : 1.2e6;
+      }();
       {
         auto p = scoped_prof("tie-unpack");
-        for (auto& tie_tree : result->tie_trees) {
+        for (size_t geo = 0; geo < result->tie_trees.size(); geo++) {
+          auto& tie_tree = result->tie_trees[geo];
           for (auto& tree : tie_tree) {
             tree.unpack();
             // PC-REMAKE: round static TIE geometry (huts, barrels, bridges,
@@ -964,20 +972,23 @@ void Loader::loader_thread() {
             // wind-animated strips are converted alongside — the earlier
             // "broken palms" came from that mode mismatch, now fixed.
             if (tfrag3::g_tfrag_phong_subdiv && tree.use_strips) {
-              tree.subdivide_phong(result->textures);
+              tree.subdivide_phong(result->textures, geo == 0);
             }
+
           }
         }
       }
 
       {
         auto p = scoped_prof("tfrag-unpack");
-        for (auto& t_tree : result->tfrag_trees) {
+        for (size_t geo = 0; geo < result->tfrag_trees.size(); geo++) {
+          auto& t_tree = result->tfrag_trees[geo];
           for (auto& tree : t_tree) {
             tree.unpack();
             // PC-REMAKE: round terrain geometry.
             if (tfrag3::g_tfrag_phong_subdiv && tree.use_strips) {
-              tree.subdivide_phong();
+              // PC-REMAKE : avec les textures = affinage du decor (bois, paille)
+              tree.subdivide_phong(&result->textures, geo == 0);
             }
           }
         }
@@ -986,6 +997,9 @@ void Loader::loader_thread() {
         // vraies sources de lumière pour la passe différée.
         pc_emissive_scan_level(*result);
       }
+      lg::info("PC-REMAKE PC-REMAKE : decor affine, {} triangles ajoutes dont {} sculptes ({:.0f} ms)",
+               tfrag3::g_pc_decor_tris_added - n_decor0, tfrag3::g_pc_sculpt_tris_added - n_sculpt0,
+               unpack_timer.getMs());
 
       {
         auto p = scoped_prof("shrub-unpack");
@@ -1287,6 +1301,7 @@ void Loader::update(TexturePool& texture_pool) {
             }
           }
           m_garbage_textures.push_back(tex);
+          pc_sculpt_forget_texture(tex);
         }
 
         for (auto& tie_geo : lev->tie_data) {

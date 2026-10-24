@@ -591,6 +591,12 @@ void remake_bush_to_grass_proto(ShrubProtoInfo& proto,
 // every extraction produces identical levels.
 namespace {
 bool is_densify_shrub_proto(const std::string& name) {
+  // PC-REMAKE : jamais la couronne des petits palmiers ("palmplant-top" contient "plant" : chaque
+  // petit palmier recevait deux couronnes de feuilles en plus). "bushpalm" (herbe du village)
+  // reste densifie.
+  if (name.find("palmplant") != std::string::npos) {
+    return false;
+  }
   static const char* kKeywords[] = {"grass", "weed",  "fern",  "flower", "riceplant",
                                     "plant", "tuft",  "reed",  "hay",    "wheat",
                                     "grs",   "bush"};

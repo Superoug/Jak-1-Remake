@@ -15,6 +15,7 @@ in vec4 fragment_color;
 in vec3 tex_coord;
 in float fogginess;
 uniform sampler2D tex_T0;
+uniform float herbe_vert;  // PC-REMAKE : etalonnage du vert de l'herbe (comme le sol, tfrag3.frag)
 
 uniform float alpha_min;
 uniform float force_opaque;
@@ -54,6 +55,11 @@ void main() {
   if (gfx_hack_no_tex == 0) {
     vec4 T0 = texture(tex_T0, tex_coord.xy);
     color = fragment_color * T0;
+    if (herbe_vert > 0.5) {
+      vec3 c = color.rgb * vec3(0.69, 0.81, 0.72);  // (v1 : 0.80, 0.94, 0.84)
+      float l = dot(c, vec3(0.299, 0.587, 0.114));
+      color.rgb = mix(vec3(l), c, 1.08);
+    }
   } else {
     color = fragment_color;
   }

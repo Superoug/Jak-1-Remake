@@ -360,6 +360,11 @@ u8 Merc2::texture_famille(const LevelData* lev, s32 texture, bool* coquilles) {
                  has("brass") || has("buckle") || has("rivet") || has("chain") || has("nail") ||
                  has("target") || has("blade") || has("ring")) {
         f = 4;
+      } else if (has("rock") || has("stone") || has("boulder") || has("cliff") || has("brick")) {
+        // PC-REMAKE : objets remodeles (rochers, marches de pierre)
+        f = 13;
+      } else if (has("rope")) {
+        f = 15;
       } else if (has("wood") || has("bark") || has("logend") || mot("log") || has("stick") ||
                  has("staff") || has("plank") || has("branch") || has("stump") || has("twig")) {
         // 21/10 v2 : bois (rondin de Samos, batons, bateaux) — surface irreguliere et ecorce
@@ -951,6 +956,7 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.first_bone = first_bone;
   args.no_texture = render_state->version == GameVersion::Jak3 && model_no_texture;
   args.character = model->pc_character && m_remake.actif;
+  args.objet = !args.character && model->pc_remodele && m_remake.actif && m_remake.objets;
   args.lev = lev;
   args.orbe = model->name.rfind("money", 0) == 0;
 
@@ -1335,6 +1341,7 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
     static bool qa_split = false;
     if ((poll++ & 63) == 0) {
       m_remake.actif = !fs::exists("/tmp/qa_perso_off");
+      m_remake.objets = !fs::exists("/tmp/qa_obj_off");
       m_remake.decoupe = !fs::exists("/tmp/qa_perso_notess");
       m_remake.fourrure = !fs::exists("/tmp/qa_perso_nofur");
       qa_split = fs::exists("/tmp/qa_perso_split");
@@ -1567,6 +1574,10 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
     bool coquilles = false;
     draw->famille =
         mdraw.eye_id != 0xff ? 7 : texture_famille(args.lev, mdraw.tree_tex_id, &coquilles);
+  } else if (args.objet && mdraw.eye_id == 0xff) {
+    draw->flags |= OBJET;
+    bool coquilles = false;
+    draw->famille = texture_famille(args.lev, mdraw.tree_tex_id, &coquilles);
   }
   for (int i = 0; i < 4; i++) {
     draw->fade[i] = args.fade[i];
@@ -1612,6 +1623,10 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
     if (coquilles && !draw->mode.get_ab_enable()) {
       draw->flags |= FUR_SHELLS;
     }
+  } else if (args.objet && mdraw.eye_id == 0xff) {
+    draw->flags |= OBJET;
+    bool coquilles = false;
+    draw->famille = texture_famille(args.lev, mdraw.tree_tex_id, &coquilles);
   }
   for (int i = 0; i < 4; i++) {
     draw->fade[i] = 0;
@@ -1932,6 +1947,7 @@ void Merc2::do_draws(const Draw* draw_array,
       }
     }
     const bool perso = (draw.flags & CHARACTER) != 0;
+    const bool objet = (draw.flags & OBJET) != 0;
     const bool tess = perso && tess_ok && draw.no_strip;
     {
       const ShaderId want = tess ? sid_tess : sid_base;
@@ -1949,13 +1965,13 @@ void Merc2::do_draws(const Draw* draw_array,
       }
     }
     if (!set_fade) {
-      const float pv = perso ? 1.f : 0.f;
+      const float pv = (perso || objet) ? 1.f : 0.f;
       if (pv != last_perso) {
         glUniform1f(U->remake_perso, pv);
         last_perso = pv;
       }
     }
-    if (perso && draw.famille != last_famille) {
+    if ((perso || objet) && draw.famille != last_famille) {
       glUniform1i(U->remake_famille, draw.famille);
       last_famille = draw.famille;
     }
