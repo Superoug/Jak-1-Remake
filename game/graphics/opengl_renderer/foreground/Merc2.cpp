@@ -72,6 +72,8 @@ static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
                                            float* out16 = nullptr);
 
 Merc2* Merc2::s_shadow_instance = nullptr;
+// 25/10 : Jak mouille (kmachine.cpp pc_set_jak_wet) : haut, jambes, hauteur mouillee, pieds
+float g_jak_mouille[4] = {0.f, 0.f, 0.f, 0.f};
 
 void Merc2::shadow_hook(void* shader_lib) {
   if (s_shadow_instance) {
@@ -962,6 +964,8 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.orbe = model->name.rfind("money", 0) == 0;
   // 26/10 : les lacs de lave (village du volcan, ogre) sont des modeles d'eau animee
   args.lave = model->name.rfind("water-anim", 0) == 0 && model->name.find("lava") != std::string::npos;
+  // 25/10 : Jak et Daxter peuvent etre mouilles (merc2.frag)
+  args.mouille = model->name.rfind("eichar", 0) == 0 || model->name.rfind("sidekick", 0) == 0;
 
   // loop over effects, creating draws for each
   for (size_t ei = 0; ei < model->effects.size(); ei++) {
@@ -1294,6 +1298,9 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
   glUniformMatrix4fv(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(),
                                     "lava_world_from_merc"),
                      1, GL_FALSE, monde_mat);
+  // 25/10 : Jak mouille (pose par time-of-day.gc, pc-set-jak-wet!)
+  glUniform4fv(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "jak_mouille"), 1,
+               g_jak_mouille);
   glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "remake_force"), 1.f);
   {
     auto id = render_state->shaders[ShaderId::MERC2].id();
@@ -1407,6 +1414,9 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
       // fourrure : poils de 1 cm, brins de 3 mm, 16 couches douces (v1 : brins de 1,7 mm — plus
       // petits qu'un pixel en jeu, scintillement)
       glUniform4f(pc_uniform_loc(id, "fourrure"), 42.f, 12.f, 16.f, 0.f);
+      // 25/10 : Jak mouille (merc2.frag)
+      glUniformMatrix4fv(pc_uniform_loc(id, "lava_world_from_merc"), 1, GL_FALSE, monde_mat);
+      glUniform4fv(pc_uniform_loc(id, "jak_mouille"), 1, g_jak_mouille);
       if (sun_ok) {
         glUniformMatrix4fv(u->sun_light_from_cam, 1, GL_FALSE, sun_mat);
         g_sun_shadow.bind_for_receive(id);
@@ -1592,6 +1602,7 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
   draw->famille = 0;
   draw->reflet = args.orbe ? 1 : 0;
   draw->lave = 0;
+  draw->mouille = 0;
   if (args.character) {
     draw->flags |= CHARACTER;
     // la passe des reflets suit la meme surface que la base (bois deforme compris)
@@ -1640,6 +1651,7 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
   draw->famille = 0;
   draw->reflet = args.orbe ? 1 : 0;
   draw->lave = args.lave ? 1 : 0;
+  draw->mouille = args.mouille ? 1 : 0;
   if (args.character) {
     draw->flags |= CHARACTER;
     bool coquilles = false;
@@ -1941,6 +1953,7 @@ void Merc2::do_draws(const Draw* draw_array,
   int last_famille = -1;
   int last_reflet = -1;
   int last_lave = -1;
+  int last_mouille = -1;
   if (tess_ok) {
     glPatchParameteri(GL_PATCH_VERTICES, 3);
   }
@@ -1993,6 +2006,7 @@ void Merc2::do_draws(const Draw* draw_array,
         last_famille = -1;
         last_reflet = -1;
         last_lave = -1;
+        last_mouille = -1;
         glUniform4f(U->fog_color, render_state->fog_color[0] / 255.f,
                     render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
                     fog_on ? render_state->fog_intensity / 255 : 0);
@@ -2012,6 +2026,10 @@ void Merc2::do_draws(const Draw* draw_array,
     if (!tess && draw.reflet != last_reflet) {
       glUniform1i(pc_uniform_loc(render_state->shaders[sid_base].id(), "reflet_orbe"), draw.reflet);
       last_reflet = draw.reflet;
+    }
+    if (!set_fade && draw.mouille != last_mouille) {
+      glUniform1i(pc_uniform_loc(render_state->shaders[sid_cur].id(), "mouille_ici"), draw.mouille);
+      last_mouille = draw.mouille;
     }
     if (!tess && !set_fade && draw.lave != last_lave) {
       glUniform1i(pc_uniform_loc(render_state->shaders[sid_base].id(), "lave_merc"), draw.lave);
@@ -2138,6 +2156,8 @@ void Merc2::do_draws(const Draw* draw_array,
         glUniform1i(fu.gfx_hack_no_tex, (draw.flags & NO_TEXTURE) != 0);
         glUniform1f(fu.remake_perso, 1.f);
         glUniform1i(fu.remake_famille, draw.famille);
+        glUniform1i(pc_uniform_loc(render_state->shaders[ShaderId::MERC2_FUR].id(), "mouille_ici"),
+                    draw.mouille);
         // couches semi-transparentes : melange, sans ecrire la profondeur, l'alpha de l'image ni le
         // G-buffer de normales
         glEnable(GL_BLEND);

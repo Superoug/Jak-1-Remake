@@ -135,6 +135,11 @@ uniform float sun_shadow_strength;
 uniform int lave_merc;
 uniform float lava_time;
 uniform vec3 lava_cam;
+// 25/10 : JAK MOUILLE (Jak et Daxter, Merc2.cpp ; humidite posee par time-of-day.gc) : x = haut
+// du corps, y = jambes, z = hauteur mouillee au-dessus des pieds, w = pieds (y monde, unites)
+uniform vec4 jak_mouille;
+uniform int mouille_ici;
+uniform mat4 lava_world_from_merc;
 in vec3 v_lava_w;
 float lv_hash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -356,6 +361,53 @@ void main() {
   // 21/10 : orbe — un metal poli renvoie peu de lumiere diffuse : le reflet (emerc) domine
   if (reflet_orbe == 1) {
     color.rgb *= 0.55;
+  }
+
+  // 25/10 : JAK MOUILLE. L'eau remplit les pores : le tissu fonce beaucoup (et se sature un peu),
+  // la peau un peu, le metal et les yeux pas du tout ; un film d'eau brille (reflet net de la
+  // lumiere principale, lustre sur les bords). Sous la hauteur ou ses jambes ont trempe, Jak
+  // reste mouille plus longtemps (les jambes sechent apres le haut du corps).
+  if (mouille_ici == 1 && (jak_mouille.x > 0.001 || jak_mouille.y > 0.001)) {
+    vec4 wh = lava_world_from_merc * vec4(v_pos, -1.0);
+    float h_pied = wh.y / wh.w - jak_mouille.w;
+    float sous = 1.0 - smoothstep(jak_mouille.z - 0.05 * 4096.0, jak_mouille.z + 0.05 * 4096.0, h_pied);
+    float mouille = mix(jak_mouille.x, max(jak_mouille.x, jak_mouille.y), sous);
+    int fam = remake ? remake_famille : 0;
+    float poro = (fam == F_PEAU) ? 0.30 : (fam == F_TISSU) ? 1.0 : (fam == F_CUIR) ? 0.75 :
+                 (fam == F_CHEVEUX) ? 0.85 : (fam == F_FOURRURE) ? 0.95 :
+                 (fam == F_METAL || fam == F_OEIL || fam == F_BRILLANT) ? 0.0 : 0.70;
+    float k = mouille * poro;
+    vec3 gris = vec3(dot(color.rgb, vec3(0.299, 0.587, 0.114)));
+    // assombri (jusqu'a -48 % pour un tissu trempe) et un peu plus sature
+    color.rgb = mix(color.rgb, mix(gris, color.rgb, 1.18) * 0.52, k);
+    // film d'eau (espace de la camera du moteur, comme l'eclairage par pixel) : un lustre large
+    // et doux plutot que des points durs
+    vec3 nw = normalize(v_nrm);
+    vec3 vw = normalize(-v_pos);
+    vec3 l0 = normalize(vec3(light_dir0_fade.x, light_dir1_fade_en.x, light_dir2.x));
+    float sp = max(dot(reflect(-l0, nw), vw), 0.0);
+    sp = sp * sp * sp * sp;  // puissance 4
+    sp = sp * sp * sp;       // puissance 12
+    float bord = 1.0 - max(dot(nw, vw), 0.0);
+    bord = bord * bord * bord;
+    float film = mouille * mix(0.45, 0.8, 1.0 - poro * 0.5);
+    color.rgb += (light_col0.rgb * sp * 0.35 + vec3(0.14, 0.16, 0.18) * bord * 0.45) * film;
+    // gouttes : petites perles brillantes accrochees au personnage (reperes du modele, elles
+    // le suivent), seulement quand il est encore bien trempe
+    if (mouille > 0.45) {
+      vec3 q = v_ref * (1.0 / 90.0);
+      vec3 c = floor(q);
+      vec3 f = fract(q) - 0.5;
+      float r = fract(sin(dot(c, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+      if (r < 0.10) {
+        vec3 o = vec3(fract(r * 37.0), fract(r * 91.0), fract(r * 53.0)) - 0.5;
+        float d = length(f - o * 0.5);
+        float goutte = 1.0 - smoothstep(0.08, 0.16, d);
+        float eclat = pow(max(dot(reflect(-l0, nw), vw), 0.0), 6.0);
+        color.rgb += vec3(0.9, 0.95, 1.0) * goutte * (0.25 + 0.75 * eclat) * 0.45 *
+                     smoothstep(0.45, 0.9, mouille);
+      }
+    }
   }
 
   // PC-REMAKE: darken the character when it stands in the sun's shadow

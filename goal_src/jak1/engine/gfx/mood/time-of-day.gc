@@ -400,6 +400,9 @@
       ;; passent la porte et les ouvertures se lisent
       (else (* 2.5 *remake-shafts* day (remake-hut-amount))))))
 
+;; PC-REMAKE 25/10 : humidite de Jak (definie dans water.gc, apres le type water-control)
+(define-extern remake-update-wet (function int))
+
 (defun update-time-of-day ((arg0 time-of-day-context))
   "Update the time of day context"
   ;; set defaults
@@ -686,6 +689,8 @@
                               0.0)
                              ((= mat (pat-material deepsnow)) 1.0)
                              ((= mat (pat-material snow)) 0.5)
+                             ;; 25/10 : sable -> empreintes de pied (background_common.cpp)
+                             ((= mat (pat-material sand)) 0.25)
                              (else 0.0))))
       (pc-set-snow-step! 0.0 0.0 0.0 0.0))
   (if *target*
@@ -811,6 +816,9 @@
   ;; PC-REMAKE 19/08 : l'eco PORTE rayonne — Jak charge d'eco bleu eclaire
   ;; bleu autour de lui en courant, rouge en rouge, jaune en jaune. L'intensite
   ;; suit la reserve restante (eco-level) : la lueur s'eteint avec l'eco.
+  ;; PC-REMAKE 25/10 : JAK MOUILLE (merc2.frag) — en nageant, tout le corps ; en pataugeant, les
+  ;; jambes jusqu'a la surface ; hors de l'eau, il seche (le haut en ~15 s, les jambes en ~25 s)
+  (remake-update-wet)
   (when (and *target* (> (-> *target* fact eco-level) 0.0))
     (let ((kind (cond
                   ((= (-> *target* fact eco-type) (pickup-type eco-blue)) 2)

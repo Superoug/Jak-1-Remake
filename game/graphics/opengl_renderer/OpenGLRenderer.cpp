@@ -45,6 +45,8 @@
 #endif
 #include "common/util/string_util.h"
 
+// 25/10 : Jak dans l'eau (kmachine.cpp pc_set_jak_wet) : 0 / 1 patauge / 2 nage, surface
+float g_jak_eau[2] = {0.f, 0.f};
 namespace {
 std::string g_current_renderer;
 }
@@ -3132,6 +3134,38 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     float wg[4] = {g_water_glitter[0], g_water_glitter[1], g_water_glitter[2],
                    (float)(m_render_state.frame_idx % 216000) / 60.f};
     POST_U(4fv, "water_glitter", 1, wg);
+    // 25/10 : ONDES AUTOUR DE JAK dans l'eau (post_processing.frag) — un point d'emission tous
+    // les 35 cm parcourus dans l'eau, ou toutes les 1,2 s a l'arret ; 12 anneaux au plus
+    {
+      static float s_ondes[12 * 4] = {};
+      static int s_ondes_tete = 0;
+      static float s_lx = 0.f, s_lz = 0.f, s_lt = -100.f;
+      static u64 s_frame = ~0ull;
+      const float t = wg[3];
+      if (s_frame != m_render_state.frame_idx) {
+        s_frame = m_render_state.frame_idx;
+        if (g_jak_eau[0] > 0.5f) {
+          const float x = g_grass_push[0], z = g_grass_push[2];
+          const float d = std::sqrt((x - s_lx) * (x - s_lx) + (z - s_lz) * (z - s_lz)) / 4096.f;
+          if (t < s_lt) {
+            s_lt = -100.f;  // horloge repartie a zero
+          }
+          if (d > 0.35f || t - s_lt > 1.2f) {
+            float* o = &s_ondes[s_ondes_tete * 4];
+            o[0] = x;
+            o[1] = z;
+            o[2] = t;
+            // nage : anneaux plus francs ; a l'arret : de petites ondes
+            o[3] = (g_jak_eau[0] > 1.5f ? 1.0f : 0.75f) * (d > 0.35f ? 1.f : 0.45f);
+            s_ondes_tete = (s_ondes_tete + 1) % 12;
+            s_lx = x;
+            s_lz = z;
+            s_lt = t;
+          }
+        }
+      }
+      POST_U(4fv, "ondes[0]", 12, s_ondes);
+    }
     // 17/10 : la surface de l'eau a deja pose sa brume cette image (CommonOceanRenderer)
     {
       extern u64 g_water_murk_frame;
@@ -3348,6 +3382,17 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
     POST_U(1i, "snow_trail_tex", 7);
+    // 25/10 : empreintes dans le sable -> unite 4
+    {
+      GLuint sand_tex = pc_sand_tex();
+      glActiveTexture(GL_TEXTURE4);
+      glBindTexture(GL_TEXTURE_2D, sand_tex);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
+      POST_U(1i, "sable_tex", 4);
+      POST_U(4f, "sable", sand_tex ? 1.f : 0.f, g_snow_step[0], g_snow_step[2],
+             (float)(render_state->frame_idx % 216000) / 60.f);
+    }
     POST_U(4f, "snow_trail", snow_tex ? 1.f : 0.f, g_snow_step[0], g_snow_step[2],
            (float)(render_state->frame_idx % 216000) / 60.f);
     // (original : g_snow_geom_drawn ? 1.f : 0.f)

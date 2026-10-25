@@ -643,6 +643,7 @@
 (define-extern pc-remove-eco-lamp! (function int none))
 (define-extern pc-set-palm-wind! (function float float float float none))
 (define-extern pc-set-water-glitter! (function float float float none))
+(define-extern pc-set-jak-wet! (function float float float float float float none))
 ;; x y z rayon intensite kind (0 lampe chaude, 1 eco vert, 2 froid, 3 feu)
 (define-extern pc-add-lamp! (function float float float float float int none))
 ;; PC-REMAKE 20/10 : faisceau d'eco (extremites monde) -> lumiere en tube la nuit

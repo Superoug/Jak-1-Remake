@@ -96,6 +96,10 @@ uniform float shaft_amt;
 // snow_trail = (active, x et z de Jak en unites du jeu, instant courant en s)
 uniform sampler2D snow_trail_tex;
 uniform vec4 snow_trail;
+// 25/10 : empreintes dans le sable (background_common.cpp, SandPrints) : unite 4 ; sable = (active,
+// x et z de Jak en unites du jeu, instant courant en s)
+uniform sampler2D sable_tex;
+uniform vec4 sable;
 uniform float snow_geom;  // 1 = le sol est vraiment creuse (geometrie decoupee) : pas de parallaxe
 // ---- TRACE DANS LA NEIGE : profil du sillon (meme code dans tfrag3_snow.tese et
 // post_processing.frag). La carte (unite 7) garde, par texel de 10 cm : R = distance au chemin
@@ -520,6 +524,8 @@ float sh_distance(vec3 P0, bool vers_mer) {
 // alors la recherche a l'ecran ci-dessus).
 uniform sampler2D riv_tex0;
 uniform sampler2D riv_tex1;
+// 25/10 : ondes autour de Jak dans l'eau (OpenGLRenderer.cpp) : x, z (unites), instant (s), force
+uniform vec4 ondes[12];
 uniform vec4 riv_box[2];  // x0, z0 (m), 1/largeur, 1/profondeur
 uniform int riv_n;
 // 25/10 : EAU INTERIEURE (rivieres, chenaux etroits : +40 dans la carte, shore_map.cpp) — ni mer
@@ -1123,6 +1129,38 @@ void main() {
 
   // 22/10 : neige creusee eclairee comme la surface intacte qui l'entoure (voir neige_creux)
   N = normalize(mix(N, vec3(0.0, 1.0, 0.0), neige_creux));
+  // 25/10 : EMPREINTES DANS LE SABLE. Le relief des pas (carte de 2,5 cm autour de Jak) incline la
+  // normale : le soleil dessine le creux et son petit bourrelet ; le sable tasse au fond est un peu
+  // plus sombre. Elles se comblent en 2 a 4 minutes.
+  if (!sky_pixel && sable.x > 0.5) {
+    vec2 pm = P.xz * (1.0 / 4096.0);
+    vec2 dj = pm - sable.yz * (1.0 / 4096.0);
+    if (max(abs(dj.x), abs(dj.y)) < 12.0) {
+      vec2 tc = pm / 0.025 - 0.5;
+      ivec2 i0 = ivec2(floor(tc));
+      vec2 fr = tc - vec2(i0);
+      vec4 sa = texelFetch(sable_tex, i0 & 1023, 0);
+      vec4 sb = texelFetch(sable_tex, (i0 + ivec2(1, 0)) & 1023, 0);
+      vec4 sc = texelFetch(sable_tex, (i0 + ivec2(0, 1)) & 1023, 0);
+      vec4 sd = texelFetch(sable_tex, (i0 + ivec2(1, 1)) & 1023, 0);
+      if (max(max(sa.w, sb.w), max(sc.w, sd.w)) > 0.5) {
+        float gy = sa.w > 0.5 ? sa.z : (sb.w > 0.5 ? sb.z : (sc.w > 0.5 ? sc.z : sd.z));
+        if (abs(P.y * (1.0 / 4096.0) - gy) < 0.6) {
+          float age = sable.w - max(max(sa.y, sb.y), max(sc.y, sd.y));
+          if (age < 0.0) {
+            age += 3600.0;
+          }
+          float vie = (1.0 - smoothstep(120.0, 240.0, age)) *
+                      (1.0 - smoothstep(30.0, 60.0, view_dist * (1.0 / 4096.0)));
+          float h = mix(mix(sa.x, sb.x, fr.x), mix(sc.x, sd.x, fr.x), fr.y) * vie;
+          float gx = (mix(sb.x, sd.x, fr.y) - mix(sa.x, sc.x, fr.y)) * (vie / 0.025);
+          float gz = (mix(sc.x, sd.x, fr.x) - mix(sa.x, sb.x, fr.x)) * (vie / 0.025);
+          N = normalize(N + vec3(-gx, 0.0, -gz) * 1.4);
+          c *= 1.0 - 0.14 * clamp(-h / 0.024, 0.0, 1.0);
+        }
+      }
+    }
+  }
   if ((light_fx.y > 0.001 || light_fx.z > 0.001 || night_fx.x > 0.001) && !sky_pixel) {
     vec3 V = normalize(cam_trans.xyz - P);
     float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
@@ -1508,6 +1546,33 @@ void main() {
         // (original : vec3 Nr = normalize(vec3(Nw.x * 0.14, 1.0, Nw.z * 0.14));)
         float surf_m = length(Psurf - cam_trans.xyz) / 4096.0;
         vec2 hp = houle_pente(Psurf.xz / 4096.0, t, surf_m * 0.0011 / max(abs(I.y), 0.04));
+        // 25/10 : ONDES AUTOUR DE JAK (emetteurs : OpenGLRenderer.cpp, 12 au plus). Des anneaux
+        // partent de lui et s'elargissent (0,9 m/s) : ils deforment la surface (reflets, houle)
+        // et portent une fine ecume sur leur crete.
+        float ondes_ec = 0.0;
+        if (surf_m < 40.0) {
+          vec2 ondes_g = vec2(0.0);
+          for (int oi = 0; oi < 12; oi++) {
+            vec4 o = ondes[oi];
+            float age = t - o.z;
+            if (o.w <= 0.0 || age < 0.0 || age > 3.2) {
+              continue;
+            }
+            vec2 dv = (Psurf.xz - o.xy) / 4096.0;
+            float r = length(dv);
+            float wr = 0.09 + 0.06 * age;
+            float x = (r - (0.25 + 0.9 * age)) / wr;
+            if (abs(x) > 3.0) {
+              continue;
+            }
+            float amp = o.w * exp(-age * 1.1) / (1.0 + 0.5 * r);
+            float g = exp(-x * x);
+            // pente d'un petit bourrelet d'eau (derivee de son profil en cloche)
+            ondes_g += (dv / max(r, 1e-3)) * (-2.0 * x * g / wr) * amp * 0.05;
+            ondes_ec += g * amp;
+          }
+          hp += ondes_g;
+        }
         vec3 Nh = normalize(vec3(-hp.x, 1.0, -hp.y));
         vec3 Nr = normalize(vec3(Nw.x * 0.14 - hp.x * 0.25, 1.0, Nw.z * 0.14 - hp.y * 0.25));
         vec3 Rdir = reflect(I, Nr);
@@ -1574,6 +1639,8 @@ void main() {
         c = houle_surface(c, Nh, I, day, (1.0 - smoothstep(120.0, 260.0, surf_m)) *
                                              mix(0.35, 1.0, smoothstep(0.5, 2.5, prof_m)) *
                                              smoothstep(0.0, 0.15, prof_m));
+        // 25/10 : ecume fine sur la crete des ondes autour de Jak
+        c = mix(c, vec3(0.86, 0.93, 0.95) * mix(0.35, 1.0, day), clamp(ondes_ec * 0.32, 0.0, 0.40));
       }
     }
   } else if (night_fx.x > 0.001) {

@@ -1072,3 +1072,36 @@
   (water-vol-method-22 this)
   (go (method-of-object this water-vol-startup))
   (none))
+
+;; PC-REMAKE 25/10 : JAK MOUILLE (merc2.frag) — appele par update-time-of-day (time-of-day.gc)
+(define *remake-wet-top* 0.0)
+(define *remake-wet-low* 0.0)
+(define *remake-wet-line* 0.0) ;; hauteur mouillee au-dessus des pieds (unites du jeu)
+(defun remake-update-wet ()
+  "Humidite de Jak, envoyee au rendu des personnages."
+  (cond
+    ((and *target* (nonzero? (-> *target* water)))
+     (let* ((wf (-> *target* water flags))
+            (swim (logtest? wf (water-flags wt11)))
+            (wade (logtest? wf (water-flags wt10)))
+            (dt (seconds-per-frame))
+            (feet (-> *target* control trans y)))
+       (cond
+         (swim
+          (set! *remake-wet-top* 1.0)
+          (set! *remake-wet-low* 1.0)
+          (set! *remake-wet-line* 16384.0))
+         (wade
+          (set! *remake-wet-top* (fmax 0.0 (- *remake-wet-top* (/ dt 15.0))))
+          (set! *remake-wet-low* 1.0)
+          (set! *remake-wet-line* (fmax *remake-wet-line* (- (-> *target* water height) feet))))
+         (else
+          (set! *remake-wet-top* (fmax 0.0 (- *remake-wet-top* (/ dt 15.0))))
+          (set! *remake-wet-low* (fmax 0.0 (- *remake-wet-low* (/ dt 25.0))))
+          (if (<= *remake-wet-low* 0.0) (set! *remake-wet-line* 0.0))))
+       ;; et l'etat dans l'eau (ondes autour de Jak, post_processing.frag)
+       (pc-set-jak-wet! *remake-wet-top* *remake-wet-low* *remake-wet-line* feet
+                        (cond (swim 2.0) (wade 1.0) (else 0.0))
+                        (-> *target* water height))))
+    (else (pc-set-jak-wet! 0.0 0.0 0.0 0.0 0.0 0.0)))
+  0)

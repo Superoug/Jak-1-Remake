@@ -1541,6 +1541,21 @@ void pc_set_palm_wind(u32 a, u32 b, u32 c, u32 d) {
 // pointeur pendouillant pendant les transitions de niveau — 17/08). Une
 // sentinelle < -900000 signifie ne touche pas au niveau.
 extern float g_water_glitter[4];
+// PC-REMAKE 25/10 : JAK MOUILLE (merc2.frag) — x = haut du corps (0..1), y = jambes (0..1),
+// z = hauteur mouillee au-dessus des pieds (unites du jeu), w = hauteur des pieds (monde) ;
+// et JAK DANS L'EAU (ondes, post_processing.frag) : x = 0 hors de l'eau / 1 patauge / 2 nage,
+// y = hauteur de la surface (monde)
+extern float g_jak_mouille[4];
+extern float g_jak_eau[2];
+void pc_set_jak_wet(u32 top, u32 low, u32 line, u32 feet, u32 state, u32 surf) {
+  memcpy(&g_jak_mouille[0], &top, 4);
+  memcpy(&g_jak_mouille[1], &low, 4);
+  memcpy(&g_jak_mouille[2], &line, 4);
+  memcpy(&g_jak_mouille[3], &feet, 4);
+  memcpy(&g_jak_eau[0], &state, 4);
+  memcpy(&g_jak_eau[1], &surf, 4);
+}
+
 void pc_set_water_glitter(u32 sea, u32 day, u32 night) {
   float fsea, fday, fnight;
   memcpy(&fsea, &sea, 4);
@@ -1764,6 +1779,7 @@ void init_common_pc_port_functions(
   make_func_symbol_func("pc-set-sky-ambient!", (void*)pc_set_sky_ambient);
   make_func_symbol_func("pc-set-night-fx!", (void*)pc_set_night_fx);
   make_func_symbol_func("pc-add-lamp!", (void*)pc_add_lamp);
+  make_func_symbol_func("pc-set-jak-wet!", (void*)pc_set_jak_wet);
   make_func_symbol_func("pc-add-beam!", (void*)pc_add_beam);
   make_func_symbol_func("pc-add-static-lamp!", (void*)pc_add_static_lamp);
   make_func_symbol_func("pc-add-eco-lamp!", (void*)pc_add_eco_lamp);

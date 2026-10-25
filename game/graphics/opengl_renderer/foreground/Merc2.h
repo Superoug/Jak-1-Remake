@@ -218,6 +218,7 @@ class Merc2 {
     u8 famille;  // 21/10 : matiere (merc2.frag F_*), 0 = neutre
     u8 reflet;   // 21/10 : 1 = orbe de precurseur (reflet renforce, emerc.frag)
     u8 lave;     // 26/10 : 1 = nappe de lave (merc2.frag, lave qui ondule)
+    u8 mouille;  // 25/10 : 1 = Jak ou Daxter (merc2.frag, personnage mouille)
     u64 hash;
   };
 
@@ -272,6 +273,7 @@ class Merc2 {
     bool objet = false;              // PC-REMAKE : objet remodele
     bool orbe = false;               // 21/10 : orbe de precurseur (money)
     bool lave = false;               // 26/10 : nappe de lave animee (water-anim-*-lava)
+    bool mouille = false;            // 25/10 : Jak ou Daxter (peut etre mouille)
     const LevelData* lev = nullptr;  // 21/10 : familles de matiere des textures
   };
 

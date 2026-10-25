@@ -93,6 +93,7 @@ void pc_remake_lamps_begin_frame();
 extern float g_snow_step[4];
 void pc_snow_trail_frame(unsigned long long frame_idx);
 unsigned int pc_snow_trail_tex();
+unsigned int pc_sand_tex();  // 25/10 : empreintes dans le sable (post_processing.frag)
 // grille 128 x 128 (cases de 0,8 m) : instant du dernier pas qui touche chaque case
 unsigned int pc_snow_cells_tex();
 // le sol de neige a ete vraiment creuse cette image (passe decoupee de TFragment) : le post

@@ -467,12 +467,212 @@ struct SnowTrail {
 SnowTrail s_snow;
 }  // namespace
 
+// ===================== PC-REMAKE 25/10 : empreintes dans le sable =====================
+// Carte fine (2,5 cm par texel, 1024 x 1024 = 25,6 m, torique, centree sur Jak) : a chaque foulee
+// de Jak sur le sable, une vraie forme de pied (avant du pied + talon), alternee gauche / droite et
+// orientee dans le sens de la marche, creusee de 2 a 3 cm avec un petit bourrelet de sable autour.
+// R = relief (m : < 0 creux, > 0 bourrelet), G = instant du dernier passage (s), B = hauteur du sol
+// (m), A = 1 si marque. Le post (post_processing.frag) en tire la normale et le sable tasse.
+namespace {
+struct SandPrints {
+  static constexpr int N = 1024;
+  static constexpr float kTexel = 0.025f;  // m
+  std::vector<float> data;                 // N*N*4
+  GLuint tex = 0;
+  bool init = false;
+  int ox = 0, oz = 0;
+  bool have_last = false;
+  float lx = 0.f, lz = 0.f;
+  float since_step = 0.f;  // m parcourus depuis la derniere foulee
+  float side = 1.f;        // pied gauche (-1) / droit (+1)
+  float dir_x = 0.f, dir_z = 1.f;  // sens de la derniere marche
+  int air_frames = 0;
+  int idle_frames = 0;
+  static int wrap(int i) { return ((i % N) + N) % N; }
+  static void clear_texel(float* p) {
+    p[0] = 0.f;
+    p[1] = -1e6f;
+    p[2] = 0.f;
+    p[3] = 0.f;
+  }
+  void upload(int sx, int sz, int w, int h) {
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, N);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, sx, sz, w, h, GL_RGBA, GL_FLOAT, &data[(sz * N + sx) * 4]);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  }
+  void upload_world_rect(int ix0, int iz0, int ix1, int iz1) {
+    for (int z0 = iz0; z0 <= iz1;) {
+      int sz = wrap(z0);
+      int hz = std::min(iz1 - z0 + 1, N - sz);
+      for (int x0 = ix0; x0 <= ix1;) {
+        int sx = wrap(x0);
+        int wx = std::min(ix1 - x0 + 1, N - sx);
+        upload(sx, sz, wx, hz);
+        x0 += wx;
+      }
+      z0 += hz;
+    }
+  }
+  void ensure() {
+    if (init) {
+      return;
+    }
+    init = true;
+    data.resize(N * N * 4);
+    for (int i = 0; i < N * N; i++) {
+      clear_texel(&data[i * 4]);
+    }
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, N, N, 0, GL_RGBA, GL_FLOAT, data.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  }
+  void clear_column(int ix) {
+    int sx = wrap(ix);
+    for (int z = 0; z < N; z++) {
+      clear_texel(&data[(z * N + sx) * 4]);
+    }
+    upload(sx, 0, 1, N);
+  }
+  void clear_row(int iz) {
+    int sz = wrap(iz);
+    for (int x = 0; x < N; x++) {
+      clear_texel(&data[(sz * N + x) * 4]);
+    }
+    upload(0, sz, N, 1);
+  }
+  void recenter(float wx, float wz) {
+    int nx = (int)std::floor(wx / kTexel) - N / 2;
+    int nz = (int)std::floor(wz / kTexel) - N / 2;
+    if (std::abs(nx - ox) >= N || std::abs(nz - oz) >= N) {
+      for (int i = 0; i < N * N; i++) {
+        clear_texel(&data[i * 4]);
+      }
+      glBindTexture(GL_TEXTURE_2D, tex);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RGBA, GL_FLOAT, data.data());
+    } else {
+      for (int x = ox + N; x < nx + N; x++) clear_column(x);
+      for (int x = nx; x < ox; x++) clear_column(x);
+      for (int z = oz + N; z < nz + N; z++) clear_row(z);
+      for (int z = nz; z < oz; z++) clear_row(z);
+    }
+    ox = nx;
+    oz = nz;
+  }
+  // une empreinte de pied centree en (x, z) m, orientee selon (fx, fz) (unitaire)
+  void foot(float x, float y, float z, float fx, float fz, float now, float depth) {
+    const float rx = fz, rz = -fx;  // vers la droite du pied
+    const float reach = 0.24f;
+    int ix0 = (int)std::floor((x - reach) / kTexel), ix1 = (int)std::floor((x + reach) / kTexel);
+    int iz0 = (int)std::floor((z - reach) / kTexel), iz1 = (int)std::floor((z + reach) / kTexel);
+    for (int iz = iz0; iz <= iz1; iz++) {
+      for (int ix = ix0; ix <= ix1; ix++) {
+        float cx = (ix + 0.5f) * kTexel - x, cz = (iz + 0.5f) * kTexel - z;
+        float u = cx * fx + cz * fz;  // le long du pied (+ = orteils)
+        float v = cx * rx + cz * rz;  // en travers
+        // avant du pied et talon (distance normalisee : < 1 dedans)
+        float ea = std::sqrt(((u - 0.045f) / 0.085f) * ((u - 0.045f) / 0.085f) +
+                             (v / 0.055f) * (v / 0.055f));
+        float eb = std::sqrt(((u + 0.085f) / 0.050f) * ((u + 0.085f) / 0.050f) +
+                             (v / 0.042f) * (v / 0.042f));
+        float e = std::min(ea, eb);
+        if (e > 1.8f) continue;
+        float* p = &data[(wrap(iz) * N + wrap(ix)) * 4];
+        if (e < 1.05f) {
+          float t = std::clamp((e - 0.55f) / 0.45f, 0.f, 1.f);
+          float hv = -depth * (1.f - t * t * (3.f - 2.f * t));
+          if (hv < p[0]) {
+            p[0] = hv;
+          }
+        } else if (p[0] >= 0.f) {
+          float b = (e - 1.25f) / 0.20f;
+          p[0] = std::max(p[0], 0.006f * std::exp(-b * b));
+        }
+        p[1] = now;
+        p[2] = y;
+        p[3] = 1.f;
+      }
+    }
+    upload_world_rect(ix0, iz0, ix1, iz1);
+  }
+};
+SandPrints s_sand;
+
+// appele a chaque image par pc_snow_trail_frame : sur_sable = Jak touche le sable
+void pc_sand_frame(unsigned long long frame_idx, bool sur_sable) {
+  if (!sur_sable) {
+    if (++s_sand.air_frames > 18) {
+      s_sand.have_last = false;
+    }
+    s_sand.idle_frames++;
+    return;
+  }
+  s_sand.idle_frames = 0;
+  s_sand.ensure();
+  const float now = (float)(frame_idx % 216000) / 60.f;
+  const float x = g_snow_step[0] / 4096.f, y = g_snow_step[1] / 4096.f, z = g_snow_step[2] / 4096.f;
+  s_sand.recenter(x, z);
+  const bool atterrit = !s_sand.have_last;
+  s_sand.air_frames = 0;
+  if (atterrit) {
+    // retombee (saut, chute) : les deux pieds cote a cote, un peu plus profond, dans le sens de
+    // la derniere marche
+    const float fx = s_sand.dir_x, fz = s_sand.dir_z;
+    const float rx = fz, rz = -fx;
+    s_sand.foot(x + rx * 0.09f, y, z + rz * 0.09f, fx, fz, now, 0.03f);
+    s_sand.foot(x - rx * 0.09f, y, z - rz * 0.09f, fx, fz, now, 0.03f);
+    s_sand.have_last = true;
+    s_sand.lx = x;
+    s_sand.lz = z;
+    s_sand.since_step = 0.f;
+    return;
+  }
+  float dx = x - s_sand.lx, dz = z - s_sand.lz;
+  float dist = std::sqrt(dx * dx + dz * dz);
+  if (dist < 0.005f || dist > 1.5f) {
+    if (dist > 1.5f) {
+      s_sand.lx = x;
+      s_sand.lz = z;
+    }
+    return;
+  }
+  const float fx = dx / dist, fz = dz / dist;
+  s_sand.dir_x = fx;
+  s_sand.dir_z = fz;
+  s_sand.since_step += dist;
+  // foulee : 0,42 m en marchant, plus longue en courant (deplacement de cette image)
+  const float stride = std::clamp(0.30f + dist * 3.0f, 0.42f, 0.70f);
+  if (s_sand.since_step >= stride) {
+    s_sand.since_step = 0.f;
+    s_sand.side = -s_sand.side;
+    const float rx = fz, rz = -fx;
+    s_sand.foot(x + rx * 0.085f * s_sand.side, y, z + rz * 0.085f * s_sand.side, fx, fz, now,
+                0.024f);
+  }
+  s_sand.lx = x;
+  s_sand.lz = z;
+}
+}  // namespace
+
+unsigned int pc_sand_tex() {
+  // la carte reste valide un moment apres le dernier pas
+  return (s_sand.init && s_sand.idle_frames < 60 * 600) ? s_sand.tex : 0;
+}
+
 bool g_snow_geom_drawn = false;
 u64 g_snow_geom_frame = ~0ull;
 int g_pc_merc_shaders_seq = 0;
 
 void pc_snow_trail_frame(unsigned long long frame_idx) {
-  const float kind = g_snow_step[3];
+  // 25/10 : 0.25 = sable (time-of-day.gc) -> empreintes de pied, pas de sillon de neige
+  // (original : const float kind = g_snow_step[3];)
+  const bool sable = g_snow_step[3] > 0.2f && g_snow_step[3] < 0.3f;
+  pc_sand_frame(frame_idx, sable);
+  const float kind = sable ? 0.f : g_snow_step[3];
   if (kind <= 0.f) {
     // breve perte de contact (pente, petit rebond) : la trace reste continue si Jak reprend
     // pied tout pres ; au-dela de ~0,3 s (vrai saut), elle repart du point d'atterrissage
