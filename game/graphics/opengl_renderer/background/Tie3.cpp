@@ -730,12 +730,14 @@ void Tie3::draw_matching_draws_for_tree(int idx,
       tree.static_draw_emissive.size() != tree.draws->size()) {
     tree.static_draw_emissive.assign(tree.draws->size(), 0.f);
     tree.static_draw_lava.assign(tree.draws->size(), 0.f);
+    tree.static_draw_reflet.assign(tree.draws->size(), 0.f);
     for (size_t i = 0; i < tree.draws->size(); i++) {
       s32 ti = (*tree.draws)[i].tree_tex_id;
       if (ti >= 0 && ti < (int)tree.tex_names->size()) {
         tree.static_draw_emissive[i] =
             pc_emissive_texture_boost((*tree.tex_names)[ti].debug_name);
         tree.static_draw_lava[i] = pc_lava_texture_kind((*tree.tex_names)[ti].debug_name);
+        tree.static_draw_reflet[i] = pc_reflect_texture_kind((*tree.tex_names)[ti].debug_name);
       }
     }
   }
@@ -843,6 +845,11 @@ void Tie3::draw_matching_draws_for_tree(int idx,
             render_state->shaders[use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3].id(),
             "lava_kind"),
         draw_idx < tree.static_draw_lava.size() ? tree.static_draw_lava[draw_idx] : 0.f);
+    glUniform1f(
+        pc_uniform_loc(
+            render_state->shaders[use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3].id(),
+            "reflet_kind"),
+        draw_idx < tree.static_draw_reflet.size() ? tree.static_draw_reflet[draw_idx] : 0.f);
     // 21/09 : le detail intrinseque des sols est reserve au terrain (programme partage)
     if (!use_envmap) {
       glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "detail_amt"),

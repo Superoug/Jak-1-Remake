@@ -154,6 +154,9 @@ class Merc2 {
   // familles de matiere des textures, par niveau charge (cle : load_id)
   std::unordered_map<u64, std::vector<u8>> m_tex_famille;
   u8 texture_famille(const LevelData* lev, s32 texture, bool* coquilles);
+  // surfaces reflechissantes des textures (pc_reflect_texture_kind), par niveau charge
+  std::unordered_map<u64, std::vector<u8>> m_tex_reflet;
+  u8 texture_reflet(const LevelData* lev, s32 texture);
   void init_shaders(ShaderLibrary& shaders);
   GLuint m_detail_tex = 0;  // 21/10 v3 : cartes de detail des matieres (tableau, unite 5)
   int m_shaders_seq = 0;
@@ -219,6 +222,7 @@ class Merc2 {
     u8 reflet;   // 21/10 : 1 = orbe de precurseur (reflet renforce, emerc.frag)
     u8 lave;     // 26/10 : 1 = nappe de lave (merc2.frag, lave qui ondule)
     u8 mouille;  // 25/10 : 1 = Jak ou Daxter (merc2.frag, personnage mouille)
+    u8 miroir;   // metal et verre : 0 rien, 1 metal, 2 metal poli, 3 verre (reflets du post)
     u64 hash;
   };
 

@@ -281,6 +281,26 @@ Merc2::Merc2(ShaderLibrary& shaders, const std::vector<GLuint>* anim_slot_array)
   m_detail_tex = pc_make_detail_array();
 }
 
+// metal et verre : drapeau des reflets du post (0 rien, 1 metal, 2 metal poli, 3 verre)
+u8 Merc2::texture_reflet(const LevelData* lev, s32 texture) {
+  if (!lev || !lev->level || texture < 0 || texture >= (s32)lev->level->textures.size()) {
+    return 0;
+  }
+  auto& cache = m_tex_reflet[lev->load_id];
+  if (cache.empty()) {
+    if (m_tex_reflet.size() > 64) {
+      m_tex_reflet.clear();
+      return texture_reflet(lev, texture);
+    }
+    cache.resize(lev->level->textures.size(), 0);
+    for (size_t i = 0; i < lev->level->textures.size(); i++) {
+      const float k = pc_reflect_texture_kind(lev->level->textures[i].debug_name);
+      cache[i] = k > 1.5f ? 3 : k > 0.75f ? 2 : k > 0.25f ? 1 : 0;
+    }
+  }
+  return cache[texture];
+}
+
 // 21/10 : FAMILLE DE MATIERE d'une texture de personnage, d'apres son nom (merc2.frag F_*).
 // coquilles = fourrure opaque qui recoit les couches de poils (pas les franges trans, ni
 // les longues meches deja modelisees, ni les passages fourrure -> peau)
@@ -1603,6 +1623,7 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
   draw->reflet = args.orbe ? 1 : 0;
   draw->lave = 0;
   draw->mouille = 0;
+  draw->miroir = 0;
   if (args.character) {
     draw->flags |= CHARACTER;
     // la passe des reflets suit la meme surface que la base (bois deforme compris)
@@ -1652,6 +1673,7 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
   draw->reflet = args.orbe ? 1 : 0;
   draw->lave = args.lave ? 1 : 0;
   draw->mouille = args.mouille ? 1 : 0;
+  draw->miroir = mdraw.eye_id == 0xff ? texture_reflet(args.lev, mdraw.tree_tex_id) : 0;
   if (args.character) {
     draw->flags |= CHARACTER;
     bool coquilles = false;
@@ -1954,6 +1976,7 @@ void Merc2::do_draws(const Draw* draw_array,
   int last_reflet = -1;
   int last_lave = -1;
   int last_mouille = -1;
+  int last_miroir = -1;
   if (tess_ok) {
     glPatchParameteri(GL_PATCH_VERTICES, 3);
   }
@@ -2007,6 +2030,7 @@ void Merc2::do_draws(const Draw* draw_array,
         last_reflet = -1;
         last_lave = -1;
         last_mouille = -1;
+        last_miroir = -1;
         glUniform4f(U->fog_color, render_state->fog_color[0] / 255.f,
                     render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
                     fog_on ? render_state->fog_intensity / 255 : 0);
@@ -2030,6 +2054,12 @@ void Merc2::do_draws(const Draw* draw_array,
     if (!set_fade && draw.mouille != last_mouille) {
       glUniform1i(pc_uniform_loc(render_state->shaders[sid_cur].id(), "mouille_ici"), draw.mouille);
       last_mouille = draw.mouille;
+    }
+    if (!set_fade && draw.miroir != last_miroir) {
+      static const float kMiroir[4] = {0.f, 0.5f, 1.f, 2.f};
+      glUniform1f(pc_uniform_loc(render_state->shaders[sid_cur].id(), "reflet_kind"),
+                  kMiroir[draw.miroir & 3]);
+      last_miroir = draw.miroir;
     }
     if (!tess && !set_fade && draw.lave != last_lave) {
       glUniform1i(pc_uniform_loc(render_state->shaders[sid_base].id(), "lave_merc"), draw.lave);

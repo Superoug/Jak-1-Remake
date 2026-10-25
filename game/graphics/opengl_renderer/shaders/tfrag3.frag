@@ -30,6 +30,12 @@ uniform float sun_shadow_strength;
 uniform float relief_amt;
 // 22/10 : LAVE ANIMEE (voir pc_lava) — 0 = rien, 1 = croute craquelee, 2 = lave en fusion
 uniform float lava_kind;
+// metal et verre (pc_reflect_texture_kind) : 0 rien, 0.5 metal, 1 metal poli, 2 verre
+uniform float reflet_kind;
+// verre : panorama de l'entourage (reflet_env.frag, image precedente ; rgb / a, a = couverture)
+// et reglages : x = dose, y = 1 si le panorama existe, z = soleil (jour, hors interieur)
+uniform sampler2D reflet_env_tex;
+uniform vec4 reflet_fwd;
 uniform float wind_time;  // horloge (s), posee par TFragment pour tout le programme
 
 // PC-REMAKE "Spyro water": x = time (s), y = strength (1 on WATER trees)
@@ -565,6 +571,37 @@ void main() {
   color.rgb *= (emissive_boost > 0.001) ? 1.0 : (1.0 - sun_shadow);
   color.rgb *= lv_eclat;  // 22/10 : lave animee (1 ailleurs)
 
+  // VERRE (vitres, lentilles) : reflet calcule ici, au dessin de la vitre. Transparente, elle se
+  // melange a ce qui est derriere elle (couverture MSAA) et le post ne la reconnait pas. Lit le
+  // panorama de l'entourage ; Fresnel : peu de reflet de face, presque un miroir au rasant ; le
+  // reflet rend la vitre un peu plus opaque. Plus l'eclat du soleil, hors de l'ombre.
+  if (reflet_kind > 1.5 && reflet_fwd.x > 0.001 && gfx_hack_no_tex == 0) {
+    float nlv = length(w_nor);
+    if (nlv > 0.05) {
+      vec3 Nv = w_nor / nlv;
+      vec3 Iv = normalize(v_vue);
+      if (dot(Nv, Iv) > 0.0) {
+        Nv = -Nv;
+      }
+      float nv = clamp(-dot(Nv, Iv), 0.0, 1.0);
+      vec3 Rv = reflect(Iv, Nv);
+      vec3 env = mix(vec3(0.20, 0.19, 0.17), vec3(0.80, 0.88, 1.0), smoothstep(-0.04, 0.20, Rv.y));
+      if (reflet_fwd.y > 0.5) {
+        vec2 euv = vec2(atan(Rv.x, Rv.z) * (0.5 / 3.14159265) + 0.5,
+                        asin(clamp(Rv.y, -1.0, 1.0)) / 3.14159265 + 0.5);
+        vec4 e = textureLod(reflet_env_tex, euv, 0.5);
+        if (e.a > 0.02) {
+          env = mix(env, e.rgb / e.a, smoothstep(0.05, 0.45, e.a));
+        }
+      }
+      float Fv = clamp((0.14 + 0.86 * pow(1.0 - nv, 5.0)) * reflet_fwd.x, 0.0, 0.85);
+      color.rgb = mix(color.rgb, env, Fv);
+      color.a = clamp(color.a + Fv * (1.0 - color.a) * 0.6, 0.0, 1.0);
+      float rl = max(dot(Rv, -normalize(sun_dir_w)), 0.0);
+      color.rgb += vec3(1.0, 0.95, 0.85) * (pow(rl, 900.0) * 3.0) * (1.0 - sun_shadow) * reflet_fwd.z;
+    }
+  }
+
   float fog_amt = clamp(fogginess * fog_color.a, 0, 1);
   // PC-REMAKE 25/08 (rochers lointains bugges) : au-dela de
   // 85 % de brouillard, ce qui reste de la texture n'est plus du detail mais du
@@ -580,7 +617,13 @@ void main() {
     // traite en SOURCE, pas en receveur (ni soleil, ni lampes, ni occlusion :
     // le lac de lave du village volcan s'eclairait lui-meme jusqu'au blanc)
     // 17/10 : alpha 0.95 = feuillage (voir tie_wind.frag)
-    float tag = (emissive_boost > 0.001) ? 0.75 : ((v_foliage > 0.5) ? 0.95 : 1.0);
+    // drapeau des reflets du post (metal, verre) : juste sous 1, au-dessus du feuillage — un
+    // bord MSAA melange avec un solide (1.0) donne un reflet plus faible, jamais une autre famille
+    // (original : float tag = (emissive_boost > 0.001) ? 0.75 : ((v_foliage > 0.5) ? 0.95 : 1.0);)
+    // (le verre se reflete deja ci-dessus : pas de drapeau pour le post)
+    float tag_reflet = reflet_kind > 1.5 ? 1.0 : reflet_kind > 0.75 ? 250.0 / 255.0 :
+                       reflet_kind > 0.25 ? 252.0 / 255.0 : 1.0;
+    float tag = (emissive_boost > 0.001) ? 0.75 : ((v_foliage > 0.5) ? 0.95 : tag_reflet);
     vec3 n_g = (nl > 0.05) ? w_nor / nl : vec3(0.0, 1.0, 0.0);
     if (sc_ok) {
       n_g = normalize(mix(n_g, sc_N, 0.5));

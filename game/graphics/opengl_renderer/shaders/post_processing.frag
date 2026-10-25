@@ -76,6 +76,12 @@ uniform float water_murk_ocean;
 // xyz = normalized direction TOWARDS the sun (world), w = 1 when it is up
 uniform vec4 sun_dir;
 uniform float foliage_transl;  // PC-REMAKE : translucidite du feuillage (0 = coupee)
+// reflets du metal et du verre : x = dose (0 = coupes, /tmp/qa_no_reflet), y = 1 : drapeaux en
+// couleur (QA : orange = metal, jaune = metal poli, cyan = verre)
+uniform vec4 reflet_fx;
+// panorama de l'entourage vu par la camera (reflet_env.frag) : rgb / a = couleur, a = couverture
+uniform sampler2D reflet_env_tex;
+uniform float has_reflet_env;
 
 // World position is rebuilt from the depth buffer with the inverse of the
 // game's own camera matrix, which is what makes local lights possible at all:
@@ -704,6 +710,11 @@ void main() {
   // 21/09 : 1.0 = pixel d'une surface EMISSIVE (alpha 0.75 du G-buffer, tfrag3.frag)
   // -> source de lumiere, pas receveur : ni relumiere, ni lampes, ni SSAO dessus
   float emissive_px = 0.0;
+  // metal et verre (drapeau 250 a 254/255 du G-buffer, tfrag3.frag) : part de metal (1 = poli,
+  // ~0,5 = ordinaire, moins sur un bord MSAA melange avec un solide), metal poli, verre
+  float metal_px = 0.0;
+  float metal_poli = 0.0;
+  float verre_px = 0.0;
   // 26/10 : part d'interieur de cabane du pixel (voir pc_hut_inside) ; le ciel : 0
   float hut_px = 0.0;
   if (!sky_pixel) {
@@ -742,6 +753,17 @@ void main() {
       }
       // 17/10 : alpha 0.95 = feuillage (tie_wind, shrub, feuilles tfrag)
       foliage_px = gn.a > 0.92 && gn.a < 0.98;
+      {
+        float a8 = gn.a * 255.0;
+        if (a8 > 249.5 && a8 < 253.5) {
+          // 250 poli : 1 ; 252 ordinaire : 0,8 ; 253 = bord MSAA d'un metal ordinaire : 0,4
+          // (v1 : mix(1.0, 0.3, (a8 - 250.0) / 3.0) — l'acier restait trop discret)
+          metal_px = a8 < 252.5 ? mix(1.0, 0.8, clamp((a8 - 250.0) * 0.5, 0.0, 1.0)) : 0.4;
+          metal_poli = clamp((252.0 - a8) * 0.5, 0.0, 1.0);
+        } else if (a8 >= 253.5 && a8 < 254.5) {
+          verre_px = 1.0;
+        }
+      }
       pc_feuillage = foliage_px;
       if (gn.a > 0.5) {
         vec3 tn = gn.rgb * 2.0 - 1.0;
@@ -970,6 +992,8 @@ void main() {
   }
 
   // ---- depth-aware: SSAO (contact shading in crevices) ----
+  float ao_px = 0.0;  // occlusion du pixel, gardee pour les reflets (le ciel ne se reflete pas
+                      // au fond d'un recoin)
   if (depth_fx.x > 0.001 && !sky_pixel) {
     float ao = compute_ssao(tex_coord, center_d, P, N);
     // tint the occlusion slightly cool: shaded crevices lose the warm sun first
@@ -978,6 +1002,7 @@ void main() {
     ao *= (1.0 - emissive_px);  // 21/09 : pas d'occlusion sur une source
     ao *= 1.0 - sous_eau;  // 22/10 : pas d'occlusion du fond vu a travers l'eau
     c *= mix(vec3(1.0), vec3(0.88, 0.92, 1.02), ao * depth_fx.x) * (1.0 - ao * depth_fx.x * 0.85);
+    ao_px = clamp(ao * depth_fx.x, 0.0, 1.0);
   }
 
   // ---- perspective atmosphérique du LOINTAIN (v2 25/08) ----
@@ -1408,9 +1433,14 @@ void main() {
             L_eco_add += lamp_color[i].rgb * lamp_contrib;
           }
           // reflet speculaire discret (depend de N : pas pour le feu-surface)
+          // metal et verre : reflet de la lampe net et fort (une lampe se mire dans le metal)
+          // (original : pow(max(dot(N, H), 0.0), 24.0) * fall * 0.35 * ...)
           if (!world_emissive) {
             vec3 H = normalize(L + V);
-            L_sum += lamp_color[i].rgb * pow(max(dot(N, H), 0.0), 24.0) * fall * 0.35 *
+            float miroir_l = max(metal_px, verre_px) * reflet_fx.x;
+            float sp_pw = mix(24.0, mix(90.0, 260.0, max(metal_poli, verre_px)), min(miroir_l, 1.0));
+            float sp_k = 0.35 * mix(1.0, 2.0 + sp_pw / 70.0, min(miroir_l, 1.0));
+            L_sum += lamp_color[i].rgb * pow(max(dot(N, H), 0.0), sp_pw) * fall * sp_k *
                      presence * (1.0 - near_flat);
           }
         }
@@ -1651,6 +1681,212 @@ void main() {
     // stars and the moon are the bright pixels: let them survive
     sky_night += vec3(0.9, 0.95, 1.0) * pow(clamp(lum - 0.55, 0.0, 1.0), 1.5) * 1.8;
     c = mix(c, sky_night, night);
+  }
+
+  // REFLETS DU METAL ET DU VERRE. Les textures de metal (bronze precurseur, or, laiton, acier,
+  // toles, tuyaux, armures) et de verre (vitres, lentilles) portent un drapeau dans le G-buffer
+  // (pc_reflect_texture_kind). Comme pour la mer : lancer de rayon en espace ecran contre la
+  // profondeur — le decor visible (et Jak) se reflete vraiment ; hors de l'ecran, le ciel tel
+  // qu'il est affiche, sinon ciel et sol avec un horizon net (comme les orbes). Le metal teinte
+  // son reflet de sa propre couleur et garde sa texture lisible ; le verre reflete surtout en
+  // incidence rasante. Plus l'eclat du soleil, la ou il eclaire. Reflets dans un recoin, de nuit
+  // et a l'interieur (grottes, cabane) : attenues.
+  if (!sky_pixel && (metal_px > 0.001 || verre_px > 0.001) && reflet_fx.x > 0.001 &&
+      view_dist < 4096.0 * 150.0) {
+    const float M = 4096.0;
+    if (reflet_fx.y > 0.5) {
+      vec3 qa = verre_px > 0.5 ? vec3(0.1, 0.9, 1.0)
+                               : mix(vec3(1.0, 0.45, 0.0), vec3(1.0, 1.0, 0.1), metal_poli);
+      c = mix(c, qa * max(metal_px, verre_px), 0.75);
+    } else {
+      vec3 I = normalize(P - cam_trans.xyz);
+      float nv = clamp(dot(-I, N), 0.0, 1.0);
+      vec3 R = reflect(I, N);
+      float jour = clamp(1.0 - night_fx.x, 0.0, 1.0);
+      float interieur = clamp(clamp(ground_color.w - grade_amt2.w, 0.0, 1.0) + hut_px, 0.0, 1.0);
+      float loin = 1.0 - smoothstep(90.0 * M, 150.0 * M, view_dist);
+
+      // 1. ENVIRONNEMENT (repli). Le ciel affiche a l'ecran dans la direction R, s'il y est ;
+      //    sinon ciel clair au-dessus de l'horizon, sol sombre dessous, horizon net.
+      float h = R.y;
+      // (le sol reflete est nettement plus sombre que le ciel : c'est ce contraste, et l'horizon
+      // net entre les deux, qui fait lire une surface comme du metal poli)
+      vec3 haut = mix(vec3(1.10, 1.06, 0.98), sky_color.rgb * 1.20, smoothstep(0.0, 0.6, h));
+      vec3 bas = mix(ground_color.rgb * 0.34, ground_color.rgb * 0.12, smoothstep(0.0, 0.45, -h));
+      vec3 env = mix(bas, haut, smoothstep(-0.02, 0.02, h));
+      {
+        vec4 dc = clip_from_world * vec4(R * (2000.0 * M), 1.0);
+        if (dc.w > 1e-4) {
+          vec2 duv = (dc.xy / dc.w) * 0.5 + 0.5;
+          if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && scene_depth(duv) < 1e-5) {
+            vec3 ciel_ecran = (has_scene_tex > 0.5) ? texture(scene_tex, duv).rgb : texture(tex_T0, duv).rgb;
+            vec2 db = min(duv, 1.0 - duv);
+            env = mix(env, ciel_ecran, smoothstep(0.0, 0.08, min(db.x, db.y)));
+          }
+        }
+      }
+      env *= mix(0.22, 1.0, jour);
+      // a l'interieur, pas de ciel : la lumiere ambiante du lieu (un peu plus claire en haut)
+      env = mix(env, mix(ground_color.rgb * 0.16, sky_color.rgb * 0.34, smoothstep(-0.6, 0.6, h)),
+                interieur);
+      // l'entourage reellement vu par la camera dans la direction R (panorama rempli image par
+      // image) : ce qui est derriere la camera se reflete aussi ; flou selon le poli
+      if (has_reflet_env > 0.5) {
+        vec2 euv = vec2(atan(R.x, R.z) * (0.5 / 3.14159265) + 0.5,
+                        asin(clamp(R.y, -1.0, 1.0)) / 3.14159265 + 0.5);
+        float lod = verre_px > 0.5 ? 0.8 : mix(2.0, 1.3, metal_poli);
+        vec4 e = textureLod(reflet_env_tex, euv, lod);
+        if (e.a > 0.02) {
+          env = mix(env, e.rgb / e.a, smoothstep(0.05, 0.45, e.a));
+        }
+      }
+      // recoin : le ciel n'arrive pas jusque-la
+      env *= 1.0 - 0.75 * ao_px;
+
+      // 2. VRAI REFLET : marche du rayon reflechi contre la profondeur, affinee par dichotomie
+      vec3 refl = env;
+      // un rayon qui revient vers la camera part vers ce que l'ecran ne montre pas : le reflet
+      // de l'ecran s'efface, l'environnement prend le relais (sinon : trainees et fantomes)
+      float vers_scene = smoothstep(-0.10, 0.25, dot(R, I));
+      if (view_dist < 90.0 * M && vers_scene > 0.001) {
+        vec3 P0 = P + N * (0.03 * M + view_dist * 0.003);
+        float pas = max(0.12 * M, view_dist * 0.03);
+        float t_prev = 0.0;
+        for (int i = 1; i <= 16; i++) {
+          float rt = pas * float(i) * (1.0 + 0.2 * float(i));
+          vec3 Pw = P0 + R * rt;
+          vec4 rc = clip_from_world * vec4(Pw - cam_trans.xyz, 1.0);
+          if (rc.w < 1e-4) {
+            break;
+          }
+          vec2 ruv = (rc.xy / rc.w) * 0.5 + 0.5;
+          if (ruv.x < 0.0 || ruv.x > 1.0 || ruv.y < 0.0 || ruv.y > 1.0) {
+            break;
+          }
+          float sd = scene_depth(ruv);
+          if (sd < 1e-5) {
+            t_prev = rt;
+            continue;  // ciel : rien a toucher
+          }
+          float behind = length(Pw - cam_trans.xyz) - length(world_from_depth(ruv, sd) - cam_trans.xyz);
+          if (behind > 0.0 && behind < max(0.3 * M, rt * 0.25)) {
+            float ta = t_prev, tb = rt;
+            for (int j = 0; j < 4; j++) {
+              float tm = 0.5 * (ta + tb);
+              vec3 Pm = P0 + R * tm;
+              vec4 mc = clip_from_world * vec4(Pm - cam_trans.xyz, 1.0);
+              vec2 muv = (mc.xy / max(mc.w, 1e-4)) * 0.5 + 0.5;
+              float md = scene_depth(muv);
+              float bh = md > 1e-5 ? length(Pm - cam_trans.xyz) -
+                                         length(world_from_depth(muv, md) - cam_trans.xyz)
+                                   : -1.0;
+              if (bh > 0.0) {
+                tb = tm;
+              } else {
+                ta = tm;
+              }
+            }
+            vec4 hc = clip_from_world * vec4(P0 + R * tb - cam_trans.xyz, 1.0);
+            vec2 huv = clamp((hc.xy / max(hc.w, 1e-4)) * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+            vec3 hit;
+            // metal ordinaire : reflet un peu flou (surface moins lisse)
+            float fl = (1.0 - metal_poli) * (1.0 - verre_px) * 0.0025;
+            if (has_scene_tex > 0.5) {
+              hit = texture(scene_tex, huv).rgb;
+              if (fl > 1e-5) {
+                hit = (hit * 2.0 + texture(scene_tex, huv + vec2(fl, 0.0)).rgb +
+                       texture(scene_tex, huv - vec2(fl, 0.0)).rgb +
+                       texture(scene_tex, huv + vec2(0.0, fl)).rgb +
+                       texture(scene_tex, huv - vec2(0.0, fl)).rgb) / 6.0;
+              }
+            } else {
+              hit = texture(tex_T0, huv).rgb;
+            }
+            vec2 bord = min(huv, 1.0 - huv);
+            float hw = smoothstep(0.0, 0.08, bord.x) * smoothstep(0.0, 0.08, bord.y) *
+                       (1.0 - smoothstep(12.0, 16.5, float(i))) * vers_scene;
+            // surface touchee par l'envers (le rayon passe derriere un objet) : refusee
+            if (has_normal_tex > 0.5) {
+              vec4 hn = texture(normal_tex, huv);
+              if (hn.a > 0.5) {
+                vec3 nh = normalize(hn.rgb * 2.0 - 1.0);
+                vec3 Ph = world_from_depth(huv, scene_depth(huv));
+                if (dot(nh, cam_trans.xyz - Ph) < 0.0) {
+                  nh = -nh;  // comme plus haut : la normale visible fait face a la camera
+                }
+                hw *= 1.0 - smoothstep(0.05, 0.35, dot(nh, R));
+              }
+            }
+            refl = mix(env, hit, hw);
+            break;
+          }
+          t_prev = rt;
+        }
+      }
+
+      float fres = pow(1.0 - nv, 5.0);
+      // 3. METAL : le reflet prend la couleur du metal (bronze, or, acier), la couleur propre
+      //    s'efface un peu devant lui (un metal renvoie peu de lumiere diffuse)
+      if (metal_px > 0.001) {
+        float cm = max(c.r, max(c.g, c.b));
+        vec3 teinte = cm > 1e-3 ? c / cm : vec3(1.0);
+        teinte = mix(vec3(1.0), teinte, 0.85);
+        float dose = metal_px * reflet_fx.x * loin;
+        float F0 = mix(0.55, 0.75, metal_poli);
+        float k = (F0 + (1.0 - F0) * fres) * dose;
+        // le metal MULTIPLIE ce qu'il reflete par sa propre couleur : sa texture reste entiere
+        // (motifs, usure, parties sombres et claires) et le reflet module sa clarte — plus clair
+        // face au ciel, plus sombre face au sol, l'horizon net entre les deux ; un ciel bleu
+        // devient dore sur le bronze (reflet a demi desature). Un peu de reflet neutre en plus
+        // pour que le metal sombre brille aussi.
+        // (v1 : couleur propre x(1 - 0,58) + reflet teinte ajoute — delavait le bronze sombre)
+        // La clarte est prise RELATIVEMENT a la clarte moyenne de l'entourage (dernier niveau du
+        // panorama) : en moyenne le metal garde sa clarte d'origine, de jour comme dans une
+        // grotte ; le reflet n'y ajoute que du contraste. Couleur du reflet au quart (le bleu du
+        // ciel sur un metal jaune virait au vert).
+        // (v1 : c *= (1 - 0,58 dose) + reflet adouci * k — assombrissait le metal des interieurs)
+        float moy = 0.45;
+        if (has_reflet_env > 0.5) {
+          vec4 em = textureLod(reflet_env_tex, vec2(0.5), 10.0);
+          if (em.a > 0.05) {
+            moy = luma(em.rgb / em.a);
+          }
+        }
+        float lr_ = luma(refl);
+        float rapport = lr_ / max(moy, 0.03);
+        float rs = 2.0 * rapport / (1.0 + rapport);
+        vec3 refl_n = refl / max(lr_, 1e-3);
+        c *= mix(vec3(1.0), mix(vec3(1.0), refl_n, 0.25) * rs, k * 0.85);
+        c += refl * teinte * (k * 0.06);
+        // lustre large du soleil sur le metal poli (les surfaces courbes prennent un degrade)
+        if (sun_dir.w > 0.5) {
+          float lr = max(dot(R, sun_dir.xyz), 0.0);
+          c += teinte * vec3(1.0, 0.95, 0.85) * (pow(lr, 12.0) * 0.30 * jour * (1.0 - interieur)) *
+               metal_poli * dose * (1.0 - 0.75 * ao_px);
+        }
+      }
+      // 4. VERRE : peu de reflet de face, presque un miroir au rasant (Fresnel)
+      if (verre_px > 0.001) {
+        float k = (0.14 + 0.86 * fres) * verre_px * reflet_fx.x * loin;
+        c = mix(c, refl, clamp(k, 0.0, 0.85));
+      }
+      // 5. ECLAT DU SOLEIL : petit et intense sur le poli et le verre, plus large sur le metal
+      //    ordinaire ; seulement la ou le soleil eclaire (carte d'ombre)
+      if (sun_dir.w > 0.5 && jour > 0.01) {
+        float rl = max(dot(R, sun_dir.xyz), 0.0);
+        if (rl > 0.9) {
+          float soleil = 1.0;
+          vec3 sp = (sun_light_vp * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+          if (sp.x > 0.01 && sp.x < 0.99 && sp.y > 0.01 && sp.y < 0.99 && sp.z < 1.0) {
+            soleil = texture(sun_shadow_tex, vec3(sp.xy, sp.z - 0.004));
+          }
+          float pw = verre_px > 0.5 ? 900.0 : mix(140.0, 650.0, metal_poli);
+          float eclat = pow(rl, pw) * (0.4 + pw / 260.0);
+          c += vec3(1.0, 0.95, 0.85) * eclat * soleil * jour * (1.0 - interieur) *
+               max(metal_px, verre_px) * reflet_fx.x * loin;
+        }
+      }
+    }
   }
 
   // 17/10 : LA MER JUSQU'A L'HORIZON. Au-dela du fond marin il n'y a plus de geometrie : la

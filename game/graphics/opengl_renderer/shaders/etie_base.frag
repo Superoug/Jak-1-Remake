@@ -17,6 +17,8 @@ uniform float alpha_max;
 uniform vec4 fog_color;
 
 uniform int gfx_hack_no_tex;
+// metal et verre (pc_reflect_texture_kind) : 0 rien, 0.5 metal, 1 metal poli, 2 verre
+uniform float reflet_kind;
 
 // PC-REMAKE 13/10 : ombre du soleil (memes reglages que le decor, tfrag3.frag)
 in vec4 sun_light_pos;
@@ -76,6 +78,10 @@ void main() {
 
   {
     float nl = length(w_nor);
-    out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, 1.0) : vec4(0.0);
+    // drapeau des reflets du post : 250/255 metal poli, 252/255 metal, 254/255 verre
+    // (original : vec4(w_nor / nl * 0.5 + 0.5, 1.0))
+    float tag = reflet_kind > 1.5 ? 254.0 / 255.0 : reflet_kind > 0.75 ? 250.0 / 255.0 :
+                reflet_kind > 0.25 ? 252.0 / 255.0 : 1.0;
+    out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, tag) : vec4(0.0);
   }
 }

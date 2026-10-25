@@ -605,12 +605,15 @@ void TFragment::render_tree(int geom,
   if (tree.draw_emissive.size() != tree.draws->size() && tree.tex_names && tree.draws) {
     tree.draw_emissive.assign(tree.draws->size(), 0.f);
     tree.draw_lava.assign(tree.draws->size(), 0.f);
+    tree.draw_reflet.assign(tree.draws->size(), 0.f);
     for (size_t i = 0; i < tree.draws->size(); i++) {
       const auto& d = (*tree.draws)[i];
       if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)tree.tex_names->size()) {
         tree.draw_emissive[i] =
             pc_emissive_texture_boost((*tree.tex_names)[d.tree_tex_id].debug_name);
         tree.draw_lava[i] = pc_lava_texture_kind((*tree.tex_names)[d.tree_tex_id].debug_name);
+        tree.draw_reflet[i] =
+            pc_reflect_texture_kind((*tree.tex_names)[d.tree_tex_id].debug_name);
       }
     }
   }
@@ -701,6 +704,8 @@ void TFragment::render_tree(int geom,
                 draw_idx < tree.draw_emissive.size() ? tree.draw_emissive[draw_idx] : 0.f);
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "lava_kind"),
                 draw_idx < tree.draw_lava.size() ? tree.draw_lava[draw_idx] : 0.f);
+    glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "reflet_kind"),
+                draw_idx < tree.draw_reflet.size() ? tree.draw_reflet[draw_idx] : 0.f);
     glUniform1f(detail_loc, (draw_idx < tree.draw_detail.size() ? tree.draw_detail[draw_idx] : 0.f) *
                                 g_pc_detail_gain);
     // PC-REMAKE : palmes pliees + relief des folioles (dessin a texture de palme)

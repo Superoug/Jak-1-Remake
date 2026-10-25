@@ -143,6 +143,12 @@ float pc_emissive_texture_boost(const std::string& debug_name);
 // 22/10 : lave animee (tfrag3.frag, lava_kind) — 0 = rien, 1 = croute craquelee (seule la lave
 // des fissures coule), 2 = lave en fusion (toute la surface coule)
 float pc_lava_texture_kind(const std::string& debug_name);
+// surfaces reflechissantes (reflets du post, post_processing.frag) — 0 = rien, 0.5 = metal,
+// 1 = metal poli (precurseur, or, laiton, cuivre, acier), 2 = verre (vitres, lentilles)
+float pc_reflect_texture_kind(const std::string& debug_name);
+// reflets du verre au dessin (tfrag3.frag) : x = dose, y = 1 si le panorama de l'entourage existe
+// (lie sur l'unite 24 par pc_reflet_env_run), z = soleil ; ecrit par le post a chaque image
+extern float g_reflet_fwd[4];
 // PC-REMAKE : SCULPTURE DU DECOR — carte de hauteur par texture (custom_assets/jak1/sculpture/<nom>.hgt,
 // ecrite par l'outil sculpture_decor.py) : relief par pixel avec parallaxe dans tfrag3.frag.
 // QA_NO_SCULPT=1 au lancement ou /tmp/qa_no_sculpt a chaud = coupe (A/B).

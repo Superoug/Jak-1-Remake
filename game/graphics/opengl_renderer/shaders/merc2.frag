@@ -23,6 +23,8 @@ uniform int remake_famille;
 uniform float remake_force;
 uniform float remake_split;  // essai : matieres seulement a droite de cette colonne (0 = partout)
 uniform int reflet_orbe;     // 21/10 : orbe de precurseur — couleur propre assombrie (miroir)
+// metal et verre (pc_reflect_texture_kind) : 0 rien, 0.5 metal, 1 metal poli, 2 verre
+uniform float reflet_kind;
 const int F_PEAU = 1, F_TISSU = 2, F_CUIR = 3, F_METAL = 4, F_CHEVEUX = 5, F_FOURRURE = 6,
           F_OEIL = 7, F_PLUME = 8, F_BRILLANT = 9, F_BOIS = 10, F_ECAILLE = 11, F_VEGETAL = 12,
           F_PIERRE = 13, F_CORNE = 14, F_CORDE = 15, F_GLUANT = 16;
@@ -430,7 +432,11 @@ void main() {
    color.xyz = mix(color.xyz, fog_color.rgb, clamp(fog_color.a * fog, 0, 1));
   {
     float nl = length(w_nor);
-    out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, 1.0) : vec4(0.0);
+    // drapeau des reflets du post : 250/255 metal poli, 252/255 metal, 254/255 verre
+    // (original : vec4(w_nor / nl * 0.5 + 0.5, 1.0))
+    float tag = reflet_kind > 1.5 ? 254.0 / 255.0 : reflet_kind > 0.75 ? 250.0 / 255.0 :
+                reflet_kind > 0.25 ? 252.0 / 255.0 : 1.0;
+    out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, tag) : vec4(0.0);
     // 26/10 : lave : la normale de la houle (le post eclaire les vagues)
     if (lave_merc == 1) {
       out_normal = vec4(lave_n * 0.5 + 0.5, 1.0);

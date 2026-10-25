@@ -1361,6 +1361,43 @@ float pc_lava_texture_kind(const std::string& debug_name) {
   return 0.f;
 }
 
+float pc_reflect_texture_kind(const std::string& debug_name) {
+  std::string n = debug_name;
+  std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+  auto has = [&](const char* k) { return n.find(k) != std::string::npos; };
+  // cartes d'environnement : ce sont deja les reflets d'origine (etie, emerc)
+  if (has("environment")) {
+    return 0.f;
+  }
+  // metal use ou couvert (rouille, pique, boue, crasse), tissu ou pelage dores : mats
+  if (has("rust") || has("pitted") || has("mud") || has("dirty") || has("burlap") ||
+      has("muse-") || has("snacker") || has("shinywhite")) {
+    return 0.f;
+  }
+  // vitres, lentilles, lunettes (le cadre d'une vitre est en metal)
+  if ((has("glass") && !has("frame")) || has("lens")) {
+    return 2.f;
+  }
+  // metal poli : le bronze precurseur (lisse ou a motifs : circuits, bandes, boucliers,
+  // anneaux, spheres, plaques murales), metaux precieux, acier
+  if (has("precursor-metal") || has("precmetal") || has("precursor-circuitpattern") ||
+      has("precursor-plainstripe") || has("precursor-shield") || has("precursor-tube") ||
+      has("precursor-spheres") || has("precursor-wallplate") || has("precursor-pillars") ||
+      has("precursor-largewall") || has("precursor-tendons") || has("ecovalve") ||
+      has("eco-valve") || has("gold") || has("brass") || has("chrome") || has("silver") ||
+      has("steel")) {
+    return 1.f;
+  }
+  // metal ordinaire : toles, plaques, rivets, boulons, tuyaux, chaines, charnieres, cuivre
+  // (vert-de-gris), armures, grands anneaux precurseurs
+  if (has("metal") || has("pipe") || has("rivet") || has("bolt") || has("chain") ||
+      has("plating") || has("hinge") || has("screw") || has("glass-frame") || has("copper") ||
+      has("armor") || has("stonehenge")) {
+    return 0.5f;
+  }
+  return 0.f;
+}
+
 void pc_emissive_fold_into_all() {
   std::lock_guard<std::mutex> g(s_emissive_mutex);
   // QA : combien d'émissives partent réellement vers la sélection ?
@@ -1651,6 +1688,7 @@ void ocean_sim_step_and_export(float* dst_1024) {
 }
 SunShadowMap g_sun_shadow;
 
+float g_reflet_fwd[4] = {0.f, 0.f, 0.f, 0.f};
 bool g_pc_normal_target_ok = false;
 void pc_normal_target(bool on) {
   if (!g_pc_normal_target_ok) {
@@ -2785,6 +2823,10 @@ void first_tfrag_draw_setup(const GoalBackgroundCameraData& settings,
   auto id = sh.id();
   glUniform1f(pc_uniform_loc(id, "relief_amt"), pc_relief_amount());
   glUniform1f(pc_uniform_loc(id, "lava_kind"), 0.f);
+  glUniform1f(pc_uniform_loc(id, "reflet_kind"), 0.f);
+  // verre : panorama de l'entourage (pc_reflet_env_run, image precedente) sur l'unite 24
+  glUniform1i(pc_uniform_loc(id, "reflet_env_tex"), 24);
+  glUniform4fv(pc_uniform_loc(id, "reflet_fwd"), 1, g_reflet_fwd);
   glUniform1f(pc_uniform_loc(id, "sol_melange"), 0.f);
   glUniform1f(pc_uniform_loc(id, "sol_kind"), 0.f);
   glUniform1f(pc_uniform_loc(id, "fronde_pli"), 0.f);

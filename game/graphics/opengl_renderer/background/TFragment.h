@@ -130,6 +130,7 @@ class TFragment : public BucketRenderer {
     // bâti une fois par arbre depuis le registre des textures qui brillent
     std::vector<float> draw_emissive;
     std::vector<float> draw_lava;  // 22/10 : lave animee (pc_lava_texture_kind)
+    std::vector<float> draw_reflet;  // metal et verre (pc_reflect_texture_kind)
     std::vector<float> draw_detail;  // 21/09 : detail intrinseque des sols (0/1)
     std::vector<float> draw_sol;     // PC-REMAKE : 0 rien, 1 sol, 2 sol d'herbe (etalonnage du vert)
     std::vector<u8> draw_snow;       // 20/10 : sol de neige deformable (traces de Jak)
