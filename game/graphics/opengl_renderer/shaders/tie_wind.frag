@@ -12,6 +12,7 @@ in vec3 v_pos_p;
 uniform sampler2D sculpt_tex;
 uniform float sculpt_amp;      // carte sculptee de la texture (0 = sans)
 uniform float relief_feuille;  // 1 = relief tire du dessin (palmes), 0 = rien
+uniform float hang_sway;       // 26/10 : 1 = objet suspendu (poissons), pas du feuillage
 
 in vec4 fragment_color;
 in vec3 tex_coord;
@@ -85,5 +86,6 @@ void main() {
       n_out = normalize(abs(det) * N - grad);
     }
   }
-  out_normal = vec4(n_out * 0.5 + 0.5, 0.95);
+  // (original : 0.95 partout) — 26/10 : un poisson suspendu n'est pas du feuillage (1 = solide)
+  out_normal = vec4(n_out * 0.5 + 0.5, hang_sway > 0.5 ? 1.0 : 0.95);
 }

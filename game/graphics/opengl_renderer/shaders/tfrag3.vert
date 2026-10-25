@@ -24,6 +24,17 @@ uniform float tfrag_wind_amp;  // amplitude réglable au REPL, 0 = figé
 uniform float palm_debug;      // 1 = draw ciblé par la chirurgie : peint en violet
 uniform float fronde_pli;      // PC-REMAKE : palmes pliees en V (voir tie_wind.vert), 0 = cartes d'origine
 
+// 26/10 : 2 = lave en fusion : la houle lente (meme code que lv_houle de tfrag3.frag) souleve
+// vraiment la surface (+-9 cm)
+uniform float lava_kind;
+float lv_houle(vec2 m, float t) {
+  vec2 w = m + 0.9 * vec2(sin(m.y * 0.23 + t * 0.07), sin(m.x * 0.19 - t * 0.05));
+  float h = 0.55 * sin(dot(w, vec2(0.85, 0.53)) * 0.90 - t * 0.30) +
+            0.30 * sin(dot(w, vec2(-0.42, 0.91)) * 1.46 - t * 0.42 + 1.7) +
+            0.15 * sin(dot(w, vec2(0.30, -0.95)) * 2.42 - t * 0.55 + 4.1);
+  return h * 0.09;
+}
+
 out vec4 fragment_color;
 out vec3 tex_coord;
 out float fogginess;
@@ -94,6 +105,9 @@ void main() {
   if (fronde_pli > 0.0) {
     float sp = clamp(tc_in.x, 0.0, 1.0);
     pos_w.y += fronde_pli * 0.22 * 4096.0 * (1.6 * sp - 0.9 * sp * sp);
+  }
+  if (lava_kind > 1.5) {
+    pos_w.y += lv_houle(pos_w.xz * (1.0 / 4096.0), wind_time) * 4096.0;
   }
   vec3 vert = pos_w - cam_trans.xyz;
   v_dist = length(vert);

@@ -278,6 +278,15 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
             }
             lod_tree[l_tree].wind_draw_is_trunk.push_back(is_trunk);
             lod_tree[l_tree].wind_draw_is_graft.push_back(is_graft);
+            // 26/10 : les poissons suspendus du village (vil-nufish, vil-nufishfin) portent le
+            // vent d'origine (raideur 0.25), mais ce ne sont pas des feuilles
+            char is_hanging = 0;
+            if (draw.tree_tex_id >= 0 && draw.tree_tex_id < (int)lev_data->textures.size() &&
+                lev_data->textures[draw.tree_tex_id].debug_name.find("nufish") !=
+                    std::string::npos) {
+              is_hanging = 1;
+            }
+            lod_tree[l_tree].wind_draw_is_hanging.push_back(is_hanging);
           }
         }
         // PC-REMAKE: a proto's trunk and crown are separate draws, but they share
@@ -1433,6 +1442,7 @@ void Tie3::render_tree_wind(int idx,
     struct WindUniformLocs {
       GLuint prog = 0;
       GLint yrange, yrange_local, xzc, time, palm_scales, trunk_pin, graft_boost, palm_debug, phase;
+      GLint hang_sway = -1;  // 26/10 : objets suspendus
       // PERF 14/10 : les deux matrices etaient recherchees PAR NOM a chaque instance
       // (~700 glGetUniformLocation par image au village)
       GLuint cam_prog = 0;
@@ -1450,6 +1460,7 @@ void Tie3::render_tree_wind(int idx,
       s_locs.graft_boost = pc_uniform_loc(wind_prog, "graft_boost");
       s_locs.palm_debug = pc_uniform_loc(wind_prog, "palm_debug");
       s_locs.phase = pc_uniform_loc(wind_prog, "wind_phase");
+      s_locs.hang_sway = pc_uniform_loc(wind_prog, "hang_sway");
       s_locs.camera_static = pc_uniform_loc(wind_prog, "camera_static");
     }
     if (s_locs.cam_prog != render_state->shaders[shader_id].id()) {
@@ -1484,6 +1495,9 @@ void Tie3::render_tree_wind(int idx,
                 (draw_idx < tree.wind_draw_palm_debug.size() && tree.wind_draw_palm_debug[draw_idx])
                     ? 1.f
                     : 0.f);
+    const bool suspendu =
+        draw_idx < tree.wind_draw_is_hanging.size() && tree.wind_draw_is_hanging[draw_idx];
+    glUniform1f(s_locs.hang_sway, suspendu ? 1.f : 0.f);
     const auto loc_wind_phase = s_locs.phase;
     // PC-REMAKE : palmes pliees en V et relief par pixel (palmes : dessin ; troncs : carte sculptee)
     {
@@ -1510,7 +1524,8 @@ void Tie3::render_tree_wind(int idx,
         }
       }
       glUniform1f(pc_uniform_loc(prog, "fronde_pli"), (palme && !off) ? dose : 0.f);
-      glUniform1f(pc_uniform_loc(prog, "relief_feuille"), (!tronc && !off) ? 1.f : 0.f);
+      // (original : (!tronc && !off) ? 1.f : 0.f) — 26/10 : pas de relief de feuille sur un poisson
+      glUniform1f(pc_uniform_loc(prog, "relief_feuille"), (!tronc && !suspendu && !off) ? 1.f : 0.f);
       pc_sculpt_bind((tronc && !off && draw.tree_tex_id >= 0) ? m_textures->at(draw.tree_tex_id) : 0,
                      prog);
     }

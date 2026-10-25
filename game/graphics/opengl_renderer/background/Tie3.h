@@ -137,6 +137,9 @@ class Tie3 : public BucketRenderer {
     // draws issus de la greffe TFRAG→TIE (couronnes de penchés) : géométrie
     // locale de ~3 m → amplitudes proportionnelles quasi nulles sans boost
     std::vector<char> wind_draw_is_graft;
+    // 26/10 : objets SUSPENDUS (poissons du village) : balancement rigide au bout de leur
+    // attache, ni battement de feuille, ni relief de feuille, ni translucidite
+    std::vector<char> wind_draw_is_hanging;
     // projecteur violet (spec /tmp/palm_debug) : draws statiques et vent
     // correspondant à la spec, reclassés à chaud
     const std::vector<tfrag3::Texture>* tex_names = nullptr;

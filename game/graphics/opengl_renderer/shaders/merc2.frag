@@ -130,6 +130,71 @@ in vec4 sun_light_pos;
 uniform sampler2DShadow sun_shadow_tex;
 uniform float sun_shadow_strength;
 
+// 26/10 : NAPPE DE LAVE (lacs du village du volcan et de l'ogre) : la lave qui ondule du decor
+// (tfrag3.frag), code commun recopie ci-dessous
+uniform int lave_merc;
+uniform float lava_time;
+uniform vec3 lava_cam;
+in vec3 v_lava_w;
+float lv_hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float lv_noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(lv_hash(i), lv_hash(i + vec2(1.0, 0.0)), f.x),
+             mix(lv_hash(i + vec2(0.0, 1.0)), lv_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+// ---- 26/10 : LAVE QUI ONDULE (kind 2 ; la croute craquelee, kind 1, garde pc_lava). Fidele au
+// dessin d'origine : la lave garde SA texture et ses couleurs ; seuls le mouvement et la lumiere
+// changent. Une houle lente et lourde (lv_houle, meme code dans tfrag3.vert, ou elle souleve
+// vraiment les sommets) ondule la surface : le dessin ondule avec elle, les creux sont un peu
+// plus chauds, les cretes un peu plus sombres, et la texture coule lentement.
+// metres, secondes -> hauteur (m) : trois trains lents (7 m, 4,3 m, 2,6 m ; 0,2 a 0,35 m/s)
+float lv_houle(vec2 m, float t) {
+  vec2 w = m + 0.9 * vec2(sin(m.y * 0.23 + t * 0.07), sin(m.x * 0.19 - t * 0.05));
+  float h = 0.55 * sin(dot(w, vec2(0.85, 0.53)) * 0.90 - t * 0.30) +
+            0.30 * sin(dot(w, vec2(-0.42, 0.91)) * 1.46 - t * 0.42 + 1.7) +
+            0.15 * sin(dot(w, vec2(0.30, -0.95)) * 2.42 - t * 0.55 + 4.1);
+  return h * 0.09;
+}
+// coeur commun (meme code dans merc2.frag pour les lacs de lave) : couleur de la texture animee,
+// normale monde de la houle
+vec3 lv_ondule(vec2 uv, vec3 pw, vec3 vue, float t, out vec3 n) {
+  vec2 m = pw.xz / 4096.0;  // metres
+  float h0 = lv_houle(m, t);
+  vec2 gr = vec2(lv_houle(m + vec2(0.15, 0.0), t) - h0, lv_houle(m + vec2(0.0, 0.15), t) - h0) /
+            0.15;
+  n = normalize(vec3(-gr.x * 1.8, 1.0, -gr.y * 1.8));
+  // coulee lente de la texture (deux phases qui se relaient, comme pc_lava) ; le dessin suit
+  // la pente de la houle
+  float a = lv_noise(m * 0.05 + vec2(3.1, 7.7)) * 6.2832 * 1.5;
+  vec2 du = vec2(cos(a), sin(a)) * 0.03;
+  float ph0 = fract(t * 0.12);
+  float ph1 = fract(t * 0.12 + 0.5);
+  float wa = abs(ph0 - 0.5) * 2.0;
+  vec2 ond = gr * 0.035;
+  vec3 F = mix(texture(tex_T0, uv - du * ph0 + ond).rgb, texture(tex_T0, uv - du * ph1 + ond).rgb,
+               wa);
+  // chaleur qui respire ; creux plus chauds, cretes plus sombres ; flancs tournes vers le haut
+  // un peu plus clairs (a plat : 1)
+  float ch = lv_noise(m * 0.2 + vec2(t * 0.05, -t * 0.035)) * 0.65 +
+             lv_noise(m * 0.6 - vec2(t * 0.09, t * 0.06)) * 0.35;
+  float k = (0.92 + 0.16 * ch) * (1.0 - h0 * 2.2);
+  k *= 1.0 + 1.6 * (dot(n, vec3(0.2265, 0.9061, 0.3171)) - 0.9061);
+  vec3 res = F * k;
+  // reflet discret d'un liquide brillant, de la couleur de la lave
+  vec3 v = normalize(-vue);
+  vec3 R = reflect(-v, n);
+  float gl = max(dot(R, vec3(0.2265, 0.9061, 0.3171)), 0.0);
+  gl = gl * gl * gl * gl;
+  gl = gl * gl * gl * gl;  // puissance 16
+  res += (F * 0.5 + 0.25) * gl * 0.15;
+  return res;
+}
+
 float sun_shadow_factor() {
   if (sun_shadow_strength < 0.001) {
     return 0.0;
@@ -295,6 +360,12 @@ void main() {
 
   // PC-REMAKE: darken the character when it stands in the sun's shadow
   color.xyz *= 1.0 - sun_shadow_factor();
+  // 26/10 : nappe de lave : sa texture d'origine, animee (coulee, houle) — meme eclairage
+  vec3 lave_n = vec3(0.0, 1.0, 0.0);
+  if (lave_merc == 1 && gfx_hack_no_tex == 0 && decal_enable == 0) {
+    vec3 res = lv_ondule(vtx_st, v_lava_w, v_lava_w - lava_cam, lava_time, lave_n);
+    color.rgb = lit_color.rgb * res * 2.0 * (1.0 - sun_shadow_factor());
+  }
 #ifdef FUR
   // racine dans l'ombre des autres poils, pointe eclairee ; couverture : duvet sur les contours
   color.rgb *= mix(0.6, 1.1, v_couche);
@@ -308,5 +379,9 @@ void main() {
   {
     float nl = length(w_nor);
     out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, 1.0) : vec4(0.0);
+    // 26/10 : lave : la normale de la houle (le post eclaire les vagues)
+    if (lave_merc == 1) {
+      out_normal = vec4(lave_n * 0.5 + 0.5, 1.0);
+    }
   }
 }

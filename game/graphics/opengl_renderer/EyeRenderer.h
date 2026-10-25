@@ -56,6 +56,8 @@ class EyeRenderer : public BucketRenderer {
     FramebufferTexturePair fb;
     u64 fnv_name_hash = 0;
     bool lr = false;
+    // 25/10 : signature du dernier dessin de cet oeil (0 = jamais dessine)
+    u64 sig = 0;
 
     // note: eye texture increased to 128x128 (originally 32x32) here.
     // PC-REMAKE 17/10 : 256x256 — l'iris agrandi a l'installation (128 px) n'est plus

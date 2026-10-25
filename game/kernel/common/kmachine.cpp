@@ -1451,7 +1451,9 @@ void pc_add_lamp(u32 x_bits, u32 y_bits, u32 z_bits, u32 rad_bits, u32 int_bits,
       // ecos). Le modele lineaire rend ces teintes sans les cramer.
       {1.00f, 0.88f, 0.62f},  // 0 warm pickup (pile d'energie : or chaud)
       {0.28f, 1.00f, 0.40f},  // 1 green eco : VERT franc
-      {0.25f, 0.55f, 1.00f},  // 2 blue eco : BLEU franc
+      // 25/10 : bleu cyan de l'eco bleu du jeu (v1 : 0.25, 0.55, 1.00 — bleu profond qui
+      // virait au violet sur les sols bruns de la jungle)
+      {0.36f, 0.74f, 1.00f},  // 2 blue eco : BLEU franc
       {1.00f, 0.58f, 0.24f},  // 3 fire : orange feu
       {1.00f, 0.84f, 0.66f},  // 4 village street lamp : blanc chaud
       {1.00f, 0.85f, 0.12f},  // 5 yellow eco : JAUNE franc (19/08, eco porte)
@@ -1507,7 +1509,8 @@ void pc_add_eco_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u64 pickup_type
       r = 1.00f, g = 0.22f, b = 0.10f;
       break;
     case 3:  // eco-blue
-      r = 0.10f, g = 0.45f, b = 1.00f;
+      // 25/10 : bleu cyan (v1 : 0.10, 0.45, 1.00 — bleu violent dans la jungle)
+      r = 0.28f, g = 0.68f, b = 1.00f;
       break;
     case 4:  // eco-green
       r = 0.15f, g = 1.00f, b = 0.30f;

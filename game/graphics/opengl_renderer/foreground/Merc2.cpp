@@ -68,7 +68,8 @@ std::mutex g_merc_data_mutex;
 // PC-REMAKE 21/09 (defini plus bas, utilise dans handle_setup_dma)
 static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
                                            const math::Vector4f* perspective,
-                                           float* out9);
+                                           float* out9,
+                                           float* out16 = nullptr);
 
 Merc2* Merc2::s_shadow_instance = nullptr;
 
@@ -959,6 +960,8 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.objet = !args.character && model->pc_remodele && m_remake.actif && m_remake.objets;
   args.lev = lev;
   args.orbe = model->name.rfind("money", 0) == 0;
+  // 26/10 : les lacs de lave (village du volcan, ogre) sont des modeles d'eau animee
+  args.lave = model->name.rfind("water-anim", 0) == 0 && model->name.find("lava") != std::string::npos;
 
   // loop over effects, creating draws for each
   for (size_t ei = 0; ei < model->effects.size(); ei++) {
@@ -1252,9 +1255,10 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
 
   // PC-REMAKE 21/09 : normales monde pour le G-buffer
   float nrm_mat[9];
+  float monde_mat[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};  // 26/10 : lave
   bool nrm_ok = render_state->has_pc_data &&
                 compute_world_normal_from_merc(render_state->camera_matrix, m_low_memory.perspective,
-                                               nrm_mat);
+                                               nrm_mat, monde_mat);
   if (!nrm_ok) {
     for (int i = 0; i < 9; i++) {
       nrm_mat[i] = (i % 4 == 0) ? 1.f : 0.f;
@@ -1280,6 +1284,16 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
     ppl = fs::exists("/tmp/qa_gouraud") ? 0.f : 1.f;
   }
   glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "per_pixel_light"), ppl);
+  // 26/10 : lave qui ondule (merc2.vert / merc2.frag) : position de la camera et horloge, les
+  // memes que la lave du decor (TFragment, wind_time)
+  glUniform3f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "lava_cam"),
+              render_state->camera_pos[0], render_state->camera_pos[1],
+              render_state->camera_pos[2]);
+  glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "lava_time"),
+              (float)(render_state->frame_idx % 216000) / 60.f);
+  glUniformMatrix4fv(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(),
+                                    "lava_world_from_merc"),
+                     1, GL_FALSE, monde_mat);
   glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::MERC2].id(), "remake_force"), 1.f);
   {
     auto id = render_state->shaders[ShaderId::MERC2].id();
@@ -1342,7 +1356,16 @@ void Merc2::handle_setup_dma(DmaFollower& dma, SharedRenderState* render_state) 
     if ((poll++ & 63) == 0) {
       m_remake.actif = !fs::exists("/tmp/qa_perso_off");
       m_remake.objets = !fs::exists("/tmp/qa_obj_off");
+#ifdef __APPLE__
+      // 26/10 : le pilote OpenGL du Mac emule la tessellation : ~8 ms par image au village pour
+      // une poignee de personnages, MEME sans aucune decoupe (cout du pipeline, pas des
+      // triangles). Decoupage coupe par defaut sur Mac (/tmp/qa_perso_tess pour le revoir) ;
+      // ailleurs (Windows, Linux, Steam Deck), tessellation native : inchange.
+      // (original : m_remake.decoupe = !fs::exists("/tmp/qa_perso_notess");)
+      m_remake.decoupe = fs::exists("/tmp/qa_perso_tess");
+#else
       m_remake.decoupe = !fs::exists("/tmp/qa_perso_notess");
+#endif
       m_remake.fourrure = !fs::exists("/tmp/qa_perso_nofur");
       qa_split = fs::exists("/tmp/qa_perso_split");
     }
@@ -1568,6 +1591,7 @@ Merc2::Draw* Merc2::try_alloc_envmap_draw(const tfrag3::MercDraw& mdraw,
   draw->no_strip = mdraw.no_strip;
   draw->famille = 0;
   draw->reflet = args.orbe ? 1 : 0;
+  draw->lave = 0;
   if (args.character) {
     draw->flags |= CHARACTER;
     // la passe des reflets suit la meme surface que la base (bois deforme compris)
@@ -1615,6 +1639,7 @@ Merc2::Draw* Merc2::alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawA
   }
   draw->famille = 0;
   draw->reflet = args.orbe ? 1 : 0;
+  draw->lave = args.lave ? 1 : 0;
   if (args.character) {
     draw->flags |= CHARACTER;
     bool coquilles = false;
@@ -1821,7 +1846,8 @@ void Merc2::render_shadow_casters(void* shader_lib) {
 // -> pour une normale, l'inverse-transposee de la partie lineaire de ce produit.
 static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
                                            const math::Vector4f* perspective,
-                                           float* out9) {
+                                           float* out9,
+                                           float* out16) {
   float A[16], P[16], Ainv[16], M[16];
   for (int c = 0; c < 4; c++) {
     for (int r = 0; r < 4; r++) {
@@ -1843,6 +1869,12 @@ static bool compute_world_normal_from_merc(const math::Vector4f* camera_matrix,
         acc += Ainv[k * 4 + r] * P[c * 4 + k];
       }
       M[c * 4 + r] = acc;
+    }
+  }
+  // 26/10 : la matrice complete (position merc -> monde, homogene), pour la lave
+  if (out16) {
+    for (int i = 0; i < 16; i++) {
+      out16[i] = M[i];
     }
   }
   // L = partie 3x3 (colonnes 0..2, lignes 0..2), inverse puis transposee
@@ -1908,6 +1940,7 @@ void Merc2::do_draws(const Draw* draw_array,
   float last_perso = -1.f;
   int last_famille = -1;
   int last_reflet = -1;
+  int last_lave = -1;
   if (tess_ok) {
     glPatchParameteri(GL_PATCH_VERTICES, 3);
   }
@@ -1959,6 +1992,7 @@ void Merc2::do_draws(const Draw* draw_array,
         last_perso = -1.f;
         last_famille = -1;
         last_reflet = -1;
+        last_lave = -1;
         glUniform4f(U->fog_color, render_state->fog_color[0] / 255.f,
                     render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
                     fog_on ? render_state->fog_intensity / 255 : 0);
@@ -1978,6 +2012,10 @@ void Merc2::do_draws(const Draw* draw_array,
     if (!tess && draw.reflet != last_reflet) {
       glUniform1i(pc_uniform_loc(render_state->shaders[sid_base].id(), "reflet_orbe"), draw.reflet);
       last_reflet = draw.reflet;
+    }
+    if (!tess && !set_fade && draw.lave != last_lave) {
+      glUniform1i(pc_uniform_loc(render_state->shaders[sid_base].id(), "lave_merc"), draw.lave);
+      last_lave = draw.lave;
     }
     const GLenum prim = tess ? GL_PATCHES : (draw.no_strip ? GL_TRIANGLES : GL_TRIANGLE_STRIP);
     glUniform1i(U->ignore_alpha, draw.flags & DrawFlags::IGNORE_ALPHA);

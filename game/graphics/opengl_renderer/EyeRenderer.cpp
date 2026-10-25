@@ -530,7 +530,35 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
   // maybe buffer sub data.
   glBufferData(GL_ARRAY_BUFFER, buffer_idx * sizeof(float), m_gpu_vertex_buffer, GL_STREAM_DRAW);
 
+  // 25/10 : un oeil n'est redessine que si son dessin a change depuis la derniere fois (il ne
+  // change qu'en clignant ou en regardant ailleurs). Chaque oeil a sa propre cible de rendu, et
+  // chaque changement de cible coute cher avec le pilote OpenGL du Mac (~2 ms par image au
+  // village). Image identique : la texture garde le dernier dessin. /tmp/qa_eye_always : tout
+  // redessiner (comparaison).
+  static int qa_poll = 0;
+  static bool qa_always = false;
+  if ((qa_poll++ & 63) == 0) {
+    qa_always = fs::exists("/tmp/qa_eye_always");
+  }
+  auto signature = [&](const SingleEyeDraws& d, int first_float) {
+    u64 h = 1469598103934665603ull;
+    auto mix_in = [&](const void* p, size_t n) {
+      const u8* b = (const u8*)p;
+      for (size_t i = 0; i < n; i++) {
+        h = (h ^ b[i]) * 1099511628211ull;
+      }
+    };
+    mix_in(m_gpu_vertex_buffer + first_float, 64 * sizeof(float));
+    u64 tex[3] = {d.iris_tex ? d.iris_gl_tex : 0, d.pupil_tex ? d.pupil_gl_tex : 0,
+                  d.lid_tex ? d.lid_gl_tex : 0};
+    mix_in(tex, sizeof(tex));
+    mix_in(&d.fnv_name_hash, sizeof(d.fnv_name_hash));
+    return h | 1;
+  };
+
+  // (original : contexte lie a la cible du premier oeil, puis une bascule apres chaque oeil)
   FramebufferTexturePairContext ctxt(m_gpu_eye_textures[draws.front().tex_slot()].fb);
+  int bound_slot = draws.front().tex_slot();
 
   // set up common opengl state
   glDisable(GL_DEPTH_TEST);
@@ -549,6 +577,17 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
     auto& out_tex = m_gpu_eye_textures[draw.tex_slot()];
     out_tex.fnv_name_hash = draw.fnv_name_hash;
     out_tex.lr = draw.lr;
+    const u64 sig = signature(draw, buffer_idx);
+    if (!qa_always && sig == out_tex.sig) {
+      buffer_idx += 4 * 4 * 4;
+      render_state->texture_pool->move_existing_to_vram(out_tex.gpu_tex, out_tex.tbp);
+      continue;
+    }
+    out_tex.sig = sig;
+    if (draw.tex_slot() != bound_slot) {
+      ctxt.switch_to(out_tex.fb);
+      bound_slot = draw.tex_slot();
+    }
 
     // clear: not really needed, but we do it to help debugging in case all the textures are missing
     float clear[4] = {1.0, 0, 0, 0};
@@ -591,10 +630,6 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
 
     // finally, give to "vram"
     render_state->texture_pool->move_existing_to_vram(out_tex.gpu_tex, out_tex.tbp);
-
-    if (draw_idx != draws.size() - 1) {
-      ctxt.switch_to(m_gpu_eye_textures[draws[draw_idx + 1].tex_slot()].fb);
-    }
   }
 
   ASSERT(check == buffer_idx);

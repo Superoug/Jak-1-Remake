@@ -44,6 +44,20 @@ out vec4 v_rgba;
 out vec3 v_pos;  // 21/10 : position (espace camera du moteur) — matieres des personnages
 out vec3 v_ref;  // 21/10 : position de reference du modele (detail fin des matieres)
 out vec3 v_refn;  // 21/10 v3 : normale de reference (projection des cartes de detail)
+// 26/10 : NAPPE DE LAVE (lacs du village du volcan et de l'ogre, Merc2.cpp) : la houle lente de la
+// lave du decor (meme lv_houle que tfrag3) souleve la surface ; position monde vers merc2.frag
+uniform int lave_merc;
+uniform float lava_time;
+uniform mat4 lava_world_from_merc;
+out vec3 v_lava_w;
+float lv_houle(vec2 m, float t) {
+  vec2 w = m + 0.9 * vec2(sin(m.y * 0.23 + t * 0.07), sin(m.x * 0.19 - t * 0.05));
+  float h = 0.55 * sin(dot(w, vec2(0.85, 0.53)) * 0.90 - t * 0.30) +
+            0.30 * sin(dot(w, vec2(-0.42, 0.91)) * 1.46 - t * 0.42 + 1.7) +
+            0.15 * sin(dot(w, vec2(0.30, -0.95)) * 2.42 - t * 0.55 + 4.1);
+  return h * 0.09;
+}
+
 
 out float fog;
 
@@ -88,6 +102,15 @@ void main() {
     rotated_nrm += bones[mats[2]].R * normal_in * weights_in[2];
   }
 
+  v_lava_w = vec3(0.0);
+  if (lave_merc == 1) {
+    vec4 wh = lava_world_from_merc * vtx_pos;
+    vec3 wp = wh.xyz / wh.w;
+    float h = lv_houle(wp.xz * (1.0 / 4096.0), lava_time) * 4096.0;
+    // deplacement monde (0, h, 0) ramene dans l'espace merc (inverse de la partie lineaire)
+    vtx_pos.xyz += wh.w * (transpose(world_nrm_from_merc) * vec3(0.0, h, 0.0));
+    v_lava_w = wp + vec3(0.0, h, 0.0);
+  }
   vec4 transformed = perspective_matrix * vtx_pos;
 
   // PC-REMAKE: sun shadow lookup for characters

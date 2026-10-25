@@ -16,9 +16,10 @@
 // de cote, au niveau de la mer, sur une grille de 0,5 m ; positive en mer, negative sur la
 // terre, bornee a +/- 32 m. La terre est ce qui depasse la surface de la mer (terrain et
 // decor de la cote : rochers, falaises) ; la mer est l'eau reliee au large (une cuvette fermee
-// a l'interieur des terres reste de la terre). Le terrain de tous les niveaux cotiers compte :
+// a l'interieur des terres reste de la terre, comme les rivieres). Le terrain de tous les niveaux cotiers compte :
 // les cotes se prolongent d'un niveau a l'autre. Source : l'export de l'editeur de niveaux
 // (decompiler_out/jak1/editor), ecrit pendant l'extraction. Le post en tire les vagues.
+// Eau interieure (rivieres, chenaux etroits) : valeur +40.
 // Fichier : 'RIV1', f32 x0, f32 z0, f32 pas, u32 largeur, u32 hauteur, f32 niveau de la mer,
 // puis largeur x hauteur valeurs float16 (ligne = z croissant).
 
@@ -28,6 +29,8 @@ namespace {
 constexpr float kPas = 0.5f;
 constexpr float kBorne = 32.f;
 constexpr float kMer = 0.f;
+constexpr float kChenal = 6.f;  // demi-largeur minimale (m) d'un passage vers le large
+constexpr float kInterieur = 40.f;  // eau interieure (rivieres) : hors de +/- kBorne
 const char* const kNiveaux[] = {"training", "village1", "beach",    "jungle",
                                 "misty",    "village2", "swamp",    "sunken"};
 const char* const kCote[] = {"rock", "cliff", "wall", "stone", "boulder",
@@ -336,16 +339,65 @@ void carte(const std::string& lv,
     if (y > 0) pousser(x, y - 1);
     if (y < h - 1) pousser(x, y + 1);
   }
+  // les rivieres et les chenaux etroits ne sont pas la mer (pas de vagues ni d'ecume) : seule
+  // compte l'eau reliee au large par un passage d'au moins 2 x kChenal de large (ouverture
+  // morphologique : eau a plus de kChenal de la terre, reliee au bord, puis regonflee de
+  // kChenal dans l'eau). Ce qui en est retire est de l'EAU INTERIEURE (valeur kInterieur) : la
+  // surface de l'eau y reste (ocean_common.frag), le post n'y met ni vagues ni ecume.
+  std::vector<uint8_t> mer0 = mer;
+  {
+    auto d_sol = distance(sol, w, h);
+    std::vector<uint8_t> large((size_t)w * h, 0);
+    for (size_t i = 0; i < large.size(); i++) {
+      large[i] = mer[i] && d_sol[i] * kPas > kChenal;
+    }
+    std::vector<uint8_t> coeur((size_t)w * h, 0);
+    auto pousser2 = [&](int x, int y) {
+      size_t i = (size_t)y * w + x;
+      if (large[i] && !coeur[i]) {
+        coeur[i] = 1;
+        pile.push_back((int)i);
+      }
+    };
+    for (int x = 0; x < w; x++) {
+      pousser2(x, 0);
+      pousser2(x, h - 1);
+    }
+    for (int y = 0; y < h; y++) {
+      pousser2(0, y);
+      pousser2(w - 1, y);
+    }
+    while (!pile.empty()) {
+      int i = pile.back();
+      pile.pop_back();
+      int x = i % w, y = i / w;
+      if (x > 0) pousser2(x - 1, y);
+      if (x < w - 1) pousser2(x + 1, y);
+      if (y > 0) pousser2(x, y - 1);
+      if (y < h - 1) pousser2(x, y + 1);
+    }
+    auto d_coeur = distance(coeur, w, h);
+    for (size_t i = 0; i < mer.size(); i++) {
+      mer[i] = mer[i] && d_coeur[i] * kPas <= kChenal + 0.5f * kPas;
+    }
+  }
+  // distance a la terre des cellules de mer : les rivieres n'y comptent pas comme terre (une
+  // embouchure n'est pas un rivage) ; distance a la mer des cellules de terre : la mer seule
+  // (original : terre = !mer pour les deux distances)
   std::vector<uint8_t> terre(mer.size());
   for (size_t i = 0; i < mer.size(); i++) {
-    terre[i] = !mer[i];
+    terre[i] = !mer0[i];
   }
   auto d_ter = distance(terre, w, h);  // distance a la terre (cellules de mer)
   auto d_mer = distance(mer, w, h);    // distance a la mer (cellules de terre)
   std::vector<uint16_t> out((size_t)w * h);
   for (size_t i = 0; i < out.size(); i++) {
     float sd = mer[i] ? (d_ter[i] - 0.5f) * kPas : -(d_mer[i] - 0.5f) * kPas;
-    out[i] = vers_half(std::clamp(sd, -kBorne, kBorne));
+    sd = std::clamp(sd, -kBorne, kBorne);
+    if (mer0[i] && !mer[i]) {
+      sd = kInterieur;
+    }
+    out[i] = vers_half(sd);
   }
   file_util::create_dir_if_needed(out_dir);
   std::vector<uint8_t> data(28 + out.size() * 2);

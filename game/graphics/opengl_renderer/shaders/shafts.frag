@@ -91,6 +91,26 @@ void main() {
     slen = min(length(sdv), 4096.0 * 70.0);
     sdir = sdv / max(length(sdv), 1.0);
   }
+  // 26/10 : dans la cabane de Samos, seul compte l'air DE la cabane : le regard s'arrete a la
+  // sortie du volume (cylindre de pc_hut_inside, post_processing.frag). Avant, l'air au soleil
+  // du dehors, vu par l'ouverture, faisait un grand voile clair jusqu'a ce que la camera sorte.
+  if (shaft_indoor > 0.001) {
+    vec3 o = cam_trans.xyz * (1.0 / 4096.0);
+    vec2 oc = o.xz - vec2(-130.5, 208.4);
+    float a = dot(sdir.xz, sdir.xz);
+    float c0 = dot(oc, oc) - 16.4 * 16.4;
+    float t_out = 1e9;
+    if (a > 1e-6 && c0 < 0.0) {
+      float b = dot(sdir.xz, oc);
+      t_out = (-b + sqrt(max(b * b - a * c0, 0.0))) / a;
+    }
+    if (sdir.y > 1e-4) {
+      t_out = min(t_out, max(80.0 - o.y, 0.0) / sdir.y);
+    } else if (sdir.y < -1e-4) {
+      t_out = min(t_out, max(o.y - 31.5, 0.0) / -sdir.y);
+    }
+    slen = min(slen, t_out * 4096.0);
+  }
   float sjit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   float sshaft = 0.0;
   const int NS = 32;

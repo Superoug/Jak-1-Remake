@@ -21,6 +21,7 @@ uniform vec2 palm_scales;  // x = échelle houle, y = échelle battement (REPL)
 uniform float trunk_pin;   // 1 = draw de tronc : repos absolu (détachement)
 uniform float graft_boost; // ×3 sur les couronnes greffées (span crown-local minuscule)
 uniform float palm_debug;  // 1 = peindre les couronnes greffées en violet (test identité)
+uniform float hang_sway;   // 26/10 : 1 = objet suspendu (poissons) : balancement rigide
 uniform float fog_constant;
 uniform float fog_min;
 uniform float fog_max;
@@ -109,6 +110,21 @@ void main() {
     // V : monte avec l'eloignement de la nervure ; pointe des folioles retombante
     p_in.y += pli * (1.6 * sp - 0.9 * sp * sp);
   }
+  // 26/10 : OBJET SUSPENDU (poissons du village de pecheurs) : ni houle d'arbre ni battement de
+  // feuille (le poisson ondulait comme l'herbe) — un tres leger va-et-vient d'un bloc autour de
+  // son attache (le haut du proto) : le deplacement croit avec la distance sous l'attache.
+  if (hang_sway > 0.5) {
+    float lg = max(wind_yrange.y - position_in.y, 0.0);
+    float t = wind_time;
+    // tres leger va-et-vient (~1 degre), sur un seul axe
+    // (v1 : 0.045 * sin(t * 1.3 + ph) + 0.015 * sin(t * 2.1 + ph * 1.7) ; z : 0.030 * sin(...))
+    float ax = 0.017 * sin(t * 1.1 + ph);
+    float az2 = 0.0;
+    p_in = position_in;
+    p_in.x += lg * ax;
+    p_in.z += lg * az2;
+    p_in.y += lg * 0.5 * (ax * ax + az2 * az2);  // le bas remonte un peu sur l'arc
+  }
   v_pos_p = p_in;
 
   vec4 t_wind = -camera[3];
@@ -125,7 +141,7 @@ void main() {
   // penchés : ZÉRO rafale native — la rotation d'instance sur une couronne
   // excentrée produit un ballottement vertical faux ; leur mouvement est
   // entièrement porté par la houle + le battement (le système validé), en pur
-  float wind_w = pow(hn, 2.8) * (1.0 - lean);
+  float wind_w = pow(hn, 2.8) * (1.0 - lean) * (1.0 - hang_sway);
   vec4 transformed = mix(t_stat, t_wind, wind_w);
 
   float Q = fog_constant / transformed.w;
@@ -149,7 +165,8 @@ void main() {
   // scissoring area adjust
   transformed.y *= SCISSOR_ADJUST * HEIGHT_SCALE;
   gl_Position = transformed;
-  w_nor = normalize(normal_in.xyz + vec3(0.0, 0.25, 0.0));
+  // (26/10 : normale d'origine pour un objet suspendu ; le biais vers le haut est pour les feuilles)
+  w_nor = normalize(normal_in.xyz + vec3(0.0, 0.25 * (1.0 - hang_sway), 0.0));
 
   // time of day lookup
   // PC-REMAKE : prototype remodele : melange des couleurs des trois coins du triangle d'origine

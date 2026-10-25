@@ -369,6 +369,21 @@ vec3 world_from_depth(vec2 uv, float d) {
   return p.xyz / p.w + cam_trans.xyz;
 }
 
+// 26/10 : part d'interieur de la cabane de Samos AU POINT P (unites du jeu), 0..1. Meme axe
+// que *remake-hut-volumes* (time-of-day.gc), mais au ras des murs (14,3 a 15,5 m, piliers de
+// l'ouverture compris) : le volume de la camera deborde jusqu'a 16 m sur la terrasse. En haut :
+// 80 m (le plafond de l'etage monte au-dessus des 64 m du volume de la camera). Les
+// reglages d'interieur (taches de soleil, rebond chaud, etalonnage) ne s'appliquent plus qu'a
+// ce qui est dedans : le dehors vu par l'ouverture garde son eclairage d'exterieur (avant, il
+// s'allumait d'un coup en sortant, jusqu'a ce que la camera passe les 16 m).
+float pc_hut_inside(vec3 P) {
+  vec3 q = P * (1.0 / 4096.0);
+  vec2 dq = q.xz - vec2(-130.5, 208.4);
+  float in_r = clamp((16.4 - length(dq)) / 0.8, 0.0, 1.0);
+  float in_y = clamp((q.y - 31.5) * 0.5, 0.0, 1.0) * clamp((80.0 - q.y) * 0.5, 0.0, 1.0);
+  return in_r * in_y;
+}
+
 // Surface orientation is not available anywhere in the original pipeline, so it
 // is rebuilt in WORLD SPACE from the depth buffer: three unprojected points
 // give two tangents, and their cross product is the true surface normal. This
@@ -391,13 +406,20 @@ vec3 raw_normal(vec2 uv, float d, vec3 P, float radius) {
 
   float dxp = texture(depth_tex, uv + vec2(px.x, 0.0)).r;
   float dxm = texture(depth_tex, uv - vec2(px.x, 0.0)).r;
-  vec3 tx = abs(dxp - d) < abs(dxm - d) ? world_from_depth(uv + vec2(px.x, 0.0), dxp) - P
-                                        : P - world_from_depth(uv - vec2(px.x, 0.0), dxm);
+  // 25/10 : au bord de l'ecran, le voisin exterieur n'existe pas (il relisait le bord : normale
+  // faussee, eclairage different sur quelques pixels) — on prend le voisin interieur
+  // (original : abs(dxp - d) < abs(dxm - d) ; idem en y)
+  bool px_ok = uv.x + px.x <= 1.0, mx_ok = uv.x - px.x >= 0.0;
+  bool use_xp = (px_ok && mx_ok) ? abs(dxp - d) < abs(dxm - d) : px_ok;
+  vec3 tx = use_xp ? world_from_depth(uv + vec2(px.x, 0.0), dxp) - P
+                   : P - world_from_depth(uv - vec2(px.x, 0.0), dxm);
 
   float dyp = texture(depth_tex, uv + vec2(0.0, px.y)).r;
   float dym = texture(depth_tex, uv - vec2(0.0, px.y)).r;
-  vec3 ty = abs(dyp - d) < abs(dym - d) ? world_from_depth(uv + vec2(0.0, px.y), dyp) - P
-                                        : P - world_from_depth(uv - vec2(0.0, px.y), dym);
+  bool py_ok = uv.y + px.y <= 1.0, my_ok = uv.y - px.y >= 0.0;
+  bool use_yp = (py_ok && my_ok) ? abs(dyp - d) < abs(dym - d) : py_ok;
+  vec3 ty = use_yp ? world_from_depth(uv + vec2(0.0, px.y), dyp) - P
+                   : P - world_from_depth(uv - vec2(0.0, px.y), dym);
 
   vec3 n = cross(tx, ty);
   float l = length(n);
@@ -500,18 +522,29 @@ uniform sampler2D riv_tex0;
 uniform sampler2D riv_tex1;
 uniform vec4 riv_box[2];  // x0, z0 (m), 1/largeur, 1/profondeur
 uniform int riv_n;
+// 25/10 : EAU INTERIEURE (rivieres, chenaux etroits : +40 dans la carte, shore_map.cpp) — ni mer
+// ni rivage : -95 (terre lointaine : ni nappe, ni vagues, ni houle). Teste sur les 4 cellules
+// voisines (sans filtrage : le fondu vers la berge ferait une fausse bande de mer).
+bool riv_interieur(sampler2D t, vec2 uv) {
+  ivec2 sz = textureSize(t, 0);
+  ivec2 i0 = clamp(ivec2(floor(uv * vec2(sz) - 0.5)), ivec2(0), sz - 2);
+  float m = max(max(texelFetch(t, i0, 0).r, texelFetch(t, i0 + ivec2(1, 0), 0).r),
+                max(texelFetch(t, i0 + ivec2(0, 1), 0).r, texelFetch(t, i0 + ivec2(1, 1), 0).r));
+  return m > 36.0;
+}
 float riv_dist(vec2 xz_m) {
   float d = 99.0;
   if (riv_n > 0) {
     vec2 uv = (xz_m - riv_box[0].xy) * riv_box[0].zw;
     if (uv.x > 0.002 && uv.x < 0.998 && uv.y > 0.002 && uv.y < 0.998) {
-      d = texture(riv_tex0, uv).r;
+      // (original : d = texture(riv_tex0, uv).r; idem pour la 2e carte)
+      d = riv_interieur(riv_tex0, uv) ? -95.0 : texture(riv_tex0, uv).r;
     }
   }
   if (riv_n > 1) {
     vec2 uv = (xz_m - riv_box[1].xy) * riv_box[1].zw;
     if (uv.x > 0.002 && uv.x < 0.998 && uv.y > 0.002 && uv.y < 0.998) {
-      d = min(d, texture(riv_tex1, uv).r);
+      d = min(d, riv_interieur(riv_tex1, uv) ? -95.0 : texture(riv_tex1, uv).r);
     }
   }
   return d;
@@ -585,11 +618,19 @@ float compute_ssao(vec2 uv, float d, vec3 P, vec3 N) {
   vec2 px = 1.0 / vec2(textureSize(depth_tex, 0));
   const float R = 4096.0 * 2.2;  // 2.2 m hemisphere
   float occ = 0.0;
+  // 25/10 : les tirages hors de l'ecran sont ignores (ils relisaient le bord de l'image : une
+  // bande de ~11 px plus claire ou plus sombre le long des bords) ; le total est remis a
+  // l'echelle des tirages valides
+  float valides = 0.0;
   // 8 taps au lieu de 12 (angle d'or, couverture equivalente) — coût -33 %
   for (int i = 0; i < 8; i++) {
     // (original : a = 0.7853982 * i + 0.37 ; jitter = 0.35 + 0.65 * fract(i * 0.6180339) ;
     //  suv = uv + vec2(cos(a), sin(a)) * 11.0 * px * jitter)
     vec2 suv = uv + kSsao8[i] * 11.0 * px;
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
+      continue;
+    }
+    valides += 1.0;
     float sd = scene_depth(suv);
     if (sd < 1e-5) {
       continue;  // sky occludes nothing
@@ -601,7 +642,8 @@ float compute_ssao(vec2 uv, float d, vec3 P, vec3 N) {
     }
     occ += max(dot(N, dv / len), 0.0) * (1.0 - len / R);
   }
-  return clamp(occ / 3.4, 0.0, 1.0);
+  // (original : return clamp(occ / 3.4, 0.0, 1.0);)
+  return clamp(occ * (8.0 / max(valides, 1.0)) / 3.4, 0.0, 1.0);
 }
 
 vec3 filmic_aces(vec3 x) {
@@ -632,6 +674,12 @@ void main() {
   vec3 c = lit.rgb;
   bool sky_pixel = lit.a < -0.5;
   float edge_amt = max(lit.a, 0.0);
+  // 26/10 : part d'interieur de cabane du pixel (voir pc_hut_inside)
+  float hut_px = 0.0;
+  if (grade_amt2.w > 0.001 && !sky_pixel) {
+    hut_px = clamp(grade_amt2.w, 0.0, 1.0) *
+             pc_hut_inside(world_from_depth(tex_coord, scene_depth(tex_coord)));
+  }
 #else
   vec3 base = texture(tex_T0, tex_coord).rgb;
 
@@ -650,9 +698,14 @@ void main() {
   // 21/09 : 1.0 = pixel d'une surface EMISSIVE (alpha 0.75 du G-buffer, tfrag3.frag)
   // -> source de lumiere, pas receveur : ni relumiere, ni lampes, ni SSAO dessus
   float emissive_px = 0.0;
+  // 26/10 : part d'interieur de cabane du pixel (voir pc_hut_inside) ; le ciel : 0
+  float hut_px = 0.0;
   if (!sky_pixel) {
     P = world_from_depth(tex_coord, center_d);
     view_dist = length(P - cam_trans.xyz);
+    if (grade_amt2.w > 0.001) {
+      hut_px = clamp(grade_amt2.w, 0.0, 1.0) * pc_hut_inside(P);
+    }
     {
       vec2 epx = 2.0 / vec2(textureSize(depth_tex, 0));
       for (int ei = 0; ei < 4; ei++) {
@@ -1006,7 +1059,9 @@ void main() {
       float dps = length(ps - cam_trans.xyz) / 4096.0;
       // PC-REMAKE : avec une carte du rivage, les vagues se voient de plus loin (original : dps < 45.0)
       float drs = riv_dist(ps.xz / 4096.0);
-      if (dps < (drs < 90.0 ? 90.0 : 45.0)) {
+      // 25/10 : pas de vagues la ou la carte dit terre ou eau interieure (tour du temple, rivieres)
+      // (original : if (dps < (drs < 90.0 ? 90.0 : 45.0)) {)
+      if (dps < (drs < 90.0 ? 90.0 : 45.0) && drs > -0.5) {
         float dter = drs < 90.0 ? max(drs, 0.0) : sh_distance(ps, false);
         if (dter < 90.0) {
           vec2 xz = ps.xz / 4096.0;
@@ -1143,7 +1198,8 @@ void main() {
       // engloutie, temple : inchanges (w = 0 hors village1).
       // v2 : (0.78, 0.62, 0.44) noyait la piece en orange — rebond plus neutre,
       // les murs lavande des artistes restent lavande
-      amb = mix(amb, vec3(0.74, 0.66, 0.56), clamp(grade_amt2.w, 0.0, 1.0));
+      // 26/10 : par pixel (original : clamp(grade_amt2.w, 0.0, 1.0))
+      amb = mix(amb, vec3(0.74, 0.66, 0.56), hut_px);
       // (original : * day) — 21/09 : idem pour l'hemispherique
       // 22/10 : sous l'eau, dose par la part de haut-fond (voir sous_eau) — (original : sans ce facteur)
       c *= mix(vec3(1.0), amb * 1.55, clamp(light_fx.z, 0.0, 1.0) * day * (1.0 - emissive_px) * mix(1.0, haut_fond, sous_eau));
@@ -1172,7 +1228,10 @@ void main() {
     // cite engloutie, temple, citadelle). Pas de soleil la-dedans : les luminaires
     // du decor (tubes chauds, lueurs precurseur, cristaux, plaques d'eco) brillent
     // a pleine force a toute heure — de jour ils etaient a 30 %.
-    float interior = clamp(ground_color.w, 0.0, 1.0);
+    // 26/10 : la part de cabane est prise au pixel (ground_color.w = max(niveau interieur,
+    // cabane) ; hors village1 la cabane vaut 0 et rien ne change)
+    // (original : float interior = clamp(ground_color.w, 0.0, 1.0);)
+    float interior = clamp(ground_color.w - grade_amt2.w, 0.0, 1.0) + hut_px;
     float lamp_hour = max(night, interior);
     {
       // ---- 1. ambiant selon l'heure ----
@@ -1197,7 +1256,8 @@ void main() {
       // 12/10 : HUTTE — l'interieur est plus sombre que le dehors (les palettes de
       // jour des artistes, sans l'ombre du toit, donnaient un aplat clair) ; les
       // lampions y creusent ensuite leurs flaques chaudes
-      ambient *= mix(1.0, 0.80, clamp(grade_amt2.w, 0.0, 1.0));
+      // 26/10 : par pixel (original : clamp(grade_amt2.w, 0.0, 1.0))
+      ambient *= mix(1.0, 0.80, hut_px);
 
       // ---- 2. somme LINEAIRE des lampes ----
       int n = int(night_fx.w);
@@ -1224,7 +1284,8 @@ void main() {
           // 12 m) au lieu de baigner toute la piece (x2.6 = 31 m : la hutte de
           // Samos devenait un aplat orange) — des flaques de lumiere, du contraste
           if (lamp_color[i].w >= 0.0) {
-            reach_mult = mix(reach_mult, 1.0, clamp(grade_amt2.w, 0.0, 1.0));
+            // 26/10 : par pixel (original : clamp(grade_amt2.w, 0.0, 1.0))
+            reach_mult = mix(reach_mult, 1.0, hut_px);
           }
           float r = max(lamp_pos[i].w * reach_mult, 1.0);
           float r2 = r * r;
@@ -1373,6 +1434,15 @@ void main() {
       float cy = cam_trans.y;
       float dy_ray = P.y - cy;
       float t_surf = (abs(dy_ray) > 1.0) ? (water_glitter.x - cy) / dy_ray : -1.0;
+      // 25/10 : la ou la carte du rivage dit TERRE ou EAU INTERIEURE, le plan de la mer n'est pas
+      // la mer : interieur de la tour du temple de la jungle (50 m sous la mer), rivieres — brume,
+      // reflets, houle et ecume y etaient peints sur une mer qui n'existe pas. Hors carte : inchange.
+      bool mer_ici = true;
+      if (t_surf > 0.0 && t_surf < 1.04) {
+        mer_ici = riv_dist(mix(cam_trans.xyz, P, min(t_surf, 1.0)).xz / 4096.0) > -0.5;
+      } else if (cy < water_glitter.x - 4096.0 * 3.5) {
+        mer_ici = riv_dist(cam_trans.xz / 4096.0) > -0.5;
+      }
       // ---- BRUME SOUS-MARINE v3 (24/08) : par COLONNE D'EAU TRAVERSEE ----
       // L'ancienne brume se dosait par la profondeur du PIXEL sous la mer :
       // vu du dessus, le lagon entier devenait un aplat bleu opaque qui
@@ -1388,11 +1458,13 @@ void main() {
       // la camera franchissait le faux plan et la brume basculait mode immerge
       // <-> mode surface d'une frame a l'autre. Le mode immerge ne s'arme que
       // 3,5 m sous le plan (une vraie plongee), plus jamais en surface.
-      if (cy < water_glitter.x - 4096.0 * 3.5) {
+      // (25/10 original : if (cy < water_glitter.x - 4096.0 * 3.5) { ... } else if (t_surf > 0.0
+      //  && t_surf < 1.04 && water_murk_ocean < 0.5) { ... } ; idem pour la surface plus bas)
+      if (cy < water_glitter.x - 4096.0 * 3.5 && mer_ici) {
         // camera immergee : du regard jusqu'au pixel (ou a la sortie de l'eau)
         float t_exit = (t_surf > 0.0 && t_surf < 1.0) ? t_surf : 1.0;
         col_m = pix_dist * t_exit / 4096.0;
-      } else if (t_surf > 0.0 && t_surf < 1.04 && water_murk_ocean < 0.5) {
+      } else if (t_surf > 0.0 && t_surf < 1.04 && water_murk_ocean < 0.5 && mer_ici) {
         // camera en l'air : seul le segment sous la surface compte
         // (17/10 : sauf si la surface de l'eau a deja pose la brume ;
         //  original : } else if (t_surf > 0.0 && t_surf < 1.04) {)
@@ -1409,7 +1481,7 @@ void main() {
       }
       // le rayon traverse la surface entre la caméra et la géométrie touchée
       // (petite marge au-delà de 1.0 : la surface au ras de la géométrie)
-      if (t_surf > 0.0 && t_surf < 1.04) {
+      if (t_surf > 0.0 && t_surf < 1.04 && mer_ici) {
         vec3 Psurf = mix(cam_trans.xyz, P, min(t_surf, 1.0));
         float t = water_glitter.w;
         vec2 wuv = Psurf.xz * (0.55 / 4096.0);
@@ -1468,7 +1540,12 @@ void main() {
               // 22/09 : la copie sans HUD — sinon les informations a l'ecran
               // se refletent dans l'eau
               refl_col = (has_scene_tex > 0.5) ? texture(scene_tex, ruv).rgb : texture(tex_T0, ruv).rgb;
-              hit_w = 1.0;
+              // 25/10 : le reflet s'efface en approchant du bord de l'ecran et en fin de course
+              // du rayon (avant : coupe net la ou l'objet reflete sortait de l'image)
+              // (original : hit_w = 1.0;)
+              vec2 bord = min(ruv, 1.0 - ruv);
+              hit_w = smoothstep(0.0, 0.10, bord.x) * smoothstep(0.0, 0.10, bord.y) *
+                      (1.0 - smoothstep(8.0, 10.5, float(i)));
               break;
             }
           }
@@ -1485,8 +1562,10 @@ void main() {
         // par profondeur ici (il eteignait le miroir au pied des falaises, la
         // ou la roche immergee est juste sous la surface). La visibilite des
         // orbes est assuree par la brume-colonne seule.
-        if (hit_w > 0.5) {
-          c = mix(c, refl_col, clamp(fresR * 0.55 * strength * shore, 0.0, 0.65));
+        // (25/10 original : if (hit_w > 0.5) { ... clamp(fresR * 0.55 * strength * shore, 0.0, 0.65)
+        //  ... })
+        if (hit_w > 0.001) {
+          c = mix(c, refl_col, clamp(fresR * 0.55 * strength * shore, 0.0, 0.65) * hit_w);
         }
         // PC-REMAKE : HOULE (eclairage de la surface et reflets du soleil), s'efface au loin
         // hauts-fonds (fond clair a moins de 2 m) : la houle y est plus douce ; au ras du bord
@@ -1786,7 +1865,9 @@ void main() {
   // 20/10 : TACHES DE SOLEIL dans la cabane de Samos (toit ouvert) : la ou la carte d'ombres
   // dit que le soleil arrive (par le toit, la porte, la fenetre), le sol et les murs recoivent
   // une lumiere chaude. Ailleurs dans la piece, rien ne change (pas d'ombres portees dedans).
-  if (!sky_pixel && shaft_amt > 0.001 && grade_amt2.w > 0.01) {
+  // 26/10 : par pixel — le dehors vu par l'ouverture ne prend plus ces taches (il s'allumait
+  // en entier : tout y est au soleil) (original : ... && grade_amt2.w > 0.01))
+  if (!sky_pixel && shaft_amt > 0.001 && hut_px > 0.01) {
     vec3 sp = (sun_light_vp * vec4(P, 1.0)).xyz * 0.5 + 0.5;
     if (sp.x > 0.0 && sp.x < 1.0 && sp.y > 0.0 && sp.y < 1.0 && sp.z < 1.0) {
       float sndl = max(dot(N, sun_dir.xyz), 0.0);
@@ -1800,7 +1881,8 @@ void main() {
       }
       slitp /= 9.0;
       // tache franche : le soleil qui entre par les ouvertures du toit et la fenetre
-      c += c * vec3(1.0, 0.84, 0.56) * (slitp * sndl * 3.2 * clamp(grade_amt2.w, 0.0, 1.0));
+      // (original : * clamp(grade_amt2.w, 0.0, 1.0))
+      c += c * vec3(1.0, 0.84, 0.56) * (slitp * sndl * 3.2 * hut_px);
     }
   }
 
@@ -2230,9 +2312,15 @@ void main() {
     // l'exposition et le S les assombrissaient de 19 % (cite engloutie mesuree
     // 12/10) — exposition neutre et S a 40 %, leurs lumieres validees restent
     float cave = clamp(ground_color.w - grade_amt2.w, 0.0, 1.0);
+    // 26/10 : etalonnage de cabane PAR PIXEL. time-of-day.gc envoie celui de l'exterieur ; ce
+    // qui est dans la cabane tend vers exposition 0.95, contraste 1.6, saturation 1.15 (les
+    // valeurs de la cabane, avant appliquees a tout l'ecran) ; le dehors vu par l'ouverture
+    // garde le sien.
+    vec3 g_px = mix(grade_amt2.xyz, vec3(0.95, 1.6, 1.15), hut_px);
     // 1. exposition (legere : la vivacite des couleurs du jeu est gardee)
     // (original : g *= mix(1.0, grade_amt2.x, amt);)
-    g *= mix(1.0, mix(grade_amt2.x, 1.0, cave), amt);
+    // (26/10 original : g *= mix(1.0, mix(grade_amt2.x, 1.0, cave), amt);)
+    g *= mix(1.0, mix(g_px.x, 1.0, cave), amt);
     // 2. EPAULE DES HAUTES LUMIERES SEULEMENT (v2 : la courbe filmique globale
     //    ternissait tout — ciel gris-cyan, lointain laiteux). On ne touche qu'a ce
     //    qui depasse le genou : le sol en plein soleil (sature a 61 % des pixels)
@@ -2254,7 +2342,8 @@ void main() {
     //    la nettete y transformaient les nuages basse definition en aplats durs
     {
       // (original : amt * (sky_pixel ? 0.4 : 1.0))
-      float k = mix(1.0, grade_amt2.y, amt * (sky_pixel ? 0.4 : 1.0) * (1.0 - 0.6 * cave));
+      // (26/10 original : mix(1.0, grade_amt2.y, ...))
+      float k = mix(1.0, g_px.y, amt * (sky_pixel ? 0.4 : 1.0) * (1.0 - 0.6 * cave));
       vec3 x = clamp(g, 0.0, 1.0);
       vec3 s_curve = x * x * (3.0 - 2.0 * x);  // smoothstep
       g = mix(g, mix(x, s_curve, clamp(k - 1.0, 0.0, 1.0)), step(0.0, k - 1.0));
@@ -2267,13 +2356,15 @@ void main() {
       float lu = luma(g);
       float t = 1.0 - smoothstep(0.0, 0.24, lu);
       // ni dans les grottes ni en interieur (pas de ciel : ground_color.w)
+      // 26/10 : interieur pris au pixel (original : (1.0 - clamp(ground_color.w, 0.0, 1.0)))
       g += vec3(0.046, 0.050, 0.060) * t * amt * (1.0 - clamp(night_fx.x, 0.0, 1.0)) *
-           (1.0 - clamp(ground_color.w, 0.0, 1.0));
+           (1.0 - clamp(cave + hut_px, 0.0, 1.0));
     }
     // 4. saturation
     {
       float lu = luma(g);
-      g = mix(vec3(lu), g, mix(1.0, grade_amt2.z, amt));
+      // (26/10 original : mix(1.0, grade_amt2.z, amt))
+      g = mix(vec3(lu), g, mix(1.0, g_px.z, amt));
     }
     // 4b. HERBE MOINS FLUO : mesure, l'herbe des references est vert-jaune mais
     //     moderee (saturation 0.59) ; la notre etait a 0.83 (neon). On comprime la

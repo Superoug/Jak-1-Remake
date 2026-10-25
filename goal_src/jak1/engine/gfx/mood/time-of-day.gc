@@ -724,9 +724,16 @@
                    (lerp *remake-grade-vignette* 0.8 hut)
                    *remake-grade-tint*)
     ;; 4e paramètre : part de hutte → rebond chaud, lampions allumés, flaques serrées
-    (pc-set-grade2! (lerp *remake-grade-exposure* 0.95 hut)
-                    (lerp *remake-grade-contrast* 1.6 hut)
-                    (lerp *remake-grade-saturation* 1.15 hut)
+    ;; 26/10 : l'etalonnage de la cabane est fait PAR PIXEL dans le post (post_processing.frag,
+    ;; pc_hut_inside, valeurs 0.95 / 1.6 / 1.15) : le dehors vu par l'ouverture garde celui de
+    ;; l'exterieur. On envoie donc l'exterieur, et la part de cabane en 4e.
+    ;; (original : (pc-set-grade2! (lerp *remake-grade-exposure* 0.95 hut)
+    ;;                             (lerp *remake-grade-contrast* 1.6 hut)
+    ;;                             (lerp *remake-grade-saturation* 1.15 hut)
+    ;;                             hut))
+    (pc-set-grade2! *remake-grade-exposure*
+                    *remake-grade-contrast*
+                    *remake-grade-saturation*
                     hut))
   (pc-set-light-fx! (* 0.01 (-> *remake-gfx* godrays))
                     (* 0.01 (-> *remake-gfx* sun))
@@ -815,11 +822,16 @@
       (let* ((ecoule (the float (- (-> *display* game-frame-counter) (-> *target* fact eco-pickup-time))))
              (restant (- (the float (-> *target* fact eco-timeout)) ecoule))
              (fondu (fmax 0.0 (fmin 1.0 (/ restant 900.0)))))
+        ;; 25/10 : l'eco BLEU porte eclaire plus doucement (x0.55) : Jak, au coeur de la source,
+        ;; virait entierement au bleu et la jungle sombre au violet
+        ;; (original : (* fondu (fmin 2.5 (* 2.0 (-> *target* fact eco-level)))))
         (pc-add-lamp! (-> *target* control trans x)
                       (+ 6144.0 (-> *target* control trans y))
                       (-> *target* control trans z)
                       45056.0
-                      (* fondu (fmin 2.5 (* 2.0 (-> *target* fact eco-level))))
+                      (* fondu
+                         (if (= kind 2) 0.55 1.0)
+                         (fmin 2.5 (* 2.0 (-> *target* fact eco-level))))
                       kind))))
   (when (and (> *remake-lamp-debug* 0.0) *target*)
     (pc-add-lamp! (-> *target* control trans x)

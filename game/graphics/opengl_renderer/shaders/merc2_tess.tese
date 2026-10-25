@@ -61,6 +61,7 @@ out vec4 v_rgba;
 out vec3 v_pos;
 out vec3 v_ref;
 out vec3 v_refn;
+out vec3 v_lava_w;  // 26/10 : lave (merc2.frag), sans objet ici
 out float fog;
 
 // point de controle d'une arete (i -> j), vu depuis i
@@ -146,5 +147,6 @@ void main() {
   v_pos = vtx_pos.xyz;
   v_ref = ref;
   v_refn = u * tc_refn[0] + v * tc_refn[1] + w * tc_refn[2];
+  v_lava_w = vec3(0.0);
   vtx_st = u * tc_st[0] + v * tc_st[1] + w * tc_st[2];
 }

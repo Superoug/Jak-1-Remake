@@ -47,6 +47,7 @@ out vec4 v_rgba;
 out vec3 v_pos;  // 21/10 : position (espace camera du moteur) — matieres des personnages
 out vec3 v_ref;  // 21/10 : position de reference du modele (detail fin des matieres)
 out vec3 v_refn;  // 21/10 v3 : normale de reference (projection des cartes de detail)
+out vec3 v_lava_w;  // 26/10 : lave (merc2.frag), sans objet ici
 out float v_couche;
 out vec3 v_racine;
 uniform vec4 fourrure;  // x = longueur, y = taille d'un brin, z = nombre de couches
@@ -144,5 +145,6 @@ void main() {
   v_pos = vtx_pos.xyz;
   v_ref = position_in;
   v_refn = normal_in;
+  v_lava_w = vec3(0.0);
   vtx_st = st_in;
 }
