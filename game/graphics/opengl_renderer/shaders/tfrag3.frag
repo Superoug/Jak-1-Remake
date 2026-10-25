@@ -548,7 +548,16 @@ void main() {
     // d'énergie était indistincte, 18/08)
     float t_l = dot(T0.rgb, vec3(0.299, 0.587, 0.114));
     float eb = mix(emissive_boost, 1.05, clamp(t_l, 0.0, 1.0));
-    color.rgb = max(color.rgb, T0.rgb * eb);
+    // 25/10 : une texture lumineuse en GRIS (lueurs precurseur du temple de la jungle) tient sa
+    // couleur des sommets : la source garde la teinte des sommets (le bleu d'origine), au lieu
+    // de briller en blanc. Une texture deja coloree (lave, braises) est inchangee.
+    // (original : color.rgb = max(color.rgb, T0.rgb * eb);)
+    float t_mx = max(T0.r, max(T0.g, T0.b));
+    float t_sat = t_mx > 1e-4 ? (t_mx - min(T0.r, min(T0.g, T0.b))) / t_mx : 0.0;
+    float f_mx = max(fragment_color.r, max(fragment_color.g, fragment_color.b));
+    vec3 teinte = f_mx > 1e-4 ? fragment_color.rgb / f_mx : vec3(1.0);
+    teinte = mix(teinte, vec3(1.0), smoothstep(0.12, 0.30, t_sat));
+    color.rgb = max(color.rgb, T0.rgb * teinte * eb);
   }
 
   // PC-REMAKE sun shadows: soft darkening, before fog so distance stays hazy
