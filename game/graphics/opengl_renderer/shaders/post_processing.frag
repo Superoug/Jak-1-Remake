@@ -82,6 +82,8 @@ uniform vec4 reflet_fx;
 // panorama de l'entourage vu par la camera (reflet_env.frag) : rgb / a = couleur, a = couverture
 uniform sampler2D reflet_env_tex;
 uniform float has_reflet_env;
+// clarte moyenne de l'image actuelle (1 x 1, reflet_moy.frag)
+uniform sampler2D reflet_moy_tex;
 
 // World position is rebuilt from the depth buffer with the inverse of the
 // game's own camera matrix, which is what makes local lights possible at all:
@@ -1700,9 +1702,44 @@ void main() {
       c = mix(c, qa * max(metal_px, verre_px), 0.75);
     } else {
       vec3 I = normalize(P - cam_trans.xyz);
-      float nv = clamp(dot(-I, N), 0.0, 1.0);
-      vec3 R = reflect(I, N);
+      // normale du reflet LISSEE sur les pixels voisins de la meme surface (normale proche,
+      // profondeur continue) : sur les formes courbes a facettes (cylindres, domes), le reflet
+      // glisse d'une facette a l'autre au lieu de sauter a chaque arete
+      // (v1 : reflect(I, N) avec la normale du pixel seul)
+      // (deux cercles de 8 voisins, a 10 et 26 pixels ; v1 : un seul a 9 pixels — les grandes
+      // facettes gardaient des aretes nettes dans le reflet)
+      vec3 Nm = N;
+      if (has_normal_tex > 0.5) {
+        vec2 npx = 1.0 / vec2(textureSize(normal_tex, 0));
+        vec3 acc = N;
+        for (int k = 0; k < 16; k++) {
+          vec2 quv = tex_coord + kOct8[k & 7] * npx * (k < 8 ? 10.0 : 26.0);
+          vec4 g = texture(normal_tex, quv);
+          if (g.a < 0.5) {
+            continue;
+          }
+          vec3 nk = normalize(g.rgb * 2.0 - 1.0);
+          if (dot(nk, N) < 0.0) {
+            nk = -nk;
+          }
+          // meme surface : profondeur voisine (ecart relatif) et normale proche
+          float qd = scene_depth(quv);
+          float dk = abs(qd - center_d) / max(center_d, 1e-6);
+          acc += nk * smoothstep(0.72, 0.94, dot(nk, N)) * (1.0 - smoothstep(0.02, 0.06, dk)) *
+                 (k < 8 ? 1.0 : 0.7);
+        }
+        Nm = normalize(acc);
+      }
+      // part de sol (surface tournee vers le haut) : plus mat
+      float sol_w = smoothstep(0.70, 0.90, N.y);
+      float nv = clamp(dot(-I, Nm), 0.0, 1.0);
+      vec3 R = reflect(I, Nm);
       float jour = clamp(1.0 - night_fx.x, 0.0, 1.0);
+      // clarte moyenne de ce qu'on voit maintenant
+      float moy = 0.45;
+      if (has_reflet_env > 0.5) {
+        moy = max(luma(texelFetch(reflet_moy_tex, ivec2(0), 0).rgb), 0.01);
+      }
       float interieur = clamp(clamp(ground_color.w - grade_amt2.w, 0.0, 1.0) + hut_px, 0.0, 1.0);
       float loin = 1.0 - smoothstep(90.0 * M, 150.0 * M, view_dist);
 
@@ -1729,12 +1766,21 @@ void main() {
       // a l'interieur, pas de ciel : la lumiere ambiante du lieu (un peu plus claire en haut)
       env = mix(env, mix(ground_color.rgb * 0.16, sky_color.rgb * 0.34, smoothstep(-0.6, 0.6, h)),
                 interieur);
+      // le repli prend la clarte de ce qu'on voit (un puits sombre ne reflete pas un ciel clair)
+      if (has_reflet_env > 0.5) {
+        env *= clamp(moy / 0.45, 0.2, 1.6);
+      }
       // l'entourage reellement vu par la camera dans la direction R (panorama rempli image par
       // image) : ce qui est derriere la camera se reflete aussi ; flou selon le poli
       if (has_reflet_env > 0.5) {
         vec2 euv = vec2(atan(R.x, R.z) * (0.5 / 3.14159265) + 0.5,
                         asin(clamp(R.y, -1.0, 1.0)) / 3.14159265 + 0.5);
-        float lod = verre_px > 0.5 ? 0.8 : mix(2.0, 1.3, metal_poli);
+        // (panorama deux fois plus fin : niveaux de flou + 1 pour la meme douceur, mais sans
+        // les gros pixels)
+        // (+0,7 : deux grandes facettes voisines ne refletent plus des choses trop differentes —
+        // les aretes des formes courbes a gros polygones se lisaient dans le reflet)
+        float lod = verre_px > 0.5 ? 1.6 : mix(3.7, 2.9, metal_poli);
+        // (alpha = confiance : une direction perimee y est deja effacee, reflet_env.frag)
         vec4 e = textureLod(reflet_env_tex, euv, lod);
         if (e.a > 0.02) {
           env = mix(env, e.rgb / e.a, smoothstep(0.05, 0.45, e.a));
@@ -1751,9 +1797,12 @@ void main() {
       if (view_dist < 90.0 * M && vers_scene > 0.001) {
         vec3 P0 = P + N * (0.03 * M + view_dist * 0.003);
         float pas = max(0.12 * M, view_dist * 0.03);
+        // depart decale d'une fraction de pas, differente pour chaque pixel : les marches
+        // d'escalier du reflet deviennent un grain fin, adouci ensuite
+        float decal = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
         float t_prev = 0.0;
         for (int i = 1; i <= 16; i++) {
-          float rt = pas * float(i) * (1.0 + 0.2 * float(i));
+          float rt = pas * (float(i) - decal) * (1.0 + 0.2 * float(i));
           vec3 Pw = P0 + R * rt;
           vec4 rc = clip_from_world * vec4(Pw - cam_trans.xyz, 1.0);
           if (rc.w < 1e-4) {
@@ -1771,7 +1820,7 @@ void main() {
           float behind = length(Pw - cam_trans.xyz) - length(world_from_depth(ruv, sd) - cam_trans.xyz);
           if (behind > 0.0 && behind < max(0.3 * M, rt * 0.25)) {
             float ta = t_prev, tb = rt;
-            for (int j = 0; j < 4; j++) {
+            for (int j = 0; j < 6; j++) {
               float tm = 0.5 * (ta + tb);
               vec3 Pm = P0 + R * tm;
               vec4 mc = clip_from_world * vec4(Pm - cam_trans.xyz, 1.0);
@@ -1789,22 +1838,26 @@ void main() {
             vec4 hc = clip_from_world * vec4(P0 + R * tb - cam_trans.xyz, 1.0);
             vec2 huv = clamp((hc.xy / max(hc.w, 1e-4)) * 0.5 + 0.5, vec2(0.0), vec2(1.0));
             vec3 hit;
-            // metal ordinaire : reflet un peu flou (surface moins lisse)
-            float fl = (1.0 - metal_poli) * (1.0 - verre_px) * 0.0025;
+            // REFLET FLOU SELON LA DISTANCE (comme un vrai metal) : net au contact, de plus en plus
+            // flou quand l'objet reflete s'eloigne de la surface ; metal ordinaire et sols plus
+            // mats que le poli et les murs (un sol miroir se lisait comme de la glace)
+            // (v1 : flou fixe de 0.0012 a 0.0028, 4 points)
+            float rugo = mix(0.30, 0.65, 1.0 - metal_poli) * (1.0 - verre_px * 0.7) + sol_w * 0.30;
+            float fl = 0.0012 + rugo * 0.035 * clamp(tb / (tb + view_dist), 0.0, 1.0);
             if (has_scene_tex > 0.5) {
               hit = texture(scene_tex, huv).rgb;
-              if (fl > 1e-5) {
-                hit = (hit * 2.0 + texture(scene_tex, huv + vec2(fl, 0.0)).rgb +
-                       texture(scene_tex, huv - vec2(fl, 0.0)).rgb +
-                       texture(scene_tex, huv + vec2(0.0, fl)).rgb +
-                       texture(scene_tex, huv - vec2(0.0, fl)).rgb) / 6.0;
+              for (int k = 0; k < 8; k++) {
+                vec2 ok = kOct8[k] * fl * ((k & 1) == 0 ? 1.0 : 0.55);
+                hit += texture(scene_tex, clamp(huv + ok * vec2(1.0, 1.6), 0.0, 1.0)).rgb;
               }
+              hit /= 9.0;
             } else {
               hit = texture(tex_T0, huv).rgb;
             }
             vec2 bord = min(huv, 1.0 - huv);
+            // (sols : reflet de l'ecran moins present)
             float hw = smoothstep(0.0, 0.08, bord.x) * smoothstep(0.0, 0.08, bord.y) *
-                       (1.0 - smoothstep(12.0, 16.5, float(i))) * vers_scene;
+                       (1.0 - smoothstep(12.0, 16.5, float(i))) * vers_scene * (1.0 - 0.4 * sol_w);
             // surface touchee par l'envers (le rayon passe derriere un objet) : refusee
             if (has_normal_tex > 0.5) {
               vec4 hn = texture(normal_tex, huv);
@@ -1845,18 +1898,13 @@ void main() {
         // grotte ; le reflet n'y ajoute que du contraste. Couleur du reflet au quart (le bleu du
         // ciel sur un metal jaune virait au vert).
         // (v1 : c *= (1 - 0,58 dose) + reflet adouci * k — assombrissait le metal des interieurs)
-        float moy = 0.45;
-        if (has_reflet_env > 0.5) {
-          vec4 em = textureLod(reflet_env_tex, vec2(0.5), 10.0);
-          if (em.a > 0.05) {
-            moy = luma(em.rgb / em.a);
-          }
-        }
+        // (v1 : moyenne prise au dernier niveau du panorama — perimee dans un ascenseur)
         float lr_ = luma(refl);
         float rapport = lr_ / max(moy, 0.03);
         float rs = 2.0 * rapport / (1.0 + rapport);
         vec3 refl_n = refl / max(lr_, 1e-3);
-        c *= mix(vec3(1.0), mix(vec3(1.0), refl_n, 0.25) * rs, k * 0.85);
+        // (amplitude 0,75 ; v1 : 0,85)
+        c *= mix(vec3(1.0), mix(vec3(1.0), refl_n, 0.25) * rs, k * 0.75);
         c += refl * teinte * (k * 0.06);
         // lustre large du soleil sur le metal poli (les surfaces courbes prennent un degrade)
         if (sun_dir.w > 0.5) {

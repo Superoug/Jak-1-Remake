@@ -589,7 +589,9 @@ void main() {
       if (reflet_fwd.y > 0.5) {
         vec2 euv = vec2(atan(Rv.x, Rv.z) * (0.5 / 3.14159265) + 0.5,
                         asin(clamp(Rv.y, -1.0, 1.0)) / 3.14159265 + 0.5);
-        vec4 e = textureLod(reflet_env_tex, euv, 0.5);
+        // (v1 : lod 0.5 sur le panorama deux fois moins fin, sans test de peremption)
+        // (alpha = confiance : une direction perimee y est deja effacee, reflet_env.frag)
+        vec4 e = textureLod(reflet_env_tex, euv, 1.4);
         if (e.a > 0.02) {
           env = mix(env, e.rgb / e.a, smoothstep(0.05, 0.45, e.a));
         }

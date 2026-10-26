@@ -2503,55 +2503,72 @@ GLuint pc_shaft_run(GameVersion version,
   return g_shaft_a.tex;
 }
 
-// PC-REMAKE : CARTE D'ENVIRONNEMENT DES REFLETS (metal, verre). Panorama 256 x 128 autour de la
-// camera, rempli a chaque image par ce que l'ecran montre (reflet_env.frag) ; le post y lit le
-// reflet d'une direction que l'ecran ne montre pas (surface tournee vers la camera). Lit la
-// scene sans HUD (unite 12) et la profondeur (unite 15), deja liees pour le post.
+// PC-REMAKE : CARTE D'ENVIRONNEMENT DES REFLETS (metal, verre). Panorama 512 x 256 autour de la
+// camera, rempli a chaque image par ce que l'ecran montre (reflet_env.frag), avec pour chaque
+// direction la position de la camera quand elle a ete vue (une direction vue de loin est
+// perimee : sa confiance tombe) ; plus la clarte moyenne de l'image (reflet_moy.frag, 1 x 1). Lus
+// par le post (unites 3 : panorama, 1 : moyenne) et par le verre du decor a l'image suivante (24).
+// Lit la scene sans HUD (unite 12) et la profondeur (unite 15), deja liees pour le post.
+// (v1 : 256 x 128, melange par le GPU, remise a zero sur un saut de 30 m seulement)
 namespace {
-GLuint g_env_tex = 0, g_env_fbo = 0;
-float g_env_cam[3] = {0.f, 0.f, 0.f};
+constexpr int kEnvW = 512, kEnvH = 256;
+GLuint g_env_pano[2] = {0, 0}, g_env_pos[2] = {0, 0}, g_env_fbo[2] = {0, 0};
+GLuint g_env_moy_tex = 0, g_env_moy_fbo = 0;
+int g_env_cur = 0;  // panorama a jour (lu par le post)
+GLuint g_env_tex = 0;  // = g_env_pano[g_env_cur] apres la passe (0 : pas de panorama)
 }  // namespace
 GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos) {
   if (!g_world_from_clip_ok || !pc_prehud_texture()) {
     return 0;
   }
   static Shader* s_env = nullptr;
+  static Shader* s_moy = nullptr;
   if (reload || !s_env) {
     delete s_env;
+    delete s_moy;
     s_env = new Shader("reflet_env", version);
+    s_moy = new Shader("reflet_moy", version);
   }
-  if (!s_env->okay()) {
+  if (!s_env->okay() || !s_moy->okay()) {
     return 0;
   }
-  constexpr int W = 256, H = 128;
-  bool vider = false;
-  if (!g_env_tex) {
-    glGenTextures(1, &g_env_tex);
-    glBindTexture(GL_TEXTURE_2D, g_env_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, W, H, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glGenFramebuffers(1, &g_env_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_env_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_env_tex, 0);
+  if (!g_env_fbo[0]) {
+    for (int k = 0; k < 2; k++) {
+      glGenTextures(1, &g_env_pano[k]);
+      glBindTexture(GL_TEXTURE_2D, g_env_pano[k]);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, kEnvW, kEnvH, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glGenerateMipmap(GL_TEXTURE_2D);
+      glGenTextures(1, &g_env_pos[k]);
+      glBindTexture(GL_TEXTURE_2D, g_env_pos[k]);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, kEnvW, kEnvH, 0, GL_RGBA, GL_FLOAT, nullptr);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glGenFramebuffers(1, &g_env_fbo[k]);
+      glBindFramebuffer(GL_FRAMEBUFFER, g_env_fbo[k]);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_env_pano[k], 0);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, g_env_pos[k], 0);
+      const GLenum dbs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+      glDrawBuffers(2, dbs);
+      GLfloat zero[4] = {0.f, 0.f, 0.f, 0.f};
+      glClearBufferfv(GL_COLOR, 0, zero);
+      glClearBufferfv(GL_COLOR, 1, zero);
+    }
+    glGenTextures(1, &g_env_moy_tex);
+    glBindTexture(GL_TEXTURE_2D, g_env_moy_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &g_env_moy_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_env_moy_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_env_moy_tex, 0);
     GLenum db = GL_COLOR_ATTACHMENT0;
     glDrawBuffers(1, &db);
-    vider = true;
-  }
-  // grand saut de la camera (chargement, teleportation, cinematique) : la carte repart de zero
-  {
-    const float dx = cam_pos[0] - g_env_cam[0], dy = cam_pos[1] - g_env_cam[1],
-                dz = cam_pos[2] - g_env_cam[2];
-    const float saut = 30.f * 4096.f;
-    if (dx * dx + dy * dy + dz * dz > saut * saut) {
-      vider = true;
-    }
-    for (int i = 0; i < 3; i++) {
-      g_env_cam[i] = cam_pos[i];
-    }
   }
 
   GLint vp[4];
@@ -2559,32 +2576,26 @@ GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos)
   GLint prev_fbo = 0, prev_prog = 0;
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
   glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
-  GLint bsrc_rgb, bdst_rgb, bsrc_a, bdst_a, beq_rgb, beq_a;
-  glGetIntegerv(GL_BLEND_SRC_RGB, &bsrc_rgb);
-  glGetIntegerv(GL_BLEND_DST_RGB, &bdst_rgb);
-  glGetIntegerv(GL_BLEND_SRC_ALPHA, &bsrc_a);
-  glGetIntegerv(GL_BLEND_DST_ALPHA, &bdst_a);
-  glGetIntegerv(GL_BLEND_EQUATION_RGB, &beq_rgb);
-  glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &beq_a);
-  GLfloat clear_col[4];
-  glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_col);
   const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
   const GLboolean blend = glIsEnabled(GL_BLEND);
   if (scissor) {
     glDisable(GL_SCISSOR_TEST);
   }
+  glDisable(GL_BLEND);
 
-  glBindFramebuffer(GL_FRAMEBUFFER, g_env_fbo);
-  glViewport(0, 0, W, H);
-  if (vider) {
-    glClearColor(0.f, 0.f, 0.f, 0.f);
-    glClear(GL_COLOR_BUFFER_BIT);
-  }
-  glEnable(GL_BLEND);
-  glBlendEquation(GL_FUNC_ADD);
-  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+  // 1. panorama : lit l'image precedente (prev), ecrit la nouvelle (next)
+  const int prev = g_env_cur, next = 1 - g_env_cur;
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, g_env_pano[prev]);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, g_env_pos[prev]);
+  glActiveTexture(GL_TEXTURE0);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_env_fbo[next]);
+  glViewport(0, 0, kEnvW, kEnvH);
   s_env->activate();
-  const GLuint pr = s_env->id();
+  GLuint pr = s_env->id();
+  glUniform1i(pc_uniform_loc(pr, "prev_env"), 1);
+  glUniform1i(pc_uniform_loc(pr, "prev_pos"), 2);
   glUniform1i(pc_uniform_loc(pr, "scene_tex"), 12);
   glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
   glUniformMatrix4fv(pc_uniform_loc(pr, "clip_from_world"), 1, GL_FALSE, g_clip_from_world);
@@ -2592,20 +2603,30 @@ GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos)
   glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
   glUniform1f(pc_uniform_loc(pr, "env_mix"), 0.12f);
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-  glActiveTexture(GL_TEXTURE3);
-  glBindTexture(GL_TEXTURE_2D, g_env_tex);
+  glBindTexture(GL_TEXTURE_2D, g_env_pano[next]);
   glGenerateMipmap(GL_TEXTURE_2D);
-  // et sur l'unite 24, que rien d'autre n'utilise : le verre du decor la lit a l'image suivante
+  g_env_cur = next;
+  g_env_tex = g_env_pano[next];
+
+  // 2. clarte moyenne de l'image
+  glBindFramebuffer(GL_FRAMEBUFFER, g_env_moy_fbo);
+  glViewport(0, 0, 1, 1);
+  s_moy->activate();
+  glUniform1i(pc_uniform_loc(s_moy->id(), "scene_tex"), 12);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  // post : 3 panorama, 1 moyenne ; verre du decor (image suivante) : 24
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, g_env_pano[next]);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, g_env_moy_tex);
   glActiveTexture(GL_TEXTURE24);
-  glBindTexture(GL_TEXTURE_2D, g_env_tex);
+  glBindTexture(GL_TEXTURE_2D, g_env_pano[next]);
   glActiveTexture(GL_TEXTURE0);
 
-  glBlendEquationSeparate(beq_rgb, beq_a);
-  glBlendFuncSeparate(bsrc_rgb, bdst_rgb, bsrc_a, bdst_a);
-  if (!blend) {
-    glDisable(GL_BLEND);
+  if (blend) {
+    glEnable(GL_BLEND);
   }
-  glClearColor(clear_col[0], clear_col[1], clear_col[2], clear_col[3]);
   if (scissor) {
     glEnable(GL_SCISSOR_TEST);
   }
@@ -3518,15 +3539,15 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
     POST_U(1i, "shaft_tex", 8);
     POST_U(1f, "has_shaft_tex", stex ? 1.f : 0.f);
-    // carte d'environnement des reflets (metal, verre) -> unite 3
+    // carte d'environnement des reflets (metal, verre) -> unites 3 (panorama), 1 (clarte moyenne
+    // de l'image), liees par pc_reflet_env_run
     {
       GLuint etex = pc_reflet_env_run(render_state->version, post_reloaded,
                                       m_render_state.camera_pos.data());
-      glActiveTexture(GL_TEXTURE3);
-      glBindTexture(GL_TEXTURE_2D, etex);
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
       POST_U(1i, "reflet_env_tex", 3);
+      POST_U(1i, "reflet_moy_tex", 1);
       POST_U(1f, "has_reflet_env", etex ? 1.f : 0.f);
     }
     // 20/10 : traces dans la neige -> unite 7
