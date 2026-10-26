@@ -240,16 +240,22 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   }
   {
     const auto& cverts = level_data.collision.vertices;
+    // 26/10 : toute la collision aussi, pour poser l'herbe automatique (set_grass_collision)
+    std::vector<GrassSeedTri> all_collision_tris;
+    all_collision_tris.reserve(cverts.size() / 3);
     for (size_t v = 0; v + 2 < cverts.size(); v += 3) {
+      GrassSeedTri tri;
+      tri.a = math::Vector3f(cverts[v].x, cverts[v].y, cverts[v].z);
+      tri.b = math::Vector3f(cverts[v + 1].x, cverts[v + 1].y, cverts[v + 1].z);
+      tri.c = math::Vector3f(cverts[v + 2].x, cverts[v + 2].y, cverts[v + 2].z);
+      tri.materiau = (cverts[v].pat >> 6) & 0x3f;
+      all_collision_tris.push_back(tri);
       // pat material lives in bits 6-11; grass = 7 in jak1's pat-material enum
       if (((cverts[v].pat >> 6) & 0x3f) == 7) {
-        GrassSeedTri tri;
-        tri.a = math::Vector3f(cverts[v].x, cverts[v].y, cverts[v].z);
-        tri.b = math::Vector3f(cverts[v + 1].x, cverts[v + 1].y, cverts[v + 1].z);
-        tri.c = math::Vector3f(cverts[v + 2].x, cverts[v + 2].y, cverts[v + 2].z);
         grass_seed_tris.push_back(tri);
       }
     }
+    set_grass_collision(all_collision_tris);
     if (!grass_seed_tris.empty()) {
       lg::info("PC-REMAKE: {} grass-material collision triangles found for carpet seeding",
                grass_seed_tris.size());

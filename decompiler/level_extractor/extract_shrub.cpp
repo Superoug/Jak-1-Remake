@@ -1604,6 +1604,281 @@ void set_grass_keep_clear(const std::vector<math::Vector4f>& zones) {
 }
 
 // ============================================================================
+// PC-REMAKE 26/10 : POSE DE L'HERBE AUTOMATIQUE SUR LE VRAI SOL. Les touffes clonees autour des
+// touffes d'artistes etaient decalees a cote SANS changer de hauteur (en l'air au-dessus d'une
+// pente, d'une marche ou d'un bord, enfoncees dans un talus) ; le tapis, seme sur la collision
+// herbe, ne savait pas s'il y avait un mur, un rocher ou une maison juste au-dessus. Chaque
+// touffe automatique est recalee sur la collision du niveau et retiree si le sol manque, s'il
+// est trop raide, si quelque chose la recouvre ou si un mur est a moins d'environ 35 cm.
+// Touffes des artistes : jamais touchees.
+// ============================================================================
+namespace {
+thread_local std::vector<GrassSeedTri> g_grass_collision;
+
+struct GrilleCollision {
+  static constexpr float kCell = 2.f * 4096.f;
+  std::unordered_map<u64, std::vector<u32>> cells;
+  const std::vector<GrassSeedTri>* tris = nullptr;
+
+  static u64 cle(s32 cx, s32 cz) { return ((u64)(u32)cx << 32) | (u64)(u32)cz; }
+
+  void build(const std::vector<GrassSeedTri>& t) {
+    tris = &t;
+    for (u32 i = 0; i < t.size(); i++) {
+      const auto& tr = t[i];
+      float x0 = std::min({tr.a.x(), tr.b.x(), tr.c.x()}), x1 = std::max({tr.a.x(), tr.b.x(), tr.c.x()});
+      float z0 = std::min({tr.a.z(), tr.b.z(), tr.c.z()}), z1 = std::max({tr.a.z(), tr.b.z(), tr.c.z()});
+      s32 cx0 = (s32)std::floor(x0 / kCell), cx1 = (s32)std::floor(x1 / kCell);
+      s32 cz0 = (s32)std::floor(z0 / kCell), cz1 = (s32)std::floor(z1 / kCell);
+      if ((s64)(cx1 - cx0 + 1) * (cz1 - cz0 + 1) > 4096) {
+        continue;  // triangle demesure (ne devrait pas exister)
+      }
+      for (s32 cx = cx0; cx <= cx1; cx++) {
+        for (s32 cz = cz0; cz <= cz1; cz++) {
+          cells[cle(cx, cz)].push_back(i);
+        }
+      }
+    }
+  }
+
+  // segment p0 -> p1 contre les triangles des cases traversees ; t (0..1) du premier impact et
+  // composante verticale de sa normale
+  bool segment(const math::Vector3f& p0, const math::Vector3f& p1, float* t_out,
+               float* ny_out, u32* mat_out = nullptr) const {
+    const math::Vector3f d = p1 - p0;
+    s32 cx0 = (s32)std::floor(std::min(p0.x(), p1.x()) / kCell);
+    s32 cx1 = (s32)std::floor(std::max(p0.x(), p1.x()) / kCell);
+    s32 cz0 = (s32)std::floor(std::min(p0.z(), p1.z()) / kCell);
+    s32 cz1 = (s32)std::floor(std::max(p0.z(), p1.z()) / kCell);
+    bool touche = false;
+    float best = 2.f, best_ny = 0.f;
+    u32 best_mat = 0;
+    for (s32 cx = cx0; cx <= cx1; cx++) {
+      for (s32 cz = cz0; cz <= cz1; cz++) {
+        auto it = cells.find(cle(cx, cz));
+        if (it == cells.end()) {
+          continue;
+        }
+        for (u32 i : it->second) {
+          const auto& tr = (*tris)[i];
+          // Moller-Trumbore
+          const math::Vector3f e1 = tr.b - tr.a, e2 = tr.c - tr.a;
+          const math::Vector3f pv = d.cross(e2);
+          const float det = e1.dot(pv);
+          if (std::abs(det) < 1e-6f) {
+            continue;
+          }
+          const float inv = 1.f / det;
+          const math::Vector3f tv = p0 - tr.a;
+          const float u = tv.dot(pv) * inv;
+          if (u < 0.f || u > 1.f) {
+            continue;
+          }
+          const math::Vector3f qv = tv.cross(e1);
+          const float v = d.dot(qv) * inv;
+          if (v < 0.f || u + v > 1.f) {
+            continue;
+          }
+          const float t = e2.dot(qv) * inv;
+          if (t < 0.f || t > 1.f || t >= best) {
+            continue;
+          }
+          const math::Vector3f n = e1.cross(e2);
+          const float nl = n.length();
+          best = t;
+          best_ny = nl > 0.f ? std::abs(n.y()) / nl : 0.f;
+          best_mat = tr.materiau;
+          touche = true;
+        }
+      }
+    }
+    if (touche) {
+      *t_out = best;
+      *ny_out = best_ny;
+      if (mat_out) {
+        *mat_out = best_mat;
+      }
+    }
+    return touche;
+  }
+};
+
+void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::string& level) {
+  if (g_grass_collision.empty()) {
+    return;
+  }
+  constexpr float M = 4096.f;
+  GrilleCollision g;
+  g.build(g_grass_collision);
+  // taille propre de chaque type de plante (sommets du modele, a l'echelle 1) : portee des brins
+  // (80 % des sommets) et hauteur
+  std::vector<float> portee(protos.size(), 1.2f * M), hauteur(protos.size(), 1.3f * M);
+  for (size_t pi = 0; pi < protos.size(); pi++) {
+    std::vector<float> rs;
+    float hmax = 0.f;
+    for (const auto& fr : protos[pi].frags) {
+      for (const auto& dr : fr.draws) {
+        for (const auto& v : dr.vertices) {
+          rs.push_back(std::sqrt(v.xyz.x() * v.xyz.x() + v.xyz.z() * v.xyz.z()));
+          hmax = std::max(hmax, v.xyz.y());
+        }
+      }
+    }
+    if (rs.size() >= 3) {
+      std::nth_element(rs.begin(), rs.begin() + rs.size() * 8 / 10, rs.end());
+      portee[pi] = std::max(0.15f * M, rs[rs.size() * 8 / 10]);
+      hauteur[pi] = std::max(0.2f * M, hmax);
+    }
+  }
+  int recalees = 0, vide = 0, pente = 0, dessus = 0, mur = 0, reduites = 0, total = 0;
+  // [QA] QA_HERBE_DUMP=1 : position (m) et raison de chaque touffe retiree ou recalee de > 0,3 m
+  static const bool qa_dump = getenv("QA_HERBE_DUMP") != nullptr;
+  auto qa = [&](const char* raison, float qx, float qy, float qz, float dy) {
+    if (qa_dump) {
+      lg::info("QA-HERBE {} {} {:.1f} {:.1f} {:.1f} {:.2f}", level, raison, qx / M, qy / M, qz / M,
+               dy / M);
+    }
+  };
+  auto materiau_sol = [](u32 m) { return m == 0 || m == 5 || m == 7 || m == 14 || m == 15; };
+  for (size_t pi = 0; pi < protos.size(); pi++) {
+    auto& proto = protos[pi];
+    std::vector<ShrubInstanceInfo> kept;
+    kept.reserve(proto.instances.size());
+    for (auto& inst : proto.instances) {
+      if (inst.src != 1 && inst.src != 2) {
+        kept.push_back(inst);  // touffes des artistes
+        continue;
+      }
+      total++;
+      const float x = inst.mat[3][0], y = inst.mat[3][1], z = inst.mat[3][2];
+      // 1. le sol : rayon vertical ; touffe clonee (hauteur de sa touffe d'origine) : de 0,7 m
+      //    au-dessus a 1,6 m au-dessous ; tapis (pose sur la collision) : +-0,3 m. Impact le plus
+      //    PROCHE de la hauteur de depart (un toit au-dessus n'est pas le sol).
+      const float haut = (inst.src == 1 ? 0.7f : 0.3f) * M, bas = (inst.src == 1 ? 1.6f : 0.3f) * M;
+      float sol_y = 0.f, sol_ny = 0.f, ecart = 1e30f;
+      bool trouve = false;
+      {
+        float y0 = y + haut;
+        for (int k = 0; k < 8 && y0 > y - bas; k++) {
+          float t, ny;
+          math::Vector3f a(x, y0, z), b(x, y - bas, z);
+          if (!g.segment(a, b, &t, &ny)) {
+            break;
+          }
+          const float hy = y0 + (y - bas - y0) * t;
+          if (ny >= 0.5f && std::abs(hy - y) < ecart) {
+            ecart = std::abs(hy - y);
+            sol_y = hy;
+            sol_ny = ny;
+            trouve = true;
+          }
+          y0 = hy - 0.02f * M;
+        }
+      }
+      if (!trouve) {
+        qa("vide", x, y, z, 0.f);
+        vide++;
+        continue;  // pas de sol sous la touffe (bord de falaise, vide, objet sans collision)
+      }
+      // 1b. sol en plusieurs couches (collision herbe doublee d'une couche de pierre ou de
+      //     terre 20 cm plus haut, au village) : une surface de sol plate a moins de 40 cm
+      //     au-dessus est le vrai sol (la touffe monte dessus), pas un toit. Bois, metal, paille :
+      //     planchers et toits, la touffe reste dessous (et sera retiree)
+      for (int k = 0; k < 3; k++) {
+        float t, ny;
+        u32 mat = 0;
+        if (g.segment(math::Vector3f(x, sol_y + 0.02f * M, z),
+                      math::Vector3f(x, sol_y + 0.40f * M, z), &t, &ny, &mat) &&
+            ny >= 0.85f && materiau_sol(mat)) {
+          sol_y = sol_y + 0.02f * M + t * 0.38f * M;
+          sol_ny = ny;
+        } else {
+          break;
+        }
+      }
+      if (sol_ny < 0.72f) {
+        qa("pente", x, y, z, sol_y - y);
+        pente++;
+        continue;  // trop raide pour de l'herbe
+      }
+      float ech = std::sqrt(inst.mat[0][0] * inst.mat[0][0] + inst.mat[0][1] * inst.mat[0][1] +
+                            inst.mat[0][2] * inst.mat[0][2]);
+      if (ech < 1e-3f) {
+        ech = 1.f;
+      }
+      // 2. place libre autour : la plus courte distance a un mur, un rocher, un pied de maison
+      //    (8 directions, 3 hauteurs dans la touffe) et rien au-dessus. Les brins doivent tenir
+      //    dedans : sinon la touffe est reduite (jusqu'a 35 % de sa taille), sinon retiree.
+      const float r_brins = portee[pi] * ech, h_brins = hauteur[pi] * ech;
+      float libre = 1e30f;
+      for (int k = 0; k < 8; k++) {
+        const float ang = k * 0.785398f;
+        for (float hh : {0.15f, 0.5f, 0.85f}) {
+          float t, ny;
+          math::Vector3f a(x, sol_y + hh * h_brins, z);
+          math::Vector3f b(x + std::cos(ang) * r_brins * 1.1f, sol_y + hh * h_brins,
+                           z + std::sin(ang) * r_brins * 1.1f);
+          if (g.segment(a, b, &t, &ny) && ny < 0.85f) {
+            libre = std::min(libre, t * r_brins * 1.1f);
+          }
+        }
+      }
+      float dessus_libre = 1e30f;
+      {
+        float t, ny;
+        if (g.segment(math::Vector3f(x, sol_y + 0.10f * M, z),
+                      math::Vector3f(x, sol_y + h_brins, z), &t, &ny)) {
+          dessus_libre = 0.10f * M + t * (h_brins - 0.10f * M);
+        }
+      }
+      float f = 1.f;
+      if (libre < r_brins) {
+        f = std::min(f, libre / r_brins);
+      }
+      if (dessus_libre < h_brins) {
+        f = std::min(f, dessus_libre / h_brins);
+      }
+      if (f < 0.35f) {
+        if (dessus_libre < h_brins && dessus_libre / h_brins < 0.35f) {
+          qa("dessus", x, y, z, sol_y - y);
+          dessus++;
+        } else {
+          qa("mur", x, y, z, sol_y - y);
+          mur++;
+        }
+        continue;
+      }
+      if (f < 0.999f) {
+        for (int c = 0; c < 3; c++) {
+          for (int r = 0; r < 3; r++) {
+            inst.mat[c][r] *= f;
+          }
+        }
+        reduites++;
+      }
+      if (std::abs(sol_y - y) > 0.05f * M) {
+        recalees++;
+        if (std::abs(sol_y - y) > 0.3f * M) {
+          qa("recalee", x, y, z, sol_y - y);
+        }
+      }
+      inst.mat[3][1] = sol_y;
+      inst.bsphere[1] = sol_y;
+      kept.push_back(inst);
+    }
+    proto.instances = std::move(kept);
+  }
+  lg::info("PC-REMAKE herbe [{}] : {} touffes automatiques, {} recalees sur le sol, {} reduites "
+           "pres d'un mur, retirees : {} sans sol, {} pente, {} recouvertes, {} contre un mur",
+           level, total, recalees, reduites, vide, pente, dessus, mur);
+}
+}  // namespace
+
+void set_grass_collision(const std::vector<GrassSeedTri>& tris) {
+  g_grass_collision = tris;
+}
+
+// ============================================================================
 // PC-REMAKE 13/10 : EDITEUR DE NIVEAUX (voir level_editor.h)
 // ============================================================================
 namespace {
@@ -1950,6 +2225,21 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
 
   // PC-REMAKE: continuous grass carpet on grass-material ground.
   seed_grass_carpet(proto_info, densify_flags, grass_seed_tris, out, &tree->time_of_day);
+
+  // PC-REMAKE 26/10 : herbe automatique posee sur le vrai sol, jamais en l'air ni dans un mur
+  poser_herbe_automatique(proto_info, out.level_name);
+  // [QA] QA_SANS_HERBE_AUTO=1 : aucune herbe automatique (comparaison avec le jeu d'origine)
+  if (getenv("QA_SANS_HERBE_AUTO")) {
+    for (auto& pr : proto_info) {
+      std::vector<ShrubInstanceInfo> k;
+      for (auto& in : pr.instances) {
+        if (in.src != 1 && in.src != 2) {
+          k.push_back(in);
+        }
+      }
+      pr.instances = std::move(k);
+    }
+  }
 
   // PC-REMAKE 17/10 : pas d'herbe automatique sur les piles d'energie, orifices d'eco...
   clear_auto_grass_near_actors(proto_info, out.level_name);

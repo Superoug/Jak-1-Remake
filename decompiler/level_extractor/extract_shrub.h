@@ -12,6 +12,7 @@ namespace decompiler {
 // used to procedurally seed a continuous grass carpet at extraction time.
 struct GrassSeedTri {
   math::Vector3f a, b, c;
+  u32 materiau = 0;  // pat-material du jeu (7 = herbe)
 };
 
 // PC-REMAKE 17/10 : zones ou l'herbe AUTOMATIQUE du remake (touffes clonees + tapis) n'est
@@ -19,6 +20,12 @@ struct GrassSeedTri {
 // animations et recouvrait leur socle). x y z en unites du jeu, w = rayon (unites du jeu).
 // Posees par extract_level juste avant extract_shrub (meme fil).
 void set_grass_keep_clear(const std::vector<math::Vector4f>& zones);
+
+// PC-REMAKE 26/10 : tous les triangles de collision du niveau (sol, murs, rochers, maisons).
+// L'herbe AUTOMATIQUE (touffes clonees + tapis) y est recalee sur le vrai sol et retiree la ou
+// elle flotterait (bord, vide, pente) ou toucherait un mur, un rocher, un surplomb. Posee par
+// extract_level juste avant extract_shrub (meme fil).
+void set_grass_collision(const std::vector<GrassSeedTri>& tris);
 
 /// <summary>
 /// Extract shrubs from the level
