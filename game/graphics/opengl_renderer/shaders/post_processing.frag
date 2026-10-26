@@ -1842,7 +1842,8 @@ void main() {
             // flou quand l'objet reflete s'eloigne de la surface ; metal ordinaire et sols plus
             // mats que le poli et les murs (un sol miroir se lisait comme de la glace)
             // (v1 : flou fixe de 0.0012 a 0.0028, 4 points)
-            float rugo = mix(0.30, 0.65, 1.0 - metal_poli) * (1.0 - verre_px * 0.7) + sol_w * 0.30;
+            // (sols : 26/10 v2, un peu plus de reflet ; v1 : + sol_w * 0.30)
+            float rugo = mix(0.30, 0.65, 1.0 - metal_poli) * (1.0 - verre_px * 0.7) + sol_w * 0.18;
             float fl = 0.0012 + rugo * 0.035 * clamp(tb / (tb + view_dist), 0.0, 1.0);
             if (has_scene_tex > 0.5) {
               hit = texture(scene_tex, huv).rgb;
@@ -1855,9 +1856,9 @@ void main() {
               hit = texture(tex_T0, huv).rgb;
             }
             vec2 bord = min(huv, 1.0 - huv);
-            // (sols : reflet de l'ecran moins present)
+            // (sols : reflet de l'ecran un peu moins present ; v1 : (1.0 - 0.4 * sol_w))
             float hw = smoothstep(0.0, 0.08, bord.x) * smoothstep(0.0, 0.08, bord.y) *
-                       (1.0 - smoothstep(12.0, 16.5, float(i))) * vers_scene * (1.0 - 0.4 * sol_w);
+                       (1.0 - smoothstep(12.0, 16.5, float(i))) * vers_scene * (1.0 - 0.2 * sol_w);
             // surface touchee par l'envers (le rayon passe derriere un objet) : refusee
             if (has_normal_tex > 0.5) {
               vec4 hn = texture(normal_tex, huv);
