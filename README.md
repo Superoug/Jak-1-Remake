@@ -39,7 +39,7 @@ These are taken directly in-game. No retouching.
 
 <img width="1920" height="1080" alt="01 - Sandover Village (day)" src="https://github.com/user-attachments/assets/0515f8f0-9946-44dc-814d-ccf4193a70f0" />
 
-<img width="1920" height="1080" alt="04 - Sentinel Beach (night)" src="https://github.com/user-attachments/assets/e5722e9f-d5ea-4eef-b41f-a95e7c0ebc3d" />
+<img width="1800" height="1169" alt="Capture d’écran 2026-10-27 à 20 37 30" src="https://github.com/user-attachments/assets/5b193c77-63ac-4815-989f-46b7959c7bac" />
 
 <img width="1920" height="1080" alt="09 - Volcanic Crater (day)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
 
