@@ -812,6 +812,13 @@
                         (* (fmax night interior) 0.01 (-> *remake-gfx* lamp-power))
                         ;; 20/10 : 4e parametre = dose des rayons de soleil (jungle)
                         (remake-shaft-amount night))
+      ;; 27/10 : lucioles la nuit — dans la jungle (foret) et au village (autour des lampes)
+      (let ((lev (level-get-target-inside *level*)))
+        (pc-set-vie-zone! (cond
+                            ((not lev) 0)
+                            ((= (-> lev name) 'jungle) 2)
+                            ((= (-> lev name) 'village1) 1)
+                            (else 0))))
       (set! *remake-night-now* night)))
   ;; PC-REMAKE 19/08 : l'eco PORTE rayonne — Jak charge d'eco bleu eclaire
   ;; bleu autour de lui en courant, rouge en rouge, jaune en jaune. L'intensite

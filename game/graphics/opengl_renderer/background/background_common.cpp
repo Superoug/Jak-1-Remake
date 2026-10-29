@@ -50,6 +50,7 @@ float g_night_fx[4] = {0.f, 0.f, 0.f, 0.f};
 // 20/10 : dose des rayons de soleil volumetriques (jungle, de jour) — 4e parametre de
 // pc-set-night-fx! (time-of-day.gc)
 float g_shaft_amt = 0.f;
+int g_vie_zone = 0;  // lucioles : 0 rien, 1 village, 2 foret (pc-set-vie-zone!)
 // défauts calibrés au REPL (16/08) : houle douce
 // (troncs quasi muets), battement de feuilles ×2 final, palmiers de terrain réveillés, feuilles shrub vivantes
 // terrain (z) à ZÉRO : les palmiers penchés fondus dans le terrain restent
@@ -247,6 +248,44 @@ void pc_remake_add_beam(float x0, float y0, float z0, float x1, float y1, float 
   b[0] = x0, b[1] = y0, b[2] = z0, b[3] = 0.f;
   b[4] = x1, b[5] = y1, b[6] = z1, b[7] = 0.f;
 }
+// 29/10 : LISTE VALIDEE EN UNE FOIS. GOAL declare ses lampes et faisceaux pendant que le moteur
+// dessine l'image precedente : l'echange fait par le moteur tombait au milieu des declarations
+// (liste a moitie remplie, ou la meme lampe deux fois : une lumiere doublee le temps d'une image,
+// une autre chassee des 48 places — des flashs la nuit au village). Le jeu valide maintenant sa
+// liste quand il envoie l'image au moteur (pc_remake_lamps_commit, gl_send_chain) ; le moteur ne
+// lit que des listes completes.
+// (original : le moteur prenait la liste en attente telle quelle a chaque image)
+namespace {
+std::mutex s_commit_mutex;
+bool s_commit_new = false;
+float s_commit_pos[kMaxRemakePending * 4];
+float s_commit_color[kMaxRemakePending * 4];
+int s_commit_prio[kMaxRemakePending];
+int s_commit_count = 0;
+float s_commit_beam[kMaxRemakeBeams * 8];
+int s_commit_beam_n = 0;
+// la liste de l'image que le moteur dessine (fil du moteur seulement)
+float s_frame_pos[kMaxRemakePending * 4];
+float s_frame_color[kMaxRemakePending * 4];
+int s_frame_prio[kMaxRemakePending];
+int s_frame_count = 0;
+float s_frame_beam[kMaxRemakeBeams * 8];
+int s_frame_beam_n = 0;
+}  // namespace
+
+void pc_remake_lamps_commit() {
+  std::lock_guard<std::mutex> lk(s_commit_mutex);
+  s_commit_count = s_pending_count;
+  memcpy(s_commit_pos, s_pending_pos, sizeof(float) * 4 * s_pending_count);
+  memcpy(s_commit_color, s_pending_color, sizeof(float) * 4 * s_pending_count);
+  memcpy(s_commit_prio, s_pending_prio, sizeof(int) * s_pending_count);
+  s_commit_beam_n = s_beam_pending_n;
+  memcpy(s_commit_beam, s_beam_pending, sizeof(float) * 8 * s_beam_pending_n);
+  s_commit_new = true;
+  s_pending_count = 0;
+  s_beam_pending_n = 0;
+}
+
 int pc_remake_beam_count() {
   return s_beam_active_n;
 }
@@ -728,19 +767,35 @@ unsigned int pc_snow_trail_tex() {
 }
 
 void pc_remake_lamps_begin_frame() {
+  // 29/10 : la derniere liste VALIDEE par le jeu (voir pc_remake_lamps_commit) ; aucune nouvelle
+  // = liste vide pour cette image (on garde alors la precedente, regle ci-dessous)
+  {
+    std::lock_guard<std::mutex> lk(s_commit_mutex);
+    if (s_commit_new) {
+      s_commit_new = false;
+      s_frame_count = s_commit_count;
+      memcpy(s_frame_pos, s_commit_pos, sizeof(float) * 4 * s_commit_count);
+      memcpy(s_frame_color, s_commit_color, sizeof(float) * 4 * s_commit_count);
+      memcpy(s_frame_prio, s_commit_prio, sizeof(int) * s_commit_count);
+      s_frame_beam_n = s_commit_beam_n;
+      memcpy(s_frame_beam, s_commit_beam, sizeof(float) * 8 * s_commit_beam_n);
+    } else {
+      s_frame_count = 0;
+      s_frame_beam_n = 0;
+    }
+  }
   {
     // meme regle que les lampes : une liste vide = GOAL n'a pas encore tourne
     static int beam_empty = 0;
-    if (s_beam_pending_n > 0) {
+    if (s_frame_beam_n > 0) {
       beam_empty = 0;
-      s_beam_active_n = s_beam_pending_n;
-      for (int i = 0; i < s_beam_pending_n * 8; i++) {
-        s_beam_active[i] = s_beam_pending[i];
+      s_beam_active_n = s_frame_beam_n;
+      for (int i = 0; i < s_frame_beam_n * 8; i++) {
+        s_beam_active[i] = s_frame_beam[i];
       }
     } else if (++beam_empty > 20) {
       s_beam_active_n = 0;
     }
-    s_beam_pending_n = 0;
   }
   // The game and render threads are not locked in step, so an empty pending
   // list usually just means "GOAL hasn't run its lamp processes since the last
@@ -748,21 +803,93 @@ void pc_remake_lamps_begin_frame() {
   // the previous set, and only drop it once the list has stayed empty long
   // enough to mean the lamps really are gone (level change).
   static int empty_frames = 0;
-  if (s_pending_count > 0) {
+  // 27/10 : PERSISTANCE de chaque lampe. L'echange a lieu pendant que GOAL declare ses lampes :
+  // une liste a moitie remplie (non vide) passait telle quelle, et les lampes de l'autre moitie
+  // s'eteignaient le temps d'une image — la lumiere bleue d'une source d'eco clignotait une image
+  // sur deux au village. Une lampe deja vue reste allumee 3 images sans nouvelle declaration ;
+  // une lampe redeclaree (meme famille, meme priorite, a moins de 1,5 m) met a jour sa place.
+  // (original : la liste en attente remplacait tout, telle quelle)
+  static float v_pos[kMaxRemakePending * 4], v_col[kMaxRemakePending * 4];
+  static int v_prio[kMaxRemakePending], v_age[kMaxRemakePending];
+  static int v_n = 0;
+  auto famille = [](float w) { return w < -40.f ? 0 : (w < -8.f ? 1 : (w < 0.f ? 2 : 3)); };
+  if (s_frame_count > 0) {
     empty_frames = 0;
-    s_all_count = s_pending_count;
-    for (int i = 0; i < s_pending_count * 4; i++) {
-      s_all_pos[i] = s_pending_pos[i];
-      s_all_color[i] = s_pending_color[i];
+    bool pris[kMaxRemakePending] = {};
+    for (int j = 0; j < v_n; j++) {
+      v_age[j]++;
     }
-    for (int i = 0; i < s_pending_count; i++) {
-      s_all_prio[i] = s_pending_prio[i];
+    for (int i = 0; i < s_frame_count; i++) {
+      int best = -1;
+      float bd = (1.5f * 4096.f) * (1.5f * 4096.f);
+      const int fam = famille(s_frame_color[i * 4 + 3]);
+      for (int j = 0; j < v_n; j++) {
+        if (pris[j] || v_prio[j] != s_frame_prio[i] || famille(v_col[j * 4 + 3]) != fam) {
+          continue;
+        }
+        const float dx = v_pos[j * 4] - s_frame_pos[i * 4];
+        const float dy = v_pos[j * 4 + 1] - s_frame_pos[i * 4 + 1];
+        const float dz = v_pos[j * 4 + 2] - s_frame_pos[i * 4 + 2];
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bd) {
+          bd = d2;
+          best = j;
+        }
+      }
+      if (best < 0) {
+        // meme lampe declaree deux fois dans la meme image : une seule
+        bool double_ = false;
+        for (int j = 0; j < v_n && !double_; j++) {
+          if (pris[j] && famille(v_col[j * 4 + 3]) == fam) {
+            const float dx = v_pos[j * 4] - s_frame_pos[i * 4];
+            const float dy = v_pos[j * 4 + 1] - s_frame_pos[i * 4 + 1];
+            const float dz = v_pos[j * 4 + 2] - s_frame_pos[i * 4 + 2];
+            double_ = dx * dx + dy * dy + dz * dz < (0.25f * 4096.f) * (0.25f * 4096.f);
+          }
+        }
+        if (double_ || v_n >= kMaxRemakePending) {
+          continue;
+        }
+        best = v_n++;
+      }
+      pris[best] = true;
+      v_age[best] = 0;
+      v_prio[best] = s_frame_prio[i];
+      for (int k = 0; k < 4; k++) {
+        v_pos[best * 4 + k] = s_frame_pos[i * 4 + k];
+        v_col[best * 4 + k] = s_frame_color[i * 4 + k];
+      }
+    }
+    int n = 0;
+    for (int j = 0; j < v_n; j++) {
+      if (v_age[j] > 3) {
+        continue;
+      }
+      if (n != j) {
+        v_age[n] = v_age[j];
+        v_prio[n] = v_prio[j];
+        for (int k = 0; k < 4; k++) {
+          v_pos[n * 4 + k] = v_pos[j * 4 + k];
+          v_col[n * 4 + k] = v_col[j * 4 + k];
+        }
+      }
+      n++;
+    }
+    v_n = n;
+    s_all_count = v_n;
+    for (int i = 0; i < v_n * 4; i++) {
+      s_all_pos[i] = v_pos[i];
+      s_all_color[i] = v_col[i];
+    }
+    for (int i = 0; i < v_n; i++) {
+      s_all_prio[i] = v_prio[i];
     }
   } else if (++empty_frames > 20) {
     s_all_count = 0;
     s_lamp_count = 0;
+    v_n = 0;
   }
-  s_pending_count = 0;
+  // (29/10 : la liste en attente est remise a zero par pc_remake_lamps_commit, cote jeu)
   // fold in the fixtures; the nearest-N selection sorts everything out, and a
   // lamp from another level simply never wins a slot because it is far away
   for (int i = 0; i < s_static_count && s_all_count < kMaxRemakePending; i++) {
@@ -789,6 +916,27 @@ void pc_remake_select_lamps(const float* cam_xyz) {
   // émissive n'atteignait jamais le shader. Diagnostic 18/08 : 48 slots —
   // 0 emissives, 0 eco, 48 normales.)
   const float kPrioBonus = (4096.f * 40.f) * (4096.f * 40.f);
+  // 27/10 : STABILITE (clignotement la nuit en marchant). Deux lampes a
+  // egalite pres de la limite des 48 places s'echangeaient d'une image a l'autre (la camera
+  // oscille en marchant) : une lumiere qui s'allume et s'eteint. Une lampe deja choisie a l'image
+  // precedente garde sa place tant qu'une autre n'est pas nettement plus proche (25 % en distance
+  // au carre). (original : sans cette preference)
+  static float s_prev[kMaxRemakeLamps * 3];
+  static int s_prev_n = 0;
+  auto deja = [&](int i) {
+    for (int k = 0; k < s_prev_n; k++) {
+      if (std::abs(s_prev[k * 3] - s_all_pos[i * 4]) < 1.f &&
+          std::abs(s_prev[k * 3 + 1] - s_all_pos[i * 4 + 1]) < 1.f &&
+          std::abs(s_prev[k * 3 + 2] - s_all_pos[i * 4 + 2]) < 1.f) {
+        return true;
+      }
+    }
+    return false;
+  };
+  bool garde[kMaxRemakePending] = {};
+  for (int i = 0; i < s_all_count; i++) {
+    garde[i] = deja(i);
+  }
   for (int slot = 0; slot < n; slot++) {
     int best = -1;
     float best_score = 0.f;
@@ -802,6 +950,9 @@ void pc_remake_select_lamps(const float* cam_xyz) {
       // measure from the edge of the lamp's reach, so a big village lamp wins
       // over a tiny orb that happens to be a little closer
       float d = dx * dx + dy * dy + dz * dz - s_all_pos[i * 4 + 3] * s_all_pos[i * 4 + 3];
+      if (garde[i]) {
+        d = d > 0.f ? d * 0.75f : d * 1.25f;
+      }
       float score = d - (float)s_all_prio[i] * kPrioBonus;
       if (best < 0 || score < best_score) {
         best = i;
@@ -818,6 +969,12 @@ void pc_remake_select_lamps(const float* cam_xyz) {
     }
   }
   s_lamp_count = n;
+  s_prev_n = n;
+  for (int i = 0; i < n; i++) {
+    for (int k = 0; k < 3; k++) {
+      s_prev[i * 3 + k] = s_lamp_pos[i * 4 + k];
+    }
+  }
   // QA : composition des élues (une fois toutes les 300 images)
   {
     static int qa_sel = 0;

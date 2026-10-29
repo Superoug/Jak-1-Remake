@@ -84,6 +84,13 @@ uniform sampler2D reflet_env_tex;
 uniform float has_reflet_env;
 // clarte moyenne de l'image actuelle (1 x 1, reflet_moy.frag)
 uniform sampler2D reflet_moy_tex;
+// lumiere rebondie (gi_rebond.frag, quart de resolution adouci) ; gi_fx : x = rebond a l'ecran,
+// y = ambiance du panorama
+uniform sampler2D gi_tex;
+uniform float has_gi_tex;
+uniform vec4 gi_fx;
+// y = caustiques, z = temps (s) ; x et w libres
+uniform vec4 modern_fx;
 
 // World position is rebuilt from the depth buffer with the inverse of the
 // game's own camera matrix, which is what makes local lights possible at all:
@@ -99,6 +106,7 @@ uniform float beam_n;
 // 20/10 : rayons de soleil volumetriques (jungle) — carte d'ombres du soleil (unite 14)
 uniform sampler2DShadow sun_shadow_tex;
 uniform mat4 sun_light_vp;
+uniform float sun_map_ok;  // 1 = carte d'ombre du soleil liee (unite 14) et sun_light_vp valide
 uniform float shaft_amt;
 // 20/10 : traces dans la neige (unite 7) — R relief (m), G hauteur du sol (m), B instant (s) ;
 // snow_trail = (active, x et z de Jak en unites du jeu, instant courant en s)
@@ -324,6 +332,23 @@ float cb_vnoise(vec2 p) {
   return mix(mix(cb_hash(i, 7.0), cb_hash(i + vec2(1.0, 0.0), 7.0), f.x),
              mix(cb_hash(i + vec2(0.0, 1.0), 7.0), cb_hash(i + vec2(1.0, 1.0), 7.0), f.x), f.y);
 }
+uniform sampler2D caustique_tex;  // motif des caustiques (pc_caustique_tex)
+// CAUSTIQUES : reseau de lignes lumineuses (aretes d'un pavage de Voronoi, pc_caustique_tex :
+// ligne nette + halo), deux couches qui glissent l'une sur l'autre, deformees par une houle lente ;
+// plus vives la ou elles se croisent. Les niveaux de mip effacent les lignes au loin.
+// (v1-v3 : pavage recalcule par pixel, 1,3 ms sur une vue de lagon)
+float caustique(vec2 p, float t, float px) {
+  p += 0.32 * vec2(sin(p.y * 0.83 + t * 0.35) + sin(p.y * 0.37 - t * 0.21),
+                   sin(p.x * 0.71 - t * 0.29) + sin(p.x * 0.41 + t * 0.17));
+  const float K = 1.35;  // la texture est normalisee par 1,35
+  float l1 = texture(caustique_tex, p / 8.0 + vec2(t * 0.013, t * 0.008)).r * K;
+  vec2 p2 = mat2(0.81, -0.59, 0.59, 0.81) * p * 1.53 + vec2(3.1, 7.7);
+  float l2 = texture(caustique_tex, p2 / 8.0 - vec2(t * 0.010, t * 0.015)).r * K;
+  float l = l1 * 0.45 + l2 * 0.35 + l1 * l2 * 1.4;
+  // l'intensite varie lentement d'un endroit a l'autre (la houle n'est pas uniforme)
+  l *= 0.62 + 0.38 * sin(p.x * 0.13 + t * 0.05) * sin(p.y * 0.11 - t * 0.04);
+  return l * (1.0 - smoothstep(0.12, 0.35, px));
+}
 uniform vec4 lamp_pos[MAX_LAMPS];    // xyz = world position, w = radius
 uniform vec4 lamp_color[MAX_LAMPS];  // rgb = colour, w = intensity
 // PERF 14/10 : position ecran des lampes, calculee une fois par image par le C++
@@ -452,6 +477,28 @@ vec3 world_normal(vec2 uv, float d, vec3 P) {
 
 float scene_depth(vec2 uv) {
   return texture(depth_tex, uv).r;
+}
+
+// 27/10 : PRESENCE du luminaire d'une lampe a l'ecran (0..1), pour son halo et ses fantomes
+// d'objectif. Une seule sonde au centre decidait de tout : ciel ou objet fin devant (palme,
+// poteau, bord de la lanterne qui se balance) et le halo s'eteignait d'un coup ; en tournant la
+// camera, la sonde passait d'un pixel a l'autre et les lumieres clignotaient. Cinq sondes dans
+// le disque du luminaire, chacune DOUCE : le halo baisse par paliers fondus au lieu de s'eteindre.
+// (original : sonde unique, ciel -> rien ; plus pres que la lampe de 1,5 m -> rien)
+float lamp_presence(vec2 luv, float ldist, float rad) {
+  float pres = 0.0;
+  for (int t = 0; t < 5; t++) {
+    vec2 o = t == 0 ? vec2(0.0)
+                    : vec2(cos(1.5707963 * float(t)), sin(1.5707963 * float(t))) * rad * 0.15;
+    vec2 q = clamp(luv + o, 0.001, 0.999);
+    float od = scene_depth(q);
+    if (od < 1e-5) {
+      continue;  // ciel : rien n'est dessine la
+    }
+    float d_occ = length(world_from_depth(q, od) - cam_trans.xyz);
+    pres += smoothstep(-4096.0 * 2.0, -4096.0 * 1.0, d_occ - ldist);
+  }
+  return smoothstep(0.0, 0.6, pres / 5.0);
 }
 // vrai si le point monde q, vu a l'ecran, montre la mer (le fond vu a travers est sous le
 // niveau de la mer) ; hors ecran : non
@@ -1041,7 +1088,18 @@ void main() {
     float drv = riv_dist(P.xz / 4096.0);
     float hmax = drv < 90.0 ? 1.5 : 0.9;
     // pentes douces seulement (plage) : sur un talus raide la nappe ne monte pas
-    if (hy > -0.02 && hy < hmax && N.y > 0.72) {
+    // 27/10 : la bande de sable juste SOUS le plan de la mer (-25 a -2 cm) n'etait traitee ni ici ni
+    // cote mer (un liseré de sable sec, plus clair, entre l'eau et le sable mouille) ; avec le bord
+    // doux de la surface (ocean_common.frag) elle se voit a travers : sable mouille et nappe aussi
+    // (original : if (hy > -0.02 && hy < hmax && N.y > 0.72) {)
+    // 27/10 : pente jugee sur la normale geometrique LISSEE du sol (raw_normal, 4 px) : une seule
+    // facette plus raide de la plage restait en carre de sable sec au milieu de la nappe
+    // (original : N.y > 0.72, fondu smoothstep(0.72, 0.86, N.y) plus bas)
+    float ny_plage = N.y;
+    if (hy > -0.25 && hy < hmax && N.y > 0.35) {
+      ny_plage = max(N.y, raw_normal(tex_coord, center_d, P, 4.0).y);
+    }
+    if (hy > -0.25 && hy < hmax && ny_plage > 0.6) {
       // PC-REMAKE : distance a la mer lue dans la carte du rivage (original : sh_distance(P, true))
       float dmer = drv < 90.0 ? max(-drv, 0.0) : sh_distance(P, true);
       if (dmer < 90.0) {
@@ -1052,7 +1110,7 @@ void main() {
         float front = sh_runup(ph, fmax);
         float jour = clamp(1.0 - night_fx.x, 0.25, 1.0);
         float loin = (1.0 - smoothstep(50.0, 90.0, view_dist / 4096.0)) *
-                     (1.0 - smoothstep(hmax * 0.6, hmax, hy)) * smoothstep(0.72, 0.86, N.y);
+                     (1.0 - smoothstep(hmax * 0.6, hmax, hy)) * smoothstep(0.6, 0.78, ny_plage);
         // sable mouille : la zone que les vagues atteignent, qui seche entre deux vagues ; le
         // bord de l'eau reste toujours trempe
         float zone = 1.0 - smoothstep(fmax * 0.75, fmax * 1.05, dmer);
@@ -1257,6 +1315,24 @@ void main() {
     // ---- sky ambient: cool light from the sky above, warm bounce from below ----
     if (light_fx.z > 0.001) {
       vec3 amb = mix(ground_color.rgb, sky_color.rgb, up);
+      // AMBIANCE DU LIEU (lumiere rebondie) : la lumiere ambiante prend les couleurs reelles de
+      // l'entourage — le panorama des reflets, tres flou, dans la direction de la normale — a la
+      // meme clarte moyenne que l'hemispherique : vert sous la canopee, orange au bord de la lave,
+      // bleute face a la mer. Cabane inchangee (reglee juste apres).
+      if (has_reflet_env > 0.5 && gi_fx.y > 0.001) {
+        vec2 euv = vec2(atan(N.x, N.z) * (0.5 / 3.14159265) + 0.5,
+                        asin(clamp(N.y, -1.0, 1.0)) / 3.14159265 + 0.5);
+        vec4 e = textureLod(reflet_env_tex, euv, 6.0);
+        if (e.a > 0.05) {
+          float moy_e = max(luma(texelFetch(reflet_moy_tex, ivec2(0), 0).rgb), 0.02);
+          vec3 amb_env = (e.rgb / e.a) / moy_e * luma(mix(ground_color.rgb, sky_color.rgb, 0.5));
+          amb_env = clamp(amb_env, vec3(0.0), vec3(1.6));
+          // a moitie desaturee : l'ambiance teinte, elle ne colore pas (une prairie verdissait
+          // tout ce qui s'y trouve)
+          amb_env = mix(vec3(luma(amb_env)), amb_env, 0.5);
+          amb = mix(amb, amb_env, 0.6 * gi_fx.y * smoothstep(0.1, 0.5, e.a) * (1.0 - flat_amt * 0.5));
+        }
+      }
       // 12/10 : dans une HUTTE (grade_amt2.w, volumes de time-of-day.gc), pas de
       // ciel bleu sur les murs : un rebond chaud de bois et de lampes (les murs de
       // la hutte de Samos etaient gris-bleu en plein jour). Grottes, cite
@@ -1546,6 +1622,40 @@ void main() {
       // retire — il montrait le fond, son bord et du noir a l'horizon).
       // (original : murk_shallow = mix(vec3(0.05, 0.18, 0.38), vec3(0.12, 0.48, 0.88), day_w);
       //             murk_deep = mix(vec3(0.015, 0.07, 0.18), vec3(0.03, 0.22, 0.55), day_w);)
+      // CAUSTIQUES : sous la mer, la houle concentre la lumiere du soleil en un reseau de lignes qui
+      // dansent sur le fond, les rochers et les objets immerges (et les jambes de Jak) ; fortes
+      // sur les hauts-fonds, de plus en plus faibles en profondeur et a travers l'eau vue de
+      // biais ; seulement au soleil (carte d'ombre). Avant la brume sous-marine : elle les voile.
+      if (modern_fx.y > 0.001 && mer_ici && !sky_pixel && P.y < water_glitter.x && sun_dir.w > 0.5) {
+        float prof = (water_glitter.x - P.y) / 4096.0;
+        float jour_c = clamp(1.0 - night_fx.x, 0.0, 1.0);
+        float col_vue = (cy > water_glitter.x && t_surf > 0.0 && t_surf < 1.0)
+                            ? pix_dist * (1.0 - t_surf) / 4096.0
+                            : 0.0;
+        float kc = modern_fx.y * jour_c * smoothstep(0.03, 0.35, prof) * exp(-prof * 0.28) *
+                   exp(-col_vue * 0.22) * smoothstep(0.1, 0.4, sun_dir.y) *
+                   (1.0 - smoothstep(35.0 * 4096.0, 70.0 * 4096.0, view_dist));
+        if (kc > 0.001) {
+          vec3 L = sun_dir.xyz;
+          // projetees le long du soleil (refracte : moins penche) depuis la surface
+          vec2 q = (P.xz + L.xz / max(L.y, 0.2) * (water_glitter.x - P.y) * 0.75) / 4096.0;
+          const float CELL = 0.85;  // m
+          float nv = abs(dot(N, normalize(cam_trans.xyz - P)));
+          float px = (view_dist / 4096.0) * 0.0011 / max(nv, 0.15) / CELL;
+          float l = caustique(q / CELL, modern_fx.z, px);
+          if (l > 0.001) {
+            float vis = 1.0;
+            vec3 sp = (sun_light_vp * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+            if (sun_map_ok > 0.5 && sp.x > 0.01 && sp.x < 0.99 && sp.y > 0.01 && sp.y < 0.99 &&
+                sp.z < 1.0) {
+              vis = texture(sun_shadow_tex, vec3(sp.xy, sp.z - 0.004));
+            }
+            float a = l * kc * vis;
+            // (v1 : x1,3 — trop fort)
+            c += c * vec3(0.95, 1.10, 1.10) * (a * 1.05) + vec3(0.55, 0.85, 0.90) * (a * 0.05);
+          }
+        }
+      }
       if (col_m > 0.02) {
         c = mix(c, sea_murk(col_m), clamp(1.0 - exp(-col_m * 0.50), 0.0, 0.94));
       }
@@ -1614,9 +1724,16 @@ void main() {
         // quand la surface est assez proche pour que le miroir montre la scène
         float surf_dist = length(Psurf - cam_trans.xyz);
         if (Rdir.y > 0.02 && surf_dist < 4096.0 * 70.0) {
-          float rstep = 4096.0 * 2.6;
-          for (int i = 1; i <= 10; i++) {
-            float rt = rstep * float(i) * (1.0 + 0.22 * float(i));
+          // 27/10 : pas proportionnels a la distance (fins pres de la camera), depart decale d'une
+          // fraction de pas d'un pixel a l'autre, impact affine par dichotomie : les grands pas
+          // fixes decoupaient le reflet d'un rocher proche en blocs (damier dans l'eau peu profonde
+          // au pied des rochers)
+          // (original : rstep = 2,6 m, 10 pas, rt = rstep * i * (1 + 0.22 i), impact au pas entier)
+          float rstep = clamp(surf_dist * 0.045, 4096.0 * 0.3, 4096.0 * 2.6);
+          float decal_w = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+          float rt_prev = 0.0;
+          for (int i = 1; i <= 14; i++) {
+            float rt = rstep * (float(i) - decal_w) * (1.0 + 0.22 * float(i));
             vec3 Pw = Psurf + Rdir * rt;
             vec4 rclip = clip_from_world * vec4(Pw - cam_trans.xyz, 1.0);
             if (rclip.w < 1e-4) {
@@ -1628,12 +1745,31 @@ void main() {
             }
             float sd = scene_depth(ruv);
             if (sd < 1e-5) {
+              rt_prev = rt;
               continue;  // ciel : rien à toucher
             }
             float scene_dist = length(world_from_depth(ruv, sd) - cam_trans.xyz);
             float ray_dist = length(Pw - cam_trans.xyz);
             float behind = ray_dist - scene_dist;
             if (behind > 4096.0 * 0.10 && behind < 4096.0 * 20.0) {
+              // 27/10 : dichotomie entre le pas precedent et celui-ci
+              float ta = rt_prev, tb = rt;
+              for (int j = 0; j < 5; j++) {
+                float tm = 0.5 * (ta + tb);
+                vec4 mc = clip_from_world * vec4(Psurf + Rdir * tm - cam_trans.xyz, 1.0);
+                vec2 muv = (mc.xy / max(mc.w, 1e-4)) * 0.5 + 0.5;
+                float md = scene_depth(muv);
+                float bh = md > 1e-5 ? length(Psurf + Rdir * tm - cam_trans.xyz) -
+                                           length(world_from_depth(muv, md) - cam_trans.xyz)
+                                     : -1.0;
+                if (bh > 0.0) {
+                  tb = tm;
+                } else {
+                  ta = tm;
+                }
+              }
+              vec4 hc = clip_from_world * vec4(Psurf + Rdir * tb - cam_trans.xyz, 1.0);
+              ruv = clamp((hc.xy / max(hc.w, 1e-4)) * 0.5 + 0.5, vec2(0.0), vec2(1.0));
               // 22/09 : la copie sans HUD — sinon les informations a l'ecran
               // se refletent dans l'eau
               refl_col = (has_scene_tex > 0.5) ? texture(scene_tex, ruv).rgb : texture(tex_T0, ruv).rgb;
@@ -1642,9 +1778,10 @@ void main() {
               // (original : hit_w = 1.0;)
               vec2 bord = min(ruv, 1.0 - ruv);
               hit_w = smoothstep(0.0, 0.10, bord.x) * smoothstep(0.0, 0.10, bord.y) *
-                      (1.0 - smoothstep(8.0, 10.5, float(i)));
+                      (1.0 - smoothstep(11.0, 14.5, float(i)));
               break;
             }
+            rt_prev = rt;
           }
         }
         // PHILOSOPHIE FINALE : la mer
@@ -1683,6 +1820,47 @@ void main() {
     // stars and the moon are the bright pixels: let them survive
     sky_night += vec3(0.9, 0.95, 1.0) * pow(clamp(lum - 0.55, 0.0, 1.0), 1.5) * 1.8;
     c = mix(c, sky_night, night);
+  }
+
+  // LUMIERE REBONDIE (illumination globale a l'ecran, gi_rebond.frag) : la lumiere renvoyee par
+  // les surfaces voisines, avec leur couleur. Elle se voit surtout la ou le soleil n'arrive pas
+  // (sous un toit, au pied d'un mur, sous un rocher) : dosee par l'ombre du pixel. Albedo approche
+  // par la TEINTE de la couleur du jeu, a clarte relevee dans l'ombre (l'image porte deja
+  // l'eclairage peint par les artistes) ; couleur du rebond un peu renforcee (vert de l'herbe,
+  // orange de la lave). Ni sur une source, ni au loin.
+  // (v1 : albedo = sqrt(base * 0.45), meme dose partout — invisible : 1 % d'ecart)
+  if (!sky_pixel && has_gi_tex > 0.5 && gi_fx.x > 0.001) {
+    // 26/10 v2 (effet fluo sur l'herbe) : vert renvoye sur du vert = fluo. Couleur du rebond
+    // gardee telle quelle (v1 : saturee x1,35), teinte de l'albedo a moitie desaturee (v1 :
+    // pleine), l'herbe elle-meme en recoit peu (x0,3), et l'ajout ne sature jamais la couleur
+    // au-dela de celle du pixel
+    vec3 gi = texture(gi_tex, tex_coord).rgb;
+    float lb = luma(base);
+    vec3 teinte_b = base / max(lb, 0.03);
+    vec3 alb = mix(vec3(1.0), teinte_b, 0.5) * clamp(0.20 + lb, 0.20, 0.60);
+    float ombre = 1.0 - 0.6 * smoothstep(0.15, 0.55, lb);
+    float kgi = 1.6 * gi_fx.x * ombre * (1.0 - emissive_px) * mix(1.0, 0.6, sous_eau) *
+                (1.0 - smoothstep(80.0 * 4096.0, 120.0 * 4096.0, view_dist)) *
+                (pc_feuillage ? 0.3 : 1.0);
+    // 26/10 v3 (encore trop vert) : un rebond de la MEME couleur que la surface (vert
+    // de l'herbe sur l'herbe, sur le sol herbeux) n'apporte que de l'eclat : fortement reduit ;
+    // un rebond d'une autre couleur (sable sur l'herbe, herbe sur le bois) reste entier
+    {
+      vec3 ch_b = base - vec3(lb);
+      vec3 ch_g = gi - vec3(luma(gi));
+      float meme = (length(ch_b) > 0.02 && length(ch_g) > 0.02)
+                       ? max(dot(normalize(ch_b), normalize(ch_g)), 0.0)
+                       : 0.0;
+      kgi *= 1.0 - 0.75 * smoothstep(0.6, 0.95, meme);
+    }
+    float sat_avant = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+    vec3 c_gi = c + alb * gi * kgi;
+    float l_gi = luma(c_gi);
+    float sat_gi = max(c_gi.r, max(c_gi.g, c_gi.b)) - min(c_gi.r, min(c_gi.g, c_gi.b));
+    if (sat_gi > sat_avant * 1.05 && sat_gi > 1e-4) {
+      c_gi = mix(vec3(l_gi), c_gi, (sat_avant * 1.05) / sat_gi);
+    }
+    c = c_gi;
   }
 
   // REFLETS DU METAL ET DU VERRE. Les textures de metal (bronze precurseur, or, laiton, acier,
@@ -1926,7 +2104,9 @@ void main() {
         if (rl > 0.9) {
           float soleil = 1.0;
           vec3 sp = (sun_light_vp * vec4(P, 1.0)).xyz * 0.5 + 0.5;
-          if (sp.x > 0.01 && sp.x < 0.99 && sp.y > 0.01 && sp.y < 0.99 && sp.z < 1.0) {
+          // (27/10 : sun_map_ok — hors de la jungle la matrice etait perimee : eclat souvent eteint)
+          if (sun_map_ok > 0.5 && sp.x > 0.01 && sp.x < 0.99 && sp.y > 0.01 && sp.y < 0.99 &&
+              sp.z < 1.0) {
             soleil = texture(sun_shadow_tex, vec3(sp.xy, sp.z - 0.004));
           }
           float pw = verre_px > 0.5 ? 900.0 : mix(140.0, 650.0, metal_poli);
@@ -2302,6 +2482,8 @@ void main() {
     }
   }
 
+  // (la VIE DANS L'AIR est dessinee par-dessus cette passe : vie_air.vert / vie_air.frag)
+
 #ifdef POST_PASS1
   color = vec4(c, sky_pixel ? -1.0 : edge_amt);
   return;
@@ -2412,13 +2594,15 @@ void main() {
             }
           }
           if (gsum > 0.001) {
-            float cd0 = scene_depth(clamp(luv, 0.001, 0.999));
-            bool seen = (cd0 >= 1e-5) &&
-                        (length(world_from_depth(clamp(luv, 0.001, 0.999), cd0) - cam_trans.xyz) >=
-                         ldist - 4096.0 * 1.5);
-            if (seen) {
+            // 27/10 : presence douce (lamp_presence) et fondu quand la lampe approche du bord
+            // de l'ecran — les fantomes, au milieu de l'image, s'allumaient et s'eteignaient
+            // d'un coup quand la lampe passait derriere un objet fin ou sortait du cadre.
+            // (original : sonde unique du centre, tout ou rien ; cadre -0,05..1,05 sans fondu)
+            float gbord = smoothstep(-0.05, 0.03, min(min(luv.x, 1.0 - luv.x), min(luv.y, 1.0 - luv.y)));
+            float seen = gbord > 0.0 ? lamp_presence(luv, ldist, rad) * gbord : 0.0;
+            if (seen > 0.0) {
               float ng = fix_h ? mix(0.18, 1.0, night_glow) : 1.0;
-              glow_em += lamp_color[i].rgb * gsum * inten_h * ng * halo_fade * fx_quality.w * 2.5;
+              glow_em += lamp_color[i].rgb * gsum * inten_h * ng * halo_fade * fx_quality.w * 2.5 * seen;
             }
           }
         }
@@ -2438,6 +2622,8 @@ void main() {
         // own fixture. If the sky is showing at the lamp's screen position then
         // nothing is drawn there, and a halo floating in the sky is exactly the
         // artefact that produces. So the centre tap is strict.
+        // 27/10 : le centre strict devient une presence douce (lamp_presence, voir plus haut)
+        /* (original)
         float cd = scene_depth(luv);
         if (cd < 1e-5) {
           continue;
@@ -2445,6 +2631,11 @@ void main() {
         float d_center = length(world_from_depth(luv, cd) - cam_trans.xyz);
         if (d_center < ldist - 4096.0 * 1.5) {
           continue;  // something clearly stands in front of it
+        }
+        */
+        float lpres = lamp_presence(luv, ldist, rad);
+        if (lpres <= 0.0) {
+          continue;
         }
         // the neighbours only soften the edge; sky counts as nothing, not as
         // clear line of sight
@@ -2460,7 +2651,8 @@ void main() {
           vis += smoothstep(-4096.0 * 2.5, 4096.0 * 0.5, d_occ - ldist);
         }
         vis /= 5.0;
-        if (vis < 0.05) {
+        vis *= lpres;  // 27/10
+        if (vis < 0.01) {  // (original : 0.05 — dernier petit saut a l'extinction)
           continue;
         }
         float core = pow(t, 3.0);

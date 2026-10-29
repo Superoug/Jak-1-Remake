@@ -93,6 +93,26 @@ float water_on_land() {
   return d > 90.0 ? 1.0 : smoothstep(-0.6, 0.4, d);
 }
 
+// 27/10 : BORD DOUX. La surface plate de la mer coupe le sable a facettes : sa limite suivait les
+// triangles du terrain (ligne en zigzag, marches). La surface s'efface quand l'eau sous elle
+// devient tres mince (moins de 45 cm de profondeur verticale) : l'eau se fond dans le sable
+// mouille du post (qui couvre aussi cette bande). 1 sans profondeur de la scene.
+// profondeur verticale d'eau sous le point de la surface (m) ; grande sans profondeur de la scene
+float water_bord_m() {
+  if (water_murk.x < 0.5) {
+    return 100.0;
+  }
+  vec2 uv = gl_FragCoord.xy / water_murk.zw;
+  float db = texture(water_depth, uv).r;
+  if (db < 1e-6) {
+    return 100.0;
+  }
+  return max(water_world(uv, gl_FragCoord.z).y - water_world(uv, db).y, 0.0) / 4096.0;
+}
+float water_bord_doux() {
+  return smoothstep(0.0, 0.45, water_bord_m());
+}
+
 // metres d'eau traverses par le regard, de la surface au fond (rien derriere = tres profond)
 // 17/10 v2 : borne a 2 x la profondeur VERTICALE — vu en rasant, le trajet devenait tres long
 // (2 m de fond = 20 m de trajet) et la brume noyait les hauts-fonds (rochers peints sans texture)
@@ -173,6 +193,9 @@ void main() {
     // artistes (retiree un temps de la formule : l'eau cachait les orbes).
     color.a = clamp(fragment_color.a * 0.5 * T0.a * 1.2, 0.0, 1.0);
     color.rgb = mix(color.rgb, fog_color.rgb, clamp(fog_color.a * fog, 0, 1));
+    // 27/10 : surface des dalles proches, effacee dans l'eau tres peu profonde (damier de carres
+    // au bord du sable) et sur la terre (original : sans ce facteur)
+    color.a *= water_on_land() * smoothstep(0.0, 0.9, water_bord_m());
   } else if (bucket == 1) {
     // passe de transparence (tuiles PROCHES) : même traitement mer bleue
     // que le large — c'était la seule passe sans sea_blue, d'où la frontière
@@ -181,10 +204,18 @@ void main() {
     color.rgb = sea_blue(color.rgb);
     color.a = clamp(color.a * 2.2, 0.0, 1.0);
     color.rgb = mix(color.rgb, fog_color.rgb, clamp(fog_color.a * fog, 0, 1));
+    // 27/10 : dalles proches dans l'eau tres peu profonde : leurs bords (alpha de rivage par
+    // sommet) faisaient un damier de carres au bord du sable — effacees comme la surface
+    // (original : sans ce facteur)
+    color.a *= water_on_land() * smoothstep(0.0, 0.9, water_bord_m());
   } else if (bucket == 2 || bucket == 4) {
     // 2 = reflet du proche, 4 = reflet ADDITIF du large (restauré d'origine
     // après la fausse piste du 17/08)
     color = fragment_color * T0;
+    if (bucket == 2) {
+      // 27/10 : idem pour le reflet des dalles proches (original : sans ce facteur)
+      color *= water_on_land() * smoothstep(0.0, 0.9, water_bord_m());
+    }
   } else if (bucket == 3) {
     color = fragment_color * T0;
     color.rgb = sea_blue(color.rgb);
@@ -227,14 +258,22 @@ void main() {
       // l'efface en approchant de la marche — la transmission descend jusqu'a 0 au bord du banc
       // (moyenne = moitie de la locale) et reste entiere a 4 m du bord (moyenne = locale)
       // (original : vec3 T = exp(-water_column_m() * water_murk.y * vec3(1.6, 0.55, 0.45));)
-      vec3 Tc = exp(-water_column_m() * water_murk.y * vec3(1.6, 0.55, 0.45));
+      float col_c = water_column_m();
+      vec3 Tc = exp(-col_c * water_murk.y * vec3(1.6, 0.55, 0.45));
       vec3 Ts = water_transmission_soft(water_murk.y * vec3(1.6, 0.55, 0.45));
       vec3 T = clamp(2.0 * Ts - Tc, vec3(0.0), Tc);
+      // 27/10 : au ras du rivage (moins de ~60 cm d'eau), la moyenne sur 4 m melangeait le sable
+      // sec du bord : des copies decalees de la ligne du rivage faisaient un damier de carres
+      // clairs et sombres dans l'eau peu profonde. La, la transmission locale suffit.
+      // (original : T = clamp(2.0 * Ts - Tc, 0, Tc) partout)
+      T = mix(Tc, T, smoothstep(0.15, 0.8, col_c));
       color.rgb = a * color.rgb + (1.0 - a) * deep * (1.0 - T);
       color_t = vec4((1.0 - a) * T, 0.0);
       color.a = 1.0;
       // PC-REMAKE : sur la terre, plus d'eau (couleur nulle, fond transmis entier)
-      float k = water_on_land();
+      // 27/10 : et au ras du sable, la surface s'efface (bord doux, voir water_bord_doux)
+      // (original : float k = water_on_land();)
+      float k = water_on_land() * water_bord_doux();
       color.rgb *= k;
       color_t = mix(vec4(1.0, 1.0, 1.0, 0.0), color_t, k);
     }
@@ -243,6 +282,8 @@ void main() {
     // additif bucket 4 — formule d'origine PS2, le MOTIF alphamod pleine force
     // (fragment_color.a arrive x2 du vertex shader : 0.502 x 2 = 1.0 en eau libre)
     // PC-REMAKE : pas de reflet du large sur la terre (original : sans le facteur water_on_land)
-    color = vec4(0.0, 0.0, 0.0, clamp(fragment_color.a * T0.a, 0.0, 1.0) * water_on_land());
+    // 27/10 : idem au ras du sable (bord doux) — le reflet du large s'arretait net sur la ligne
+    color = vec4(0.0, 0.0, 0.0,
+                 clamp(fragment_color.a * T0.a, 0.0, 1.0) * water_on_land() * water_bord_doux());
   }
 }

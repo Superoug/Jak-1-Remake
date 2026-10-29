@@ -25,6 +25,7 @@
 #include "game/graphics/display.h"
 #include "game/graphics/gfx.h"
 #include "game/graphics/opengl_renderer/OpenGLRenderer.h"
+#include "game/graphics/opengl_renderer/background/background_common.h"
 #include "game/graphics/opengl_renderer/debug_gui.h"
 #include "game/graphics/screenshot.h"
 #include "game/graphics/texture/TexturePool.h"
@@ -878,6 +879,8 @@ void gl_send_chain(const void* data, u32 offset) {
     // may be easy.
 
     g_gfx_data->dma_copier.set_input_data(data, offset, run_dma_copy);
+    // PC-REMAKE 29/10 : lampes et faisceaux declares pendant cette image, valides en une fois
+    pc_remake_lamps_commit();
 
     g_gfx_data->has_data_to_render = true;
     g_gfx_data->dma_cv.notify_all();

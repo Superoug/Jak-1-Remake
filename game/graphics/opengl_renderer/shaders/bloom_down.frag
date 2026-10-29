@@ -46,8 +46,10 @@ vec3 bright(vec2 uv) {
     sky = texture(depth_tex, uv).r < 1e-5 ? 1.0 : 0.0;
   }
   float part = 0.0;
+  vec3 pre = vec3(0.0);
   if (bloom_p.w > 0.5) {
-    vec3 dd = abs(c - texelFetch(pre_tex, ip, 0).rgb);
+    pre = texelFetch(pre_tex, ip, 0).rgb;
+    vec3 dd = abs(c - pre);
     part = smoothstep(0.02, 0.10, max(dd.r, max(dd.g, dd.b)));
   }
   part *= 1.0 - em;
@@ -60,7 +62,13 @@ vec3 bright(vec2 uv) {
   // cascade = des centaines de particules bleues superposees sur une grande
   // surface — leur halo cumule noyait la falaise dans un voile bleu. Seuil 0.35
   // -> 0.50 et poids 1.2 -> 0.7 ; les petites lueurs gardent leur halo.
-  vec3 p = max(c - vec3(0.50), vec3(0.0)) * 0.7 * mix(0.15, 1.0, sat) * part;
+  // v5 (27/10) : seule la lumiere que la particule AJOUTE rayonne. Un sprite presque
+  // transparent (fumee, voile) pose sur une surface claire (personnage, bois eclaire par une
+  // lampe) faisait rayonner toute cette surface le temps d'une image : halos qui
+  // s'allumaient et s'eteignaient en tournant la camera. Sur un fond sombre (les lueurs, les
+  // spirales, le portail), rien ne change : le fond reste sous le seuil de 0.50.
+  // (v4 : max(c - vec3(0.50), vec3(0.0)) * ...)
+  vec3 p = max(c - max(vec3(0.50), pre), vec3(0.0)) * 0.7 * mix(0.15, 1.0, sat) * part;
   // 13/10 : decor ordinaire = seuil sur la LUMINANCE (l'herbe vert vif, canal
   // vert ~0.95, rayonnait et voilait la prairie)
   // (original : max(c - vec3(0.86), vec3(0.0)) * ...)
@@ -70,7 +78,14 @@ vec3 bright(vec2 uv) {
   // ecos) rayonnent davantage ; le decor ordinaire (r) ne change pas
   e *= 1.0 + 1.2 * bloom_night;
   p *= 1.0 + 3.0 * bloom_night;  // v2 (v1 : 1.5)
-  return (e + p + r) * (1.0 - sky);
+  // 27/10 : compression PAR PIXEL (voir main) : le decor ordinaire comme la moyenne de Karis le
+  // faisait pour un reflet isole (les eclats du soleil sur l'eau ne doivent pas rayonner) ; les
+  // sources (emissives, particules) bornees seulement tres haut
+  r *= 1.0 / (1.0 + 0.75 * luma(r));
+  vec3 ep = e + p;
+  float lep = luma(ep);
+  ep *= lep > 3.0 ? (3.0 + (lep - 3.0) / (1.0 + 0.5 * (lep - 3.0))) / lep : 1.0;
+  return (ep + r) * (1.0 - sky);
 }
 
 vec3 tap(vec2 uv) {
@@ -85,15 +100,17 @@ void main() {
     // PREMIER NIVEAU (perf 12/10 : 13 points x 4 textures = 52 lectures par pixel,
     // 2,6 ms) : pre-filtre 2x2 — chaque texel plein ecran lu UNE fois (4 x 4
     // textures), tri de ce qui rayonne, moyenne de Karis contre le scintillement.
+    // 27/10 (clignotement en tournant la camera) : la moyenne de Karis n'est pas
+    // lineaire — une petite lampe de 2 ou 3 pixels donnait un halo plus ou moins fort selon qu'elle
+    // tombait dans un seul bloc de 2 x 2 ou a cheval sur deux : en tournant, les halos pulsaient
+    // (mesure : jusqu'a 20 % d'une image a l'autre). Moyenne SIMPLE (l'energie ne depend plus de
+    // l'alignement), la compression se fait par pixel dans bright().
+    // (original : moyenne de Karis, poids 1 / (1 + luma))
     vec3 b0 = bright(uv + t * vec2(-0.5, -0.5));
     vec3 b1 = bright(uv + t * vec2(0.5, -0.5));
     vec3 b2 = bright(uv + t * vec2(-0.5, 0.5));
     vec3 b3 = bright(uv + t * vec2(0.5, 0.5));
-    float w0 = 1.0 / (1.0 + luma(b0));
-    float w1 = 1.0 / (1.0 + luma(b1));
-    float w2 = 1.0 / (1.0 + luma(b2));
-    float w3 = 1.0 / (1.0 + luma(b3));
-    o = (b0 * w0 + b1 * w1 + b2 * w2 + b3 * w3) / (w0 + w1 + w2 + w3);
+    o = (b0 + b1 + b2 + b3) * 0.25;
   } else {
     vec3 a = tap(uv + t * vec2(-2.0, -2.0));
     vec3 b = tap(uv + t * vec2(0.0, -2.0));

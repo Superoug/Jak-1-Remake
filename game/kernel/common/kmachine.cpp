@@ -1556,6 +1556,13 @@ void pc_set_jak_wet(u32 top, u32 low, u32 line, u32 feet, u32 state, u32 surf) {
   memcpy(&g_jak_eau[1], &surf, 4);
 }
 
+// PC-REMAKE 27/10 : LUCIOLES (vie_air.vert) — lieu de la camera : 0 rien, 1 village (autour des
+// lampes), 2 foret (jungle)
+extern int g_vie_zone;
+void pc_set_vie_zone(u32 zone) {
+  g_vie_zone = (int)zone;
+}
+
 void pc_set_water_glitter(u32 sea, u32 day, u32 night) {
   float fsea, fday, fnight;
   memcpy(&fsea, &sea, 4);
@@ -1780,6 +1787,7 @@ void init_common_pc_port_functions(
   make_func_symbol_func("pc-set-night-fx!", (void*)pc_set_night_fx);
   make_func_symbol_func("pc-add-lamp!", (void*)pc_add_lamp);
   make_func_symbol_func("pc-set-jak-wet!", (void*)pc_set_jak_wet);
+  make_func_symbol_func("pc-set-vie-zone!", (void*)pc_set_vie_zone);
   make_func_symbol_func("pc-add-beam!", (void*)pc_add_beam);
   make_func_symbol_func("pc-add-static-lamp!", (void*)pc_add_static_lamp);
   make_func_symbol_func("pc-add-eco-lamp!", (void*)pc_add_eco_lamp);

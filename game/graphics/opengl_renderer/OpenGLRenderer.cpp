@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <unordered_map>
 
@@ -1693,7 +1694,8 @@ GLuint pc_bloom_run(GameVersion version,
                     bool has_depth,
                     bool has_normals,
                     bool reload,
-                    u64 frame_idx);
+                    u64 frame_idx,
+                    const float* cam_pos);
 GLuint pc_hud_ref_texture();
 
 void OpenGLRenderer::dispatch_buckets_jak1(DmaFollower dma,
@@ -2209,6 +2211,13 @@ BloomTarget g_bloom_src;
 BloomTarget g_bloom_lv[kBloomLevels];
 bool g_bloom_src_fresh = false;
 int g_bloom_age = 1000;  // images depuis le dernier resultat calcule
+// 27/10 : stabilisation dans le temps (voir bloom_stab.frag) — historique en va-et-vient
+BloomTarget g_bloom_hist[2];
+int g_bloom_hist_cur = 0;
+bool g_bloom_hist_ok = false;
+GLuint g_bloom_out = 0;  // texture rendue au post (historique stabilise, ou le niveau 1/2)
+float g_bloom_prev_clip[16];
+float g_bloom_prev_cam[3];
 u64 g_bloom_frame = ~0ull;  // image du dernier calcul (la capture d'ecran rejoue le post)
 
 void bloom_ensure(BloomTarget& b, int w, int h, bool hdr) {
@@ -2298,27 +2307,33 @@ GLuint pc_bloom_run(GameVersion version,
                     bool has_depth,
                     bool has_normals,
                     bool reload,
-                    u64 frame_idx) {
+                    u64 frame_idx,
+                    const float* cam_pos) {
   static Shader* s_down = nullptr;
   static Shader* s_up = nullptr;
+  static Shader* s_stab = nullptr;
   if (reload || !s_down) {
     delete s_down;
     delete s_up;
+    delete s_stab;
     s_down = new Shader("bloom_down", version);
     s_up = new Shader("bloom_up", version);
+    s_stab = new Shader("bloom_stab", version);
   }
   if (!s_down->okay() || !s_up->okay() || bloom_off_by_file()) {
     g_bloom_age = 1000;
+    g_bloom_hist_ok = false;
     return 0;
   }
   if (!g_bloom_src_fresh) {
     // meme image rejouee (capture d'ecran) : resultat ET reference HUD valides
-    if (g_bloom_frame == frame_idx && g_bloom_age == 0 && g_bloom_lv[0].tex) {
-      return g_bloom_lv[0].tex;
+    if (g_bloom_frame == frame_idx && g_bloom_age == 0 && g_bloom_out) {
+      return g_bloom_out;
     }
     // image sans sprites (chargement...) : on garde le dernier resultat un instant
     g_bloom_age++;
-    return (g_bloom_age < 8 && g_bloom_lv[0].tex) ? g_bloom_lv[0].tex : 0;
+    g_bloom_hist_ok = false;
+    return (g_bloom_age < 8 && g_bloom_out) ? g_bloom_out : 0;
   }
   g_bloom_src_fresh = false;
   g_bloom_age = 0;
@@ -2388,7 +2403,70 @@ GLuint pc_bloom_run(GameVersion version,
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
   }
 
-  // 3. etat rendu a l'appelant
+  // 3. 27/10 : STABILISATION dans le temps (bloom_stab.frag). Un eclair d'une seule image
+  // (soudure de Keira, etincelles) ou une petite lampe qui gagne ou perd un pixel en tournant
+  // faisait pulser tout son halo. Poids de l'image actuelle selon le temps ecoule (constante de
+  // 40 ms : ~0.34 a 60 i/s) ; historique oublie apres une coupure (camera deplacee de plus de
+  // 4 m, image sautee, taille changee).
+  // (original : le post lisait directement g_bloom_lv[0])
+  g_bloom_out = g_bloom_lv[0].tex;
+  {
+    static auto t_prev = std::chrono::steady_clock::now();
+    static u64 frame_prev = ~0ull;
+    const auto t_now = std::chrono::steady_clock::now();
+    const float dt = std::chrono::duration<float>(t_now - t_prev).count();
+    t_prev = t_now;
+    const BloomTarget& lv0 = g_bloom_lv[0];
+    if (s_stab->okay() && g_world_from_clip_ok && cam_pos) {
+      const int nxt = g_bloom_hist_cur ^ 1;
+      bloom_ensure(g_bloom_hist[0], lv0.w, lv0.h, true);
+      bloom_ensure(g_bloom_hist[1], lv0.w, lv0.h, true);
+      float cd[3];
+      for (int k = 0; k < 3; k++) {
+        cd[k] = cam_pos[k] - g_bloom_prev_cam[k];
+      }
+      const float saut_cam = std::sqrt(cd[0] * cd[0] + cd[1] * cd[1] + cd[2] * cd[2]);
+      const bool suite = g_bloom_hist_ok && frame_idx == frame_prev + 1 && dt < 0.25f &&
+                         saut_cam < 4.f * 4096.f;
+      const float w = suite ? 1.f - std::exp(-std::max(dt, 0.004f) / 0.040f) : 1.f;
+      glDisable(GL_BLEND);
+      s_stab->activate();
+      const GLuint ps = s_stab->id();
+      glUniform1i(pc_uniform_loc(ps, "src_tex"), 0);
+      glUniform1i(pc_uniform_loc(ps, "hist_tex"), 6);
+      glUniform1i(pc_uniform_loc(ps, "depth_tex"), 15);
+      glUniformMatrix4fv(pc_uniform_loc(ps, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+      glUniformMatrix4fv(pc_uniform_loc(ps, "prev_clip_from_world"), 1, GL_FALSE,
+                         g_bloom_prev_clip);
+      glUniform3f(pc_uniform_loc(ps, "cam_delta"), cd[0], cd[1], cd[2]);
+      glUniform1f(pc_uniform_loc(ps, "stab_w"), w);
+      GLint prev_u6 = 0;
+      glActiveTexture(GL_TEXTURE6);
+      glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_u6);
+      glBindTexture(GL_TEXTURE_2D, g_bloom_hist[g_bloom_hist_cur].tex);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, lv0.tex);
+      glBindFramebuffer(GL_FRAMEBUFFER, g_bloom_hist[nxt].fbo);
+      glViewport(0, 0, lv0.w, lv0.h);
+      glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      glActiveTexture(GL_TEXTURE6);
+      glBindTexture(GL_TEXTURE_2D, prev_u6);
+      glActiveTexture(GL_TEXTURE0);
+      g_bloom_hist_cur = nxt;
+      g_bloom_hist_ok = true;
+      g_bloom_out = g_bloom_hist[nxt].tex;
+    } else {
+      g_bloom_hist_ok = false;
+    }
+    for (int k = 0; k < 16; k++) {
+      g_bloom_prev_clip[k] = g_clip_from_world[k];
+    }
+    for (int k = 0; k < 3 && cam_pos; k++) {
+      g_bloom_prev_cam[k] = cam_pos[k];
+    }
+    frame_prev = frame_idx;
+  }
+  // 4. etat rendu a l'appelant
   glBlendFunc(bsrc, bdst);
   glBlendEquation(beq);
   if (!blend) {
@@ -2400,7 +2478,7 @@ GLuint pc_bloom_run(GameVersion version,
   glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
   glViewport(vp[0], vp[1], vp[2], vp[3]);
   glUseProgram(prev_prog);
-  return g_bloom_lv[0].tex;
+  return g_bloom_out;
 }
 
 // PC-REMAKE 20/10 : RAYONS DE SOLEIL (jungle) au quart de la resolution + flou separable —
@@ -2634,6 +2712,351 @@ GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos)
   glViewport(vp[0], vp[1], vp[2], vp[3]);
   glUseProgram(prev_prog);
   return g_env_tex;
+}
+
+// PC-REMAKE : MOTIF DES CAUSTIQUES (post_processing.frag), calcule une fois : 512 x 512, sans
+// couture, 8 x 8 cellules d'un pavage de Voronoi, ligne nette sur les aretes et halo doux ; le post
+// en lit deux couches qui glissent l'une sur l'autre (au lieu de recalculer le pavage pour chaque
+// pixel : 1,3 ms sur une vue de lagon).
+GLuint pc_caustique_tex() {
+  static GLuint tex = 0;
+  if (tex) {
+    return tex;
+  }
+  constexpr int N = 512, C = 8;
+  auto hache = [](int x, int y, int k) {
+    u32 h = (u32)(x * 73856093) ^ (u32)(y * 19349663) ^ (u32)(k * 83492791);
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    return (h & 0xffffff) / 16777216.f;
+  };
+  std::vector<u8> px(N * N);
+  for (int y = 0; y < N; y++) {
+    for (int x = 0; x < N; x++) {
+      const float fx = (x + 0.5f) * C / N, fy = (y + 0.5f) * C / N;
+      const int ix = (int)std::floor(fx), iy = (int)std::floor(fy);
+      float d1 = 8.f, d2 = 8.f;
+      for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+          const int cx = ix + dx, cy = iy + dy;
+          const int wx = ((cx % C) + C) % C, wy = ((cy % C) + C) % C;  // sans couture
+          const float ox = 0.5f + 0.38f * std::sin(6.2831853f * hache(wx, wy, 1));
+          const float oy = 0.5f + 0.38f * std::sin(6.2831853f * hache(wx, wy, 2));
+          const float ddx = cx + ox - fx, ddy = cy + oy - fy;
+          const float d = std::sqrt(ddx * ddx + ddy * ddy);
+          if (d < d1) {
+            d2 = d1;
+            d1 = d;
+          } else if (d < d2) {
+            d2 = d;
+          }
+        }
+      }
+      const float e = d2 - d1;
+      auto ss = [](float a, float b, float v) {
+        float t = std::clamp((v - a) / (b - a), 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+      };
+      const float l = (1.f - ss(0.f, 0.06f, e)) + 0.35f * (1.f - ss(0.f, 0.24f, e));
+      px[y * N + x] = (u8)std::clamp((int)(l / 1.35f * 255.f + 0.5f), 0, 255);
+    }
+  }
+  glGenTextures(1, &tex);
+  glActiveTexture(GL_TEXTURE16);
+  glBindTexture(GL_TEXTURE_2D, tex);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, N, N, 0, GL_RED, GL_UNSIGNED_BYTE, px.data());
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glActiveTexture(GL_TEXTURE0);
+  return tex;
+}
+
+// PC-REMAKE : VIE DANS L'AIR (vie_air.vert / vie_air.frag) — poussieres, pollen, embruns, lucioles
+// et feuilles de la jungle, dessinees en points dans la cible de la passe 1 du post (avant le
+// bloom et l'etalonnage de la passe 2). Lit la profondeur (15), la scene sans HUD (12), la carte
+// d'ombre du soleil (14) et les cartes du rivage (5, 6), deja liees pour le post.
+// (v1 : calcul par pixel dans le post, 6 ms — abandonne)
+void pc_vie_run(GameVersion version, bool reload, const float* cam_pos, int w, int h,
+                u64 frame_idx) {
+  static Shader* s_vie = nullptr;
+  static GLuint vao = 0;
+  if (!g_world_from_clip_ok) {
+    return;
+  }
+  if (reload || !s_vie) {
+    delete s_vie;
+    s_vie = new Shader("vie_air", version);
+  }
+  if (!s_vie->okay()) {
+    return;
+  }
+  if (!vao) {
+    glGenVertexArrays(1, &vao);
+  }
+  extern float g_shaft_amt;
+  const GLuint pr = s_vie->id();
+  s_vie->activate();
+  const float t = (float)(frame_idx % 216000) / 60.f;
+  const float nuit = std::clamp(g_night_fx[0], 0.f, 1.f);
+  const float hutte = std::clamp(g_grade_amt2[3], 0.f, 1.f);
+  const float jungle = std::clamp(g_shaft_amt, 0.f, 1.f) * (1.f - std::clamp(hutte * 4.f, 0.f, 1.f));
+  float sd[4] = {0.f, 1.f, 0.f, 0.f};
+  {
+    float sx = g_sun_shadow_params[0], sy = g_sun_shadow_params[1], sz = g_sun_shadow_params[2];
+    float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (len > 1e-4f) {
+      sd[0] = -sx / len;
+      sd[1] = -sy / len;
+      sd[2] = -sz / len;
+      sd[3] = (sd[1] > 0.02f && g_sun_shadow_params[3] > 0.001f) ? 1.f : 0.f;
+    }
+  }
+  const bool carte = g_sun_shadow.ready && g_sun_shadow.enabled();
+  glUniformMatrix4fv(pc_uniform_loc(pr, "clip_from_world"), 1, GL_FALSE, g_clip_from_world);
+  glUniformMatrix4fv(pc_uniform_loc(pr, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+  glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
+  glUniform4f(pc_uniform_loc(pr, "vie_fx"), 1.f, jungle, t, 1.25f / (float)std::max(h, 1));
+  glUniform4f(pc_uniform_loc(pr, "vie_ciel"), 1.f - nuit, nuit,
+              std::clamp(std::clamp(g_ground_color[3] - hutte, 0.f, 1.f) + hutte, 0.f, 1.f), sd[3]);
+  glUniform4fv(pc_uniform_loc(pr, "sun_dir"), 1, sd);
+  glUniform1i(pc_uniform_loc(pr, "sun_shadow_tex"), 14);
+  glUniform1f(pc_uniform_loc(pr, "sun_map_ok"), carte ? 1.f : 0.f);
+  if (carte) {
+    glUniformMatrix4fv(pc_uniform_loc(pr, "sun_light_vp"), 1, GL_FALSE, g_sun_shadow.read_vp());
+  }
+  glUniform4f(pc_uniform_loc(pr, "vie_mer"), g_water_glitter[0],
+              (g_water_glitter[1] > 0.001f || g_water_glitter[2] > 0.001f) ? 1.f : 0.f, t, 0.f);
+  glUniform1i(pc_uniform_loc(pr, "riv_tex0"), 5);
+  glUniform1i(pc_uniform_loc(pr, "riv_tex1"), 6);
+  glUniform4fv(pc_uniform_loc(pr, "riv_box[0]"), 2, g_rivage_box);
+  glUniform1i(pc_uniform_loc(pr, "riv_n"), g_rivage_n);
+  glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
+  glUniform1i(pc_uniform_loc(pr, "scene_tex"), 12);
+  glUniform2f(pc_uniform_loc(pr, "vie_ecran"), (float)w, (float)h);
+
+  const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_SCISSOR_TEST);
+  glEnable(GL_BLEND);
+  glEnable(GL_PROGRAM_POINT_SIZE);
+  glBindVertexArray(vao);
+  // 1. points lumineux (additifs ; l'alpha de la cible — aretes / ciel — n'est pas touche)
+  glBlendEquation(GL_FUNC_ADD);
+  glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
+  // (27/10 : poussieres, pollen et embruns de jour retires — des points gris comme de la
+  //  poussiere ; original : glDrawArrays(GL_POINTS, 0, 3600) avec vie_sorte 0)
+  // lucioles (la nuit, en foret et au village : g_vie_zone, pose par time-of-day.gc)
+  extern int g_vie_zone;
+  if (nuit > 0.4f && g_vie_zone > 0) {
+    // les lampes a moins de 26 m de la camera, les plus proches d'abord (pas les ecos) : une
+    // lampe qui entre ou sort de la liste est hors de la boite des lucioles (18 m) — pas de
+    // lucioles qui apparaissent d'un coup en marchant (27/10 ; v1 : les 16 plus proches)
+    float lampes[32 * 4] = {};
+    int nl = 0;
+    {
+      const int n = pc_remake_lamp_count();
+      const float* lp = pc_remake_lamp_pos();
+      const float* lc = pc_remake_lamp_color();
+      std::vector<std::pair<float, int>> tri;
+      for (int i = 0; i < n; i++) {
+        const float w = lc[i * 4 + 3];
+        if (w < 0.f && w > -8.f) {
+          continue;  // eco
+        }
+        const float dx = lp[i * 4] - cam_pos[0], dy = lp[i * 4 + 1] - cam_pos[1],
+                    dz = lp[i * 4 + 2] - cam_pos[2];
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < (26.f * 4096.f) * (26.f * 4096.f)) {
+          tri.push_back({d2, i});
+        }
+      }
+      std::sort(tri.begin(), tri.end());
+      for (auto& [d2, i] : tri) {
+        if (nl >= 32) {
+          break;
+        }
+        lampes[nl * 4] = lp[i * 4] / 4096.f;
+        lampes[nl * 4 + 1] = lp[i * 4 + 1] / 4096.f;
+        lampes[nl * 4 + 2] = lp[i * 4 + 2] / 4096.f;
+        nl++;
+      }
+    }
+    glUniform4f(pc_uniform_loc(pr, "vie_zone"), (float)g_vie_zone, (float)nl, 0.f, 0.f);
+    glUniform4fv(pc_uniform_loc(pr, "vie_lampes[0]"), 32, lampes);
+    glUniform1i(pc_uniform_loc(pr, "vie_sorte"), 2);
+    glDrawArrays(GL_POINTS, 0, 1400);
+  }
+  // 2. feuilles (melange)
+  if (jungle > 0.01f) {
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+    glUniform1i(pc_uniform_loc(pr, "vie_sorte"), 1);
+    glDrawArrays(GL_POINTS, 0, 1400);
+  }
+  glDisable(GL_PROGRAM_POINT_SIZE);
+  if (!blend) {
+    glDisable(GL_BLEND);
+  }
+  if (depth) {
+    glEnable(GL_DEPTH_TEST);
+  }
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+}
+
+// PC-REMAKE : LUMIERE REBONDIE (illumination globale a l'ecran, gi_rebond.frag) au quart de la
+// resolution, adoucie par un flou qui respecte la profondeur (gi_flou.frag) ; le post l'ajoute
+// (unite 2). Lit la profondeur (15), les normales (13) et la scene sans HUD (12), deja liees.
+BloomTarget g_gi_a, g_gi_b;
+float g_gi_fx[4] = {1.f, 1.f, 0.f, 0.f};  // x = rebond a l'ecran, y = ambiance du panorama
+// 27/10 : historique de la stabilisation dans le temps (gi_stab.frag), en va-et-vient
+BloomTarget g_gi_hist[2];
+int g_gi_hist_cur = 0;
+bool g_gi_hist_ok = false;
+GLuint pc_gi_run(GameVersion version,
+                 bool reload,
+                 const float* cam_pos,
+                 int full_w,
+                 int full_h,
+                 bool has_normals) {
+  if (g_gi_fx[0] <= 0.001f || !g_world_from_clip_ok || !pc_prehud_texture()) {
+    g_gi_hist_ok = false;
+    return 0;
+  }
+  static Shader* s_gi = nullptr;
+  static Shader* s_flou = nullptr;
+  static Shader* s_stab = nullptr;
+  if (reload || !s_gi) {
+    delete s_gi;
+    delete s_flou;
+    delete s_stab;
+    s_gi = new Shader("gi_rebond", version);
+    s_flou = new Shader("gi_flou", version);
+    s_stab = new Shader("gi_stab", version);
+  }
+  if (!s_gi->okay() || !s_flou->okay()) {
+    return 0;
+  }
+  const int w = std::max(1, full_w / 4), h = std::max(1, full_h / 4);
+  bloom_ensure(g_gi_a, w, h, true);
+  bloom_ensure(g_gi_b, w, h, true);
+
+  GLint vp[4];
+  glGetIntegerv(GL_VIEWPORT, vp);
+  GLint prev_fbo = 0, prev_prog = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  if (scissor) {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  glDisable(GL_BLEND);
+
+  // 1. rebond au quart de la resolution
+  s_gi->activate();
+  GLuint pr = s_gi->id();
+  glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
+  glUniform1i(pc_uniform_loc(pr, "normal_tex"), 13);
+  glUniform1i(pc_uniform_loc(pr, "scene_tex"), 12);
+  glUniform1f(pc_uniform_loc(pr, "has_normal_tex"), has_normals ? 1.f : 0.f);
+  glUniformMatrix4fv(pc_uniform_loc(pr, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+  glUniformMatrix4fv(pc_uniform_loc(pr, "clip_from_world"), 1, GL_FALSE, g_clip_from_world);
+  glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_gi_a.fbo);
+  glViewport(0, 0, w, h);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  // 2. flou horizontal puis vertical, en respectant la profondeur
+  s_flou->activate();
+  pr = s_flou->id();
+  glUniform1i(pc_uniform_loc(pr, "src_tex"), 0);
+  glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_gi_b.fbo);
+  glBindTexture(GL_TEXTURE_2D, g_gi_a.tex);
+  glUniform2f(pc_uniform_loc(pr, "blur_step"), 1.f / w, 0.f);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  glBindFramebuffer(GL_FRAMEBUFFER, g_gi_a.fbo);
+  glBindTexture(GL_TEXTURE_2D, g_gi_b.tex);
+  glUniform2f(pc_uniform_loc(pr, "blur_step"), 0.f, 1.f / h);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  // 3. 27/10 : STABILISATION dans le temps (gi_stab.frag) : le motif d'echantillonnage est fixe
+  // a l'ecran, le rebond fourmillait autour des lampes quand la camera tournait. Constante de
+  // 60 ms (~0.24 de l'image actuelle a 60 i/s) ; historique oublie apres une coupure.
+  // (original : le post lisait directement g_gi_a)
+  GLuint out = g_gi_a.tex;
+  {
+    static auto t_prev = std::chrono::steady_clock::now();
+    static float prev_clip[16];
+    static float prev_cam[3];
+    const auto t_now = std::chrono::steady_clock::now();
+    const float dt = std::chrono::duration<float>(t_now - t_prev).count();
+    t_prev = t_now;
+    if (s_stab->okay()) {
+      const int nxt = g_gi_hist_cur ^ 1;
+      bloom_ensure(g_gi_hist[0], w, h, true);
+      bloom_ensure(g_gi_hist[1], w, h, true);
+      float cd[3];
+      for (int k = 0; k < 3; k++) {
+        cd[k] = cam_pos[k] - prev_cam[k];
+      }
+      const float saut_cam = std::sqrt(cd[0] * cd[0] + cd[1] * cd[1] + cd[2] * cd[2]);
+      const bool suite = g_gi_hist_ok && dt < 0.25f && saut_cam < 4.f * 4096.f;
+      const float wc = suite ? 1.f - std::exp(-std::max(dt, 0.004f) / 0.060f) : 1.f;
+      s_stab->activate();
+      const GLuint ps = s_stab->id();
+      glUniform1i(pc_uniform_loc(ps, "src_tex"), 0);
+      glUniform1i(pc_uniform_loc(ps, "hist_tex"), 6);
+      glUniform1i(pc_uniform_loc(ps, "depth_tex"), 15);
+      glUniformMatrix4fv(pc_uniform_loc(ps, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+      glUniformMatrix4fv(pc_uniform_loc(ps, "prev_clip_from_world"), 1, GL_FALSE, prev_clip);
+      glUniform3f(pc_uniform_loc(ps, "cam_delta"), cd[0], cd[1], cd[2]);
+      glUniform1f(pc_uniform_loc(ps, "stab_w"), wc);
+      GLint prev_u6 = 0;
+      glActiveTexture(GL_TEXTURE6);
+      glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_u6);
+      glBindTexture(GL_TEXTURE_2D, g_gi_hist[g_gi_hist_cur].tex);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, g_gi_a.tex);
+      glBindFramebuffer(GL_FRAMEBUFFER, g_gi_hist[nxt].fbo);
+      glViewport(0, 0, w, h);
+      glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      glActiveTexture(GL_TEXTURE6);
+      glBindTexture(GL_TEXTURE_2D, prev_u6);
+      glActiveTexture(GL_TEXTURE0);
+      g_gi_hist_cur = nxt;
+      g_gi_hist_ok = true;
+      out = g_gi_hist[nxt].tex;
+    } else {
+      g_gi_hist_ok = false;
+    }
+    for (int k = 0; k < 16; k++) {
+      prev_clip[k] = g_clip_from_world[k];
+    }
+    for (int k = 0; k < 3; k++) {
+      prev_cam[k] = cam_pos[k];
+    }
+  }
+
+  if (blend) {
+    glEnable(GL_BLEND);
+  }
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+  glViewport(vp[0], vp[1], vp[2], vp[3]);
+  glUseProgram(prev_prog);
+  return out;
 }
 namespace {
 
@@ -3288,7 +3711,12 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       const bool shafts = g_shaft_amt > 0.001f && g_sun_shadow.ready && g_sun_shadow.enabled();
       POST_U(1i, "sun_shadow_tex", 14);
       POST_U(1f, "shaft_amt", shafts ? g_shaft_amt : 0.f);
-      if (shafts) {
+      // 27/10 : la carte est aussi lue hors de la jungle (ombres de nuages, caustiques, eclat du
+      // soleil sur le metal) : liee des qu'elle existe, sun_map_ok le dit au post
+      // (original : liee seulement avec les rayons — ailleurs le post lisait une matrice perimee)
+      const bool carte = g_sun_shadow.ready && g_sun_shadow.enabled();
+      POST_U(1f, "sun_map_ok", carte ? 1.f : 0.f);
+      if (carte) {
         glActiveTexture(GL_TEXTURE14);
         glBindTexture(GL_TEXTURE_2D, g_sun_shadow.read_tex());
         glActiveTexture(GL_TEXTURE0);
@@ -3509,7 +3937,8 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       g_qa_gpu.begin(86, "post: bloom large (chaine de mips)");
     }
     GLuint btex = pc_bloom_run(render_state->version, bloom_has_depth, bloom_has_normals > 0.5f,
-                               post_reloaded, render_state->frame_idx);
+                               post_reloaded, render_state->frame_idx,
+                               m_render_state.camera_pos.data());
     if (qa_gpu_here) {
       g_qa_gpu.end();
     }
@@ -3549,6 +3978,30 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       POST_U(1i, "reflet_env_tex", 3);
       POST_U(1i, "reflet_moy_tex", 1);
       POST_U(1f, "has_reflet_env", etex ? 1.f : 0.f);
+    }
+    // lumiere rebondie -> unite 2
+    {
+      GLuint gtex = pc_gi_run(render_state->version, post_reloaded,
+                              m_render_state.camera_pos.data(), m_fbo_state.render_fbo->width,
+                              m_fbo_state.render_fbo->height, bloom_has_normals > 0.5f);
+      glActiveTexture(GL_TEXTURE2);
+      glBindTexture(GL_TEXTURE_2D, gtex);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
+      POST_U(1i, "gi_tex", 2);
+      POST_U(1f, "has_gi_tex", gtex ? 1.f : 0.f);
+      POST_U(4fv, "gi_fx", 1, g_gi_fx);
+    }
+    // caustiques (y) et temps en secondes (z) ; x et w libres
+    {
+      POST_U(4f, "modern_fx", 0.f, 1.f, (float)(render_state->frame_idx % 216000) / 60.f, 0.f);
+      // motif des caustiques -> unite 16
+      const GLuint ct = pc_caustique_tex();
+      glActiveTexture(GL_TEXTURE16);
+      glBindTexture(GL_TEXTURE_2D, ct);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
+      POST_U(1i, "caustique_tex", 16);
     }
     // 20/10 : traces dans la neige -> unite 7
     pc_snow_trail_frame(render_state->frame_idx);
@@ -3604,6 +4057,14 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glViewport(0, 0, vp[2], vp[3]);
     shader.activate();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // vie dans l'air, par-dessus la passe 1 (voir pc_vie_run)
+    {
+      GLint vao_post = 0;
+      glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao_post);
+      pc_vie_run(render_state->version, post_reloaded, m_render_state.camera_pos.data(), vp[2], vp[3],
+                 render_state->frame_idx);
+      glBindVertexArray(vao_post);
+    }
     // passe 2 -> cible d'origine
     glBindFramebuffer(GL_FRAMEBUFFER, cur_fbo);
     glViewport(vp[0], vp[1], vp[2], vp[3]);

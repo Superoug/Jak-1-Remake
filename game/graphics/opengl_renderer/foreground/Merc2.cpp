@@ -981,7 +981,20 @@ void Merc2::handle_pc_model(const DmaTransfer& setup,
   args.character = model->pc_character && m_remake.actif;
   args.objet = !args.character && model->pc_remodele && m_remake.actif && m_remake.objets;
   args.lev = lev;
-  args.orbe = model->name.rfind("money", 0) == 0;
+  // 26/10 : l'orbe du compteur (HUD) est dessine avec la camera du HUD : le reflet calcule dans
+  // le monde y reflechissait le sol brun et effacait l'or d'origine (icone rouge a glyphes). Il
+  // se reconnait a ses lampes de HUD (*hud-pc-lights*, hud-classes-pc.gc : trois directions sur
+  // les axes, couleur 0,75 0,75 1, ambiant 0,2) et garde le rendu d'origine.
+  // (original : args.orbe = model->name.rfind("money", 0) == 0;)
+  const bool lampes_hud =
+      std::abs(current_lights.direction0.x() - 1.f) < 1e-3f &&
+      std::abs(current_lights.direction1.y() - 1.f) < 1e-3f &&
+      std::abs(current_lights.direction2.z() - 1.f) < 1e-3f &&
+      std::abs(current_lights.direction0.y()) < 1e-3f && std::abs(current_lights.direction1.x()) < 1e-3f &&
+      std::abs(current_lights.color0.x() - 0.75f) < 0.02f &&
+      std::abs(current_lights.color0.z() - 1.f) < 0.02f &&
+      std::abs(current_lights.ambient.x() - 0.2f) < 0.02f;
+  args.orbe = model->name.rfind("money", 0) == 0 && !lampes_hud;
   // 26/10 : les lacs de lave (village du volcan, ogre) sont des modeles d'eau animee
   args.lave = model->name.rfind("water-anim", 0) == 0 && model->name.find("lava") != std::string::npos;
   // 25/10 : Jak et Daxter peuvent etre mouilles (merc2.frag)

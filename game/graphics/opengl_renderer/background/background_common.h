@@ -86,6 +86,8 @@ constexpr int kMaxRemakePending = 384; // collected before the nearest are picke
                                        // (128 → 384 : les lumières émissives
                                        // scannées par niveau s'y ajoutent)
 void pc_remake_lamps_begin_frame();
+// 29/10 : le jeu valide sa liste de lampes en envoyant l'image (fil du jeu, gl_send_chain)
+void pc_remake_lamps_commit();
 // PC-REMAKE 20/10 : TRACES DANS LA NEIGE. Carte flottante torique (1024 x 1024 texels de 10 cm)
 // centree sur Jak : R = distance au chemin de Jak (m), G = hauteur des pieds (m), B = instant du
 // pas (s), A = profondeur tassee (m). Le profil du sillon est calcule par les shaders

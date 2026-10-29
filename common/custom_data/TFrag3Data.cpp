@@ -645,6 +645,13 @@ void TieTree::subdivide_phong(const std::vector<Texture>& textures, bool sculptu
   for (size_t i = 0; i < proto_names.size(); i++) {
     const auto& n = proto_names[i];
     remplace[i] = n.size() > 7 && n.compare(n.size() - 7, 7, " [remake]") == 0;
+    // 29/10 : rocher de falaise en partie ENTERRE sous l'herbe (village, sous la cabane de
+    // Samos) : arrondi, son dessus bombait et percait le terrain (une dalle orange sur
+    // l'herbe). Garde tel quel (pas d'arrondi ni d'affinage).
+    // (original : seuls les prototypes " [remake]" etaient exclus)
+    if (n.rfind("cliffsmall-bottomed", 0) == 0) {
+      remplace[i] = 1;
+    }
   }
   t_proto_remplace = &remplace;
   phong_subdivide_impl(unpacked.vertices, unpacked.indices, static_draws, skip, &colors,
