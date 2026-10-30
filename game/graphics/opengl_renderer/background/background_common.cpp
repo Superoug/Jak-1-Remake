@@ -2990,6 +2990,10 @@ void first_tfrag_draw_setup(const GoalBackgroundCameraData& settings,
   glUniform1f(pc_uniform_loc(id, "fronde_pli_f"), 0.f);
   glUniform1f(pc_uniform_loc(id, "nrm_amt"), 0.f);  // PC-REMAKE : cartes de normales des sols
   glUniform1i(pc_uniform_loc(id, "det_kind"), -1);  // PC-REMAKE : detail des sols
+  // le tableau de detail a toujours son unite : laisse sur l'unite 0 (celle de tex_T0, type
+  // different), il rendait les draws invalides dans les programmes qui ne passent pas par
+  // pc_det_bind (sol de neige deformable : la neige ne se dessinait plus du tout)
+  glUniform1i(pc_uniform_loc(id, "det_tex"), 22);
   glUniform1i(pc_uniform_loc(id, "gfx_hack_no_tex"), Gfx::g_global_settings.hack_no_tex);
   glUniform1i(pc_uniform_loc(id, "decal"), false);
   glUniform1i(pc_uniform_loc(id, "tex_T0"), 0);
