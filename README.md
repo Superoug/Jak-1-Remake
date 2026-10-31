@@ -47,8 +47,7 @@ These are taken directly in-game. No retouching.
 
 <img width="1800" height="1169" alt="Capture d’écran 2026-10-30 à 10 32 29" src="https://github.com/user-attachments/assets/352f5d17-cd14-43ef-b96a-31c0ddadf4de" />
 
-<img width="640" height="416" alt="Capture d’écran 2026-10-21 à 13 40 43" src="https://github.com/user-attachments/assets/09e6d9b9-b67d-46b2-96ae-b3e98595054a" />
-
+<img width="1604" height="906" alt="download" src="https://github.com/user-attachments/assets/b3eda760-c1c2-44e6-bcb2-f2b422d903a5" />
 
 
 ## What changes compared to the original game
