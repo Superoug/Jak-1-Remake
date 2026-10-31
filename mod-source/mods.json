@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "sourceName": "Jak 1 Remake",
-  "lastUpdated": "2026-10-29T12:11:55Z",
+  "lastUpdated": "2026-10-31T18:54:06Z",
   "mods": {
     "jak1-remake": {
       "displayName": "Jak 1 Remake",
@@ -22,6 +22,22 @@
       "thumbnailArtUrl": "https://raw.githubusercontent.com/Superoug/Jak-1-Remake/main/mod-source/thumbnail.webp",
       "coverArtUrl": "https://raw.githubusercontent.com/Superoug/Jak-1-Remake/main/mod-source/cover.webp",
       "versions": [
+        {
+          "version": "0.0.7",
+          "publishedDate": "2026-10-31T18:54:06Z",
+          "supportedGames": [
+            "jak1"
+          ],
+          "settings": {
+            "decompConfigOverride": "",
+            "shareVanillaSaves": false
+          },
+          "assets": {
+            "windows": "https://github.com/Superoug/Jak-1-Remake/releases/download/v0.0.7/windows-v0.0.7.zip",
+            "linux": "https://github.com/Superoug/Jak-1-Remake/releases/download/v0.0.7/linux-v0.0.7.tar.gz",
+            "macos": "https://github.com/Superoug/Jak-1-Remake/releases/download/v0.0.7/macos-intel-v0.0.7.tar.gz"
+          }
+        },
         {
           "version": "0.0.6",
           "publishedDate": "2026-10-29T12:11:55Z",
