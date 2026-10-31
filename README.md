@@ -45,7 +45,7 @@ These are taken directly in-game. No retouching.
 
 <img width="960" height="624" alt="Capture d’écran 2026-10-21 à 13 36 21" src="https://github.com/user-attachments/assets/84256de8-73e3-4730-9111-54988a44e965" />
 
-<img width="1800" height="1169" alt="Capture d’écran 2026-10-21 à 13 30 23" src="https://github.com/user-attachments/assets/e35f5959-d541-44f6-9add-fb76dc5ec72a" />
+<img width="1800" height="1169" alt="Capture d’écran 2026-10-30 à 10 32 29" src="https://github.com/user-attachments/assets/352f5d17-cd14-43ef-b96a-31c0ddadf4de" />
 
 <img width="640" height="416" alt="Capture d’écran 2026-10-21 à 13 40 43" src="https://github.com/user-attachments/assets/09e6d9b9-b67d-46b2-96ae-b3e98595054a" />
 
