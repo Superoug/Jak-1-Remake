@@ -481,11 +481,7 @@ int add_clear_draw_to_buffer(int idx, float* data) {
 }
 
 namespace {
-// PC-REMAKE 17/10 : iris, pupille et paupiere sont de petites textures (16 a 128 px)
-// agrandies dans la texture de l'oeil. Le filtrage etait regle AVANT de lier ces
-// textures, donc sur la texture liee a ce moment-la, pas forcement sur elles. On le
-// regle sur chaque texture liee. (Les escaliers de l'iris venaient surtout de son
-// agrandissement a l'installation : voir faithful_iris_upscale.)
+// iris, pupille et paupiere sont de petites textures (16 a 128 px) agrandies dans la texture de l'oeil
 void bind_eye_source(u64 gl_tex) {
   glBindTexture(GL_TEXTURE_2D, gl_tex);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -530,11 +526,7 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
   // maybe buffer sub data.
   glBufferData(GL_ARRAY_BUFFER, buffer_idx * sizeof(float), m_gpu_vertex_buffer, GL_STREAM_DRAW);
 
-  // 25/10 : un oeil n'est redessine que si son dessin a change depuis la derniere fois (il ne
-  // change qu'en clignant ou en regardant ailleurs). Chaque oeil a sa propre cible de rendu, et
-  // chaque changement de cible coute cher avec le pilote OpenGL du Mac (~2 ms par image au
-  // village). Image identique : la texture garde le dernier dessin. /tmp/qa_eye_always : tout
-  // redessiner (comparaison).
+  // un oeil n'est redessine que si son dessin a change depuis la derniere fois
   static int qa_poll = 0;
   static bool qa_always = false;
   if ((qa_poll++ & 63) == 0) {
@@ -556,7 +548,6 @@ void EyeRenderer::run_gpu(const std::vector<SingleEyeDraws>& draws,
     return h | 1;
   };
 
-  // (original : contexte lie a la cible du premier oeil, puis une bascule apres chaque oeil)
   FramebufferTexturePairContext ctxt(m_gpu_eye_textures[draws.front().tex_slot()].fb);
   int bound_slot = draws.front().tex_slot();
 

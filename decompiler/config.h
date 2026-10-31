@@ -117,7 +117,7 @@ struct Config {
   bool write_tpage_imports = false;
   bool process_game_text = false;
   bool process_game_count = false;
-  // PC-REMAKE 14/10 : textures HD calculees a l'extraction (voir faithful_upscale.h)
+  // textures HD calculees a l'extraction (voir faithful_upscale.h)
   bool pc_faithful_hd_textures = false;
   bool pc_faithful_hd_models = false;  // personnages, objets, herbe (voir TextureDB)
   bool process_art_groups = false;

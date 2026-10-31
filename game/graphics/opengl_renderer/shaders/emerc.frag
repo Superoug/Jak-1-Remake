@@ -10,11 +10,7 @@ uniform float glint_strength;
 
 uniform sampler2D tex_T0;
 
-// PC-REMAKE 13/10 (POINTS sur les objets precurseurs) :
-// coordonnee de reflet et eclat du soleil calcules PAR PIXEL. Aux sommets, sur des
-// modeles a gros triangles, l'eclat (puissance 30) et le reflet faisaient des
-// points et des losanges ; par pixel ils glissent sur la surface comme sur du
-// metal. Meme math que le microcode (emerc.vert).
+// (POINTS sur les objets precurseurs)
 in vec3 v_nrm;
 in vec3 v_pos;
 in vec4 v_unp;
@@ -43,10 +39,9 @@ uniform int ignore_alpha;
 uniform int decal_enable;
 
 uniform int gfx_hack_no_tex;
-// 21/10 : 1 = orbe de precurseur — reflet beaucoup plus fort, bord miroir, eclat net
+// 1 = orbe de precurseur
 uniform int reflet_orbe;
-// reflet des orbes calcule dans le MONDE : normale merc -> monde (la meme matrice que le G-buffer
-// de normales), soleil en monde ; la vue est +position dans la convention des normales merc
+// reflet des orbes calcule dans le MONDE
 uniform mat3 world_nrm_from_merc;
 uniform vec4 sun_dir_world;  // vers le soleil, w = force
 
@@ -54,17 +49,14 @@ uniform vec4 sun_dir_world;  // vers le soleil, w = force
 void main() {
   if (gfx_hack_no_tex == 0) {
     vec3 n = normalize(v_nrm);
-    // (original : vec4 T0 = texture(tex_T0, vtx_st);)
     vec4 T0 = texture(tex_T0, emerc_uv(n));
 
     color.a = T0.a;
     color.rgb = T0.rgb * vtx_color;
     color *= 2;
-    // 20/10 : reflets precurseur renforces, comme le decor (etie.frag) : x2.2 avec une epaule
-    // pour les reflets forts (original : x1)
+    // reflets precurseur renforces, comme le decor (etie.frag)
     color.rgb *= 2.2 / (1.0 + 1.1 * dot(color.rgb, vec3(0.299, 0.587, 0.114)));
-    // PC-REMAKE: specular sun highlight on metal — par pixel (13/10)
-    // (original : * vtx_glint)
+    // specular sun highlight on metal
     float glint = 0.0;
     {
       vec3 V = normalize(-v_pos);
@@ -74,18 +66,14 @@ void main() {
     }
     color.rgb += vec3(1.0, 0.97, 0.90) * glint * glint_strength;
     if (reflet_orbe == 1) {
-      // ORBE : surface polie de metal precieux. Le ciel et le sol se refletent (ciel clair en
-      // haut, sol sombre en bas — le contraste fait le miroir), teintes par l'or de l'orbe, plus
-      // forts sur les bords (Fresnel), et un eclat du soleil net. La couleur propre de l'orbe
-      // est assombrie dans la passe de base (merc2.frag) pour que le reflet se lise.
-      // (la matrice ramene la normale merc retournee : le post la remet face a la camera)
+      // ORBE : surface polie de metal precieux
       vec3 Nw = -normalize(world_nrm_from_merc * n);
       vec3 Vw = -normalize(world_nrm_from_merc * v_pos);  // vers la camera
       float nv = clamp(abs(dot(Nw, Vw)), 0.0, 1.0);
       float fres = 0.45 + 0.55 * pow(1.0 - nv, 3.0);
       vec3 R = reflect(-Vw, Nw);
       float h = R.y;
-      // horizon NET (c'est lui qui fait le miroir) : ciel clair au-dessus, sol sombre juste dessous
+      // horizon NET (c'est lui qui fait le miroir)
       vec3 haut = mix(vec3(1.25, 1.18, 1.05), vec3(0.62, 0.78, 1.05), smoothstep(0.0, 0.6, h));
       vec3 bas = mix(vec3(0.30, 0.24, 0.18), vec3(0.08, 0.06, 0.05), smoothstep(0.0, 0.5, -h));
       vec3 ciel = mix(bas, haut, smoothstep(-0.025, 0.025, h));

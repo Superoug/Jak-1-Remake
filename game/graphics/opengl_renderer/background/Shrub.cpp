@@ -14,7 +14,7 @@ Shrub::~Shrub() {
 
 void Shrub::init_shaders(ShaderLibrary& shaders) {
   m_uniforms.decal = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "decal");
-  // PC-REMAKE: grass bending around the player
+  // grass bending around the player
   m_uniforms.grass_push = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "grass_push");
   m_uniforms.grass_clear = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "grass_clear");
   m_uniforms.grass_wind = pc_uniform_loc(shaders[ShaderId::SHRUB].id(), "grass_wind");
@@ -105,15 +105,12 @@ void Shrub::update_load(const LevelData* loader_data) {
     m_trees[l_tree].vertex_buffer = loader_data->shrub_vertex_data[l_tree];
     m_trees[l_tree].vert_count = verts;
     m_trees[l_tree].draws = &tree.static_draws;
-    // PC-REMAKE: only vegetation sways in the wind — ropes, pebbles and other
-    // small props are shrubs too and must stay still (bug report).
+    // only vegetation sways in the wind
     m_trees[l_tree].veg_flags.clear();
     m_trees[l_tree].facet_flags.clear();
     m_trees[l_tree].veg_mark.clear();
     for (auto& draw : tree.static_draws) {
-      // classes : 0 = immobile (cordes, cailloux, TIGES), 1 = herbe (flexion
-      // normale), 2 = FEUILLES de palmier/bananier (amplitude réglable en
-      // direct via pc-set-palm-wind! w — tige figée, feuilles vivantes)
+      // classes : 0 = immobile (cordes, cailloux, TIGES), 1 = herbe (flexion normale)
       u8 vclass = 0;
       if (draw.tree_tex_id < loader_data->level->textures.size()) {
         const auto& name = loader_data->level->textures[draw.tree_tex_id].debug_name;
@@ -123,8 +120,7 @@ void Shrub::update_load(const LevelData* loader_data) {
         static const char* kVeg[] = {"grass", "plant", "leaf",  "leaves", "palm",   "fern",
                                      "bush",  "vine",  "reed",  "weed",   "flower",
                                      "hay",   "wheat", "moss",  "bamboo", "shrub",  "riceplant",
-                                     // 20/10 : riz des rizieres et quenouilles du village (dans l'eau,
-                                     // pres du fermier) : ils plient sous les pas comme l'herbe
+                                     // riz des rizieres et quenouilles du village (dans l'eau, pres du fermier)
                                      "rice",  "cattail"};
         bool still = false;
         for (auto* w : kStill) {
@@ -151,9 +147,7 @@ void Shrub::update_load(const LevelData* loader_data) {
         }
       }
       m_trees[l_tree].veg_flags.push_back(vclass);
-      // 13/10 : normale du G-buffer. Vegetation (meme immobile : riz, quenouilles,
-      // mousse, corail) et galets 3D = verticale, comme le sol ; le reste (bois,
-      // toits, bancs, cordes, rochers) = vraie facette.
+      // normale du G-buffer
       u8 facet = 0;
       if (vclass == 0 && draw.tree_tex_id < loader_data->level->textures.size()) {
         const auto& name = loader_data->level->textures[draw.tree_tex_id].debug_name;
@@ -178,7 +172,7 @@ void Shrub::update_load(const LevelData* loader_data) {
       }
       m_trees[l_tree].veg_mark.push_back(veg);
     }
-    // projecteur violet : reclassification à chaud dans le rendu
+    // projecteur violet
     m_trees[l_tree].tex_names = &lev_data->textures;
     m_trees[l_tree].palm_debug_seq_built = 0;
     m_trees[l_tree].proto_vis_mask.clear();
@@ -189,7 +183,7 @@ void Shrub::update_load(const LevelData* loader_data) {
       m_trees[l_tree].proto_name_to_idx[name].push_back(i++);
     }
     m_trees[l_tree].colors = &tree.time_of_day_colors;
-    // 14/10 : index buffer reordonne par cases (voir build_cells)
+    // index buffer reordonne par cases (voir build_cells)
     build_cells(m_trees[l_tree], tree);
     m_trees[l_tree].index_data = m_trees[l_tree].reordered_indices.data();
     glBindBuffer(GL_ARRAY_BUFFER, m_trees[l_tree].vertex_buffer);
@@ -228,11 +222,14 @@ void Shrub::update_load(const LevelData* loader_data) {
                            sizeof(tfrag3::ShrubGpuVertex),  // stride
                            (void*)offsetof(tfrag3::ShrubGpuVertex, color_index)  // offset (0)
     );
+    // ecart a l'origine de l'instance (ShrubTree::unpack, champignons)
+    glEnableVertexAttribArray(4);
+    glVertexAttribIPointer(4, 1, GL_UNSIGNED_INT, sizeof(tfrag3::ShrubGpuVertex),
+                           (void*)offsetof(tfrag3::ShrubGpuVertex, pad0));
 
     glGenBuffers(1, &m_trees[l_tree].single_draw_index_buffer);
     glGenBuffers(1, &m_trees[l_tree].index_buffer);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_trees[l_tree].index_buffer);
-    // (original : tree.indices tel quel)
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                  m_trees[l_tree].reordered_indices.size() * sizeof(u32),
                  m_trees[l_tree].reordered_indices.data(), GL_STATIC_DRAW);
@@ -384,7 +381,7 @@ void Shrub::build_cells(Tree& out, const tfrag3::ShrubTree& tree) {
       }
       strips.push_back({b, i, cell});
     }
-    // bloc du draw : bandes groupees par case (ordre de case stable)
+    // bloc du draw
     std::stable_sort(strips.begin(), strips.end(),
                      [](const Strip& a, const Strip& b) { return a.cell < b.cell; });
     auto& segs = out.draw_segments.emplace_back();
@@ -496,7 +493,7 @@ void Shrub::render_tree(int idx,
   glTexSubImage1D(GL_TEXTURE_1D, 0, 0, tree.colors->color_count, GL_RGBA,
                   GL_UNSIGNED_INT_8_8_8_8_REV, m_color_result.data());
 
-  // [QA 22/09] modes des draws shrub (feuillages) — la grande feuille du village
+  // [QA] modes des draws shrub (feuillages)
   {
     static std::set<const void*> logged;
     if (tree.tex_names && tree.draws && logged.insert((const void*)tree.draws).second) {
@@ -516,21 +513,64 @@ void Shrub::render_tree(int idx,
   }
   first_tfrag_draw_setup(settings.camera, render_state, ShaderId::SHRUB);
 
-  // PC-REMAKE: feed the player position so the vertex shader can bend grass.
+  // feed the player position so the vertex shader can bend grass
   glUniform4fv(m_uniforms.grass_push, 1, g_grass_push);
-  // PC-REMAKE: ambient wind sway — time from the frame counter (60 fps game).
-  // Amplitude is set PER DRAW below: vegetation sways, ropes/pebbles stay still.
+  // CHAMPIGNONS ELASTIQUES (shrub.vert)
+  {
+    static float hist[24][4];
+    static float hist_t[24];
+    static int n = 0;
+    static u64 frame = ~0ull;
+    const float now = (float)(render_state->frame_idx % 216000) / 60.f;
+    if (frame != render_state->frame_idx) {
+      frame = render_state->frame_idx;
+      const bool jak = g_grass_push[3] > 0.001f;
+      if (n > 0 && now < hist_t[n - 1]) {
+        n = 0;  // horloge repartie
+      }
+      if (jak && (n == 0 || now - hist_t[n - 1] >= 1.f / 30.f - 1e-4f)) {
+        if (n == 24) {
+          memmove(&hist[0][0], &hist[1][0], sizeof(float) * 4 * 23);
+          memmove(&hist_t[0], &hist_t[1], sizeof(float) * 23);
+          n = 23;
+        }
+        hist[n][0] = g_grass_push[0];
+        hist[n][1] = g_grass_push[1];
+        hist[n][2] = g_grass_push[2];
+        hist_t[n] = now;
+        n++;
+      } else if (!jak) {
+        n = 0;
+      }
+    }
+    float u[24 * 4];
+    const int vide = 24 - n;
+    for (int i = 0; i < 24; i++) {
+      if (i < vide) {
+        u[i * 4 + 0] = u[i * 4 + 1] = u[i * 4 + 2] = 0.f;
+        u[i * 4 + 3] = -1.f;
+      } else {
+        const int k = i - vide;
+        u[i * 4 + 0] = hist[k][0];
+        u[i * 4 + 1] = hist[k][1];
+        u[i * 4 + 2] = hist[k][2];
+        u[i * 4 + 3] = now - hist_t[k];
+      }
+    }
+    glUniform4fv(pc_uniform_loc(render_state->shaders[ShaderId::SHRUB].id(), "champi_hist"), 24,
+                 u);
+  }
+  // ambient wind sway
   const float wind_time = (float)(render_state->frame_idx % 100000) / 60.f;
-  // PC-REMAKE: grass receives sun shadows (ground and tufts darken together).
+  // grass receives sun shadows (ground and tufts darken together)
   if (g_sun_shadow.enabled()) {
     g_sun_shadow.bind_for_receive(render_state->shaders[ShaderId::SHRUB].id());
   } else {
-    // 21/09 : sampler toujours pose sur l'unite 14 (voir bind_disabled)
+    // sampler toujours pose sur l'unite 14 (voir bind_disabled)
     g_sun_shadow.bind_disabled(render_state->shaders[ShaderId::SHRUB].id());
   }
 
-  // 13/10 : marquage stencil de la vegetation (voir veg_mark) — efface par
-  // ShadowRenderer avant son propre usage du stencil
+  // marquage stencil de la vegetation (voir veg_mark)
   glEnable(GL_STENCIL_TEST);
   glStencilMask(0x80);
   glStencilFunc(GL_ALWAYS, 0x80, 0x80);
@@ -552,9 +592,7 @@ void Shrub::render_tree(int idx,
 
   int last_texture = -1;
 
-  // 14/10 : tri de visibilite par cases (voir build_cells) — original :
-  //   no_multidraw : make_all_visible_index_list(...) ; sinon
-  //   make_all_visible_multidraws(...) = tout le niveau a chaque image
+  // tri de visibilite par cases (voir build_cells)
   Timer cull_timer;
   if ((m_cull_poll++ % 64) == 0) {
     m_cull_enabled = !fs::exists("/tmp/qa_no_shrub_cull");
@@ -590,7 +628,7 @@ void Shrub::render_tree(int idx,
             continue;
           }
           m_cull_stats.segs_drawn++;
-          // segments contigus dans le buffer : on les fusionne en un seul appel
+          // segments contigus dans le buffer
           if (md > first_md &&
               (size_t)m_cache.multidraw_index_offset_buffer[md - 1] / sizeof(u32) +
                       m_cache.multidraw_count_buffer[md - 1] ==
@@ -621,11 +659,7 @@ void Shrub::render_tree(int idx,
 
   Timer draw_timer;
 
-  // 22/10 : le G-buffer de normales recoit enfin la normale des arbustes. shrub.frag l'ecrivait
-  // (sortie 1, 13/10) mais l'attachement 1 n'etait pas dans la liste de dessin pendant leurs
-  // draws : elle etait jetee. Le post relumait donc l'herbe et les feuilles avec la normale du
-  // SOL derriere elles — ses facettes et son relief se voyaient a travers (herbe et feuillage
-  // transparents, zones a bords droits).
+  // le G-buffer de normales recoit enfin la normale des arbustes
   pc_normal_target(true);
   for (size_t draw_idx = 0; draw_idx < tree.draws->size(); draw_idx++) {
     const auto& draw = tree.draws->operator[](draw_idx);
@@ -651,10 +685,9 @@ void Shrub::render_tree(int idx,
     }
 
     glUniform1i(m_uniforms.decal, draw.mode.get_decal() ? 1 : 0);
-    // PC-REMAKE: wind per vegetation class (0 immobile, 1 herbe,
-    // 2 feuilles de palmier — amplitude en direct via pc-set-palm-wind! w)
+    // wind per vegetation class
     {
-      // projecteur violet : reclassification à chaud + uniform par draw
+      // projecteur violet
       if (tree.palm_debug_seq_built != g_palm_debug_seq && tree.tex_names && tree.draws) {
         tree.palm_debug_seq_built = g_palm_debug_seq;
         tree.draw_palm_debug.assign(tree.draws->size(), 0);
@@ -671,6 +704,18 @@ void Shrub::render_tree(int idx,
                       ? 1.f
                       : 0.f);
       u8 vclass = draw_idx < tree.veg_flags.size() ? tree.veg_flags[draw_idx] : 0;
+      // champignons des grottes
+      {
+        const s32 ti = (s32)(*tree.draws)[draw_idx].tree_tex_id;
+        if (tree.tex_names && ti >= 0 && ti < (int)tree.tex_names->size()) {
+          const auto& n = (*tree.tex_names)[ti].debug_name;
+          if (n.find("mushroom") != std::string::npos || n.find("shroom") != std::string::npos ||
+              n.find("flapjack") != std::string::npos || n.find("roundplant") != std::string::npos ||
+              n.find("weirdplant") != std::string::npos) {
+            vclass = 0;
+          }
+        }
+      }
       float amp = 0.f;
       if (vclass == 1) {
         amp = 380.f;
@@ -681,7 +726,7 @@ void Shrub::render_tree(int idx,
       glUniform4fv(m_uniforms.grass_wind, 1, wind);
       glUniform1f(m_uniforms.shrub_facet,
                   (draw_idx < tree.facet_flags.size() && tree.facet_flags[draw_idx]) ? 1.f : 0.f);
-      // PC-REMAKE : touffes d'herbe etalonnees comme le sol d'herbe (sinon jaunes a cote de lui)
+      // touffes d'herbe etalonnees comme le sol d'herbe
       {
         float herbe = 0.f;
         if (!pc_vert_off() && tree.tex_names && tree.draws && draw_idx < tree.draws->size()) {
@@ -696,15 +741,30 @@ void Shrub::render_tree(int idx,
         glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::SHRUB].id(), "herbe_vert"),
                     herbe);
       }
+      // champignons et plantes molles des grottes (voir champi_hist)
+      bool champi = false;
+      if (tree.tex_names && draw_idx < tree.draws->size()) {
+        const s32 ti = (s32)(*tree.draws)[draw_idx].tree_tex_id;
+        if (ti >= 0 && ti < (int)tree.tex_names->size()) {
+          const auto& n = (*tree.tex_names)[ti].debug_name;
+          champi = n.find("mushroom") != std::string::npos ||
+                   n.find("shroom") != std::string::npos ||
+                   n.find("flapjack") != std::string::npos ||
+                   n.find("roundplant") != std::string::npos ||
+                   n.find("weirdplant") != std::string::npos;
+        }
+      }
+      glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::SHRUB].id(), "champi"),
+                  champi ? 1.f : 0.f);
       glStencilOp(GL_KEEP, GL_KEEP,
                   (draw_idx < tree.veg_mark.size() && tree.veg_mark[draw_idx]) ? GL_REPLACE
                                                                                 : GL_KEEP);
-      // la POUSSÉE des pas suit la même classe : la classe 0 (galets, tiges,
-      // cordes) est rigide — sinon les cailloux réagissaient aux pas
-      if (vclass == 0) {
+      // la POUSSÉE des pas suit la même classe
+      if (vclass == 0 || champi) {
+        // les champignons ont leur propre ressort
         float rigid[4] = {g_grass_push[0], g_grass_push[1], g_grass_push[2], 0.f};
         glUniform4fv(m_uniforms.grass_push, 1, rigid);
-        // 20/10 : galets, cordes, rochers : jamais couches
+        // galets, cordes, rochers
         float rigid_clear[4] = {g_grass_clear[0], g_grass_clear[1], g_grass_clear[2], 0.f};
         glUniform4fv(m_uniforms.grass_clear, 1, rigid_clear);
       } else {

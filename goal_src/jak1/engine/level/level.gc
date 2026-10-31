@@ -604,8 +604,7 @@
     (when (and (= f0-0 0.0) (= f1-0 0.0))
       (set! f0-0 122880.0)
       (set! f1-0 286720.0))
-    ;; PC-REMAKE : géométrie fine visible plus loin (le "loin 2002" était dû
-    ;; aux distances de subdivision PS2).
+    ;; géométrie fine visible plus loin (le "loin 2002" était dû aux distances de subdivision PS2)
     (set! f0-0 (* 2.0 f0-0))
     (set! f1-0 (* 3.0 f1-0))
     (set! (-> *subdivide-settings* close (-> loaded-level index)) f0-0)
@@ -616,7 +615,7 @@
   (init-vis loaded-level)
   (load-dbg "package load~%")
   (load-required-packages loaded-level)
-  ;; PC-REMAKE : étendre la végétation maintenant que tout le bsp est loggé.
+  ;; étendre la végétation maintenant que tout le bsp est loggé
   (pc-extend-shrub-dists! loaded-level)
   (set! (-> loaded-level status) 'loaded)
   (set! loading-level global)
@@ -1159,12 +1158,7 @@
 
 (defmethod update! ((this load-state))
   "Updates load requests."
-  ;; PC-REMAKE : PURGE au niveau moteur de la visibilite forcee de la plage
-  ;; partout ou notre crochet de zone Samos ne la reclame pas CE frame — ecran
-  ;; titre compris, sauvegardes polluees comprises. C'est LE point qui tourne
-  ;; dans tous les etats du jeu. (Retiree par erreur lors de la traque du
-  ;; blocage du 18/08 au soir — le blocage venait de la FENETRE macOS, pas
-  ;; d'ici : le bug des morceaux flottants etait aussitot revenu.)
+  ;; PURGE au niveau moteur de la visibilite forcee de la plage partout ou notre crochet de zone Samos
   (dotimes (pc-i 2)
     (when (and (= (-> this want pc-i name) 'beach)
                (-> this want pc-i force-vis?)

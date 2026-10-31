@@ -77,8 +77,7 @@ bool is_removed(const LevelEdits& edits,
                 const std::string& kind,
                 const std::string& proto,
                 const math::Vector4f& t) {
-  // 5 cm de tolerance : les positions sont recalculees a l'identique a chaque
-  // extraction (le semis est deterministe), l'arrondi au mm de l'export suffit
+  // 5 cm de tolerance
   constexpr float kTol = 0.05f;
   for (const auto& r : edits.removes) {
     if (r.kind != kind || r.proto != proto) {
@@ -224,7 +223,7 @@ void add_instance(const std::string& kind,
     }
   }
   for (int r = 0; r < 3; r++) {
-    // arrondi au mm : c'est cette valeur que l'app renvoie pour une suppression
+    // arrondi au mm
     inst.m[9 + r] = std::round(m[3][r] / kMeter * 1000.f) / 1000.f;
   }
   inst.src = src;
@@ -243,7 +242,7 @@ void write_level(const tfrag3::Level& lev, const TextureDB& tdb) {
   j["dgo"] = ex.dgo;
   j["version"] = 1;
 
-  // ---- sol : arbres tfrag de plus haut detail (pas les doublures basse resolution)
+  // --- sol : arbres tfrag de plus haut detail
   {
     std::map<std::string, ExportPart> by_tex;
     for (const auto& tree_in : lev.tfrag_trees[0]) {
@@ -313,7 +312,7 @@ void write_level(const tfrag3::Level& lev, const TextureDB& tdb) {
     j["terrain"] = terrain;
   }
 
-  // ---- objets (geometrie locale)
+  // --- objets (geometrie locale)
   nlohmann::json protos = nlohmann::json::array();
   for (const auto& p : ex.protos) {
     nlohmann::json pj;
@@ -341,7 +340,7 @@ void write_level(const tfrag3::Level& lev, const TextureDB& tdb) {
   }
   j["protos"] = protos;
 
-  // ---- instances (binaire : 12 floats par instance ; JSON : le reste)
+  // --- instances
   {
     std::vector<float> mats;
     mats.reserve(ex.instances.size() * 12);

@@ -335,8 +335,7 @@ Config make_config_via_json(nlohmann::json& json) {
   }
 
   config.levels_to_extract = inputs_json.at("levels_to_extract").get<std::vector<std::string>>();
-  // PC-REMAKE 13/10 : l'editeur de niveaux ne re-extrait que le niveau modifie
-  // (--config-override '{"levels_to_extract_override": ["VI1.DGO"]}')
+  // l'editeur de niveaux ne re-extrait que le niveau modifie
   if (json.contains("levels_to_extract_override")) {
     config.levels_to_extract =
         json.at("levels_to_extract_override").get<std::vector<std::string>>();

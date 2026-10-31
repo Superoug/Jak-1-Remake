@@ -614,50 +614,54 @@
 (define-extern pc-filter-debug-string? (function string float symbol))
 
 (define-extern pc-screen-shot (function none))
-;; PC-REMAKE : herbe réactive — envoie au renderer shrub la position monde de
-;; Jak (x y z) et la force d'écartement (0..1). Bindé dans kmachine.cpp.
+;; herbe réactive
 (define-extern pc-set-grass-push! (function float float float float none))
-;; PC-REMAKE 20/10 : herbe couchee autour de Jak pendant les cinematiques (x y z dose)
+;; herbe couchee autour de Jak pendant les cinematiques (x y z dose)
 (define-extern pc-set-grass-clear! (function float float float float none))
-;; PC-REMAKE 20/10 : pas de Jak sur la neige (x y z genre : 0.5 neige, 1.0 neige profonde)
+;; pas de Jak sur la neige
 (define-extern pc-set-snow-step! (function float float float float none))
-;; PC-REMAKE : post-effets de présentation (bloom, seuil, saturation, chaleur).
-;; Tout est neutre à zéro. Bindé dans kmachine.cpp.
+;; post-effets de présentation (bloom, seuil, saturation, chaleur)
 (define-extern pc-set-post-fx! (function float float float float none))
-;; PC-REMAKE : ombres du soleil — direction monde (xyz) + force (0 = off).
+;; ombres du soleil
 (define-extern pc-set-sun-shadow! (function float float float float none))
-;; PC-REMAKE : cel-shading (postérisation, contours, niveaux de tons, libre).
+;; cel-shading (postérisation, contours, niveaux de tons, libre)
 (define-extern pc-set-toon-fx! (function float float float float none))
-;; PC-REMAKE : post par profondeur (SSAO, brume aérienne, DOF, tonemap filmique).
+;; post par profondeur (SSAO, brume aérienne, DOF, tonemap filmique)
 (define-extern pc-set-depth-fx! (function float float float float none))
-;; PC-REMAKE : nouvelle lumière — rayons de soleil, ré-éclairage directionnel,
-;; ambiance hémisphérique, spéculaire. Tout neutre à zéro.
+;; nouvelle lumière
 (define-extern pc-set-light-fx! (function float float float float none))
 (define-extern pc-set-fx-quality! (function int int int float none))
 (define-extern pc-set-grade! (function float float float float none)) ;; 12/10 : rendu remake
 (define-extern pc-set-grade2! (function float float float float none)) ;; 22/09 : reflets halos contact lens-flare
 (define-extern pc-set-night-fx! (function float float float float none))
-;; id x y z rayon intensite — lampe fixe (couleur lampadaire), posée une fois
+;; id x y z rayon intensite
 (define-extern pc-add-static-lamp! (function int float float float float float none))
 (define-extern pc-add-eco-lamp! (function int float float float int none))
 (define-extern pc-remove-eco-lamp! (function int none))
 (define-extern pc-set-palm-wind! (function float float float float none))
 (define-extern pc-set-water-glitter! (function float float float none))
 (define-extern pc-set-jak-wet! (function float float float float float float none))
-;; lucioles (vie_air.vert) : lieu de la camera, 0 rien, 1 village (autour des lampes), 2 foret
+;; lucioles (vie_air.vert)
 (define-extern pc-set-vie-zone! (function int none))
-;; x y z rayon intensite kind (0 lampe chaude, 1 eco vert, 2 froid, 3 feu)
+;; meteo enrichie (meteo.vert)
+(define-extern pc-set-meteo! (function int int none))
+(define-extern pc-eau-houle! (function (pointer float) none))
+;; Jak enneige (merc2.frag)
+(define-extern pc-set-jak-snow! (function float float float float none))
+(define-extern pc-set-cloud-light! (function float float float float float float none))
+(define-extern pc-set-nuages! (function int none))
+(define-extern pc-set-moon! (function float float float float none))
+;; x y z rayon intensite kind
 (define-extern pc-add-lamp! (function float float float float float int none))
-;; PC-REMAKE 20/10 : faisceau d'eco (extremites monde) -> lumiere en tube la nuit
+;; faisceau d'eco (extremites monde) -> lumiere en tube la nuit
 (define-extern pc-add-beam! (function float float float float float float none))
-;; Couleur du ciel (r v b) + rouge du sol.
+;; Couleur du ciel (r v b) + rouge du sol
 (define-extern pc-set-sky-ambient! (function float float float float none))
-;; Vert et bleu du sol.
+;; Vert et bleu du sol
 (define-extern pc-set-ground-ambient! (function float float float float none))
-;; PC-REMAKE : simulation d'océan temps réel — écrase la heightmap interpolée
-;; (1024 u8 à l'adresse donnée) par un pas de simulation d'ondes.
+;; simulation d'océan temps réel
 (define-extern pc-ocean-sim! (function pointer none))
-;; PC-REMAKE : taille des vagues (négatif = eau d'origine, pour comparer).
+;; taille des vagues (négatif = eau d'origine, pour comparer)
 (define-extern pc-set-ocean-gain! (function float none))
 
 (declare-type screen-shot-settings structure)

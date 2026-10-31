@@ -12,16 +12,7 @@
 
 #include "third-party/json.hpp"
 
-// PC-REMAKE : CARTES DU RIVAGE. Pour chaque niveau cotier : distance signee (metres) au trait
-// de cote, au niveau de la mer, sur une grille de 0,5 m ; positive en mer, negative sur la
-// terre, bornee a +/- 32 m. La terre est ce qui depasse la surface de la mer (terrain et
-// decor de la cote : rochers, falaises) ; la mer est l'eau reliee au large (une cuvette fermee
-// a l'interieur des terres reste de la terre, comme les rivieres). Le terrain de tous les niveaux cotiers compte :
-// les cotes se prolongent d'un niveau a l'autre. Source : l'export de l'editeur de niveaux
-// (decompiler_out/jak1/editor), ecrit pendant l'extraction. Le post en tire les vagues.
-// Eau interieure (rivieres, chenaux etroits) : valeur +40.
-// Fichier : 'RIV1', f32 x0, f32 z0, f32 pas, u32 largeur, u32 hauteur, f32 niveau de la mer,
-// puis largeur x hauteur valeurs float16 (ligne = z croissant).
+// CARTES DU RIVAGE
 
 namespace decompiler {
 namespace {
@@ -35,9 +26,18 @@ const char* const kNiveaux[] = {"training", "village1", "beach",    "jungle",
                                 "misty",    "village2", "swamp",    "sunken"};
 const char* const kCote[] = {"rock", "cliff", "wall", "stone", "boulder",
                              "island", "shore", "bank", "beach", "sand"};
+// SURPLOMBS. Ce qui passe au-dessus de l'eau sans la toucher
+constexpr float kSurplomb = 1.0f;
+constexpr float kSurplombMax = 30.f;  // m d'eau gagnee au plus sous un surplomb
+const char* const kNiveauxSurplomb[] = {"village2", "training"};
+// SURPLOMBS EN MER
+const char* const kNiveauxSurplombMer[] = {"village1"};
+constexpr float kFond = 0.3f;
 
 struct Tri {
   float p[3][3];
+  // decor qui n'est pas de la cote (poteaux, murs, objets)
+  bool autre = false;
 };
 
 std::vector<Tri> lire_niveau(const fs::path& dir, const std::string& lv) {
@@ -60,9 +60,10 @@ std::vector<Tri> lire_niveau(const fs::path& dir, const std::string& lv) {
     }
     return reinterpret_cast<const float*>(bin.data() + off);
   };
-  auto ajouter = [&](const float* p, size_t ntri, const float* m) {
+  auto ajouter = [&](const float* p, size_t ntri, const float* m, bool autre = false) {
     for (size_t t = 0; t < ntri; t++) {
       Tri tr;
+      tr.autre = autre;
       for (int k = 0; k < 3; k++) {
         const float* v = p + (t * 3 + k) * 3;
         if (m) {
@@ -108,7 +109,11 @@ std::vector<Tri> lire_niveau(const fs::path& dir, const std::string& lv) {
     for (auto* k : kCote) {
       cote |= nom.find(k) != std::string::npos;
     }
-    if (!cote) {
+    bool surplomb = false;
+    for (auto* k : kNiveauxSurplomb) {
+      surplomb |= lv == k;
+    }
+    if (!cote && !surplomb) {
       continue;
     }
     for (size_t k = 0; k < count; k++) {
@@ -119,7 +124,7 @@ std::vector<Tri> lire_niveau(const fs::path& dir, const std::string& lv) {
         size_t n = q.value("tris", 0);
         const float* pp = floats(q.value("pos", (size_t)0), n * 9);
         if (n && pp) {
-          ajouter(pp, n, mats + k * 12);
+          ajouter(pp, n, mats + k * 12, !cote);
         }
       }
     }
@@ -137,7 +142,8 @@ float percentile(std::vector<float> v, float q) {
 }
 
 // remplissage d'un polygone convexe (au plus 4 sommets) sur la grille
-void remplir(std::vector<uint8_t>& g, int w, int h, const float (*poly)[2], int n) {
+template <typename F>
+void remplir_avec(int w, int h, const float (*poly)[2], int n, F&& cellule) {
   float ymin = 1e30f, ymax = -1e30f;
   for (int i = 0; i < n; i++) {
     ymin = std::min(ymin, poly[i][1]);
@@ -163,9 +169,70 @@ void remplir(std::vector<uint8_t>& g, int w, int h, const float (*poly)[2], int 
     int x0 = std::max(0, (int)std::ceil(xa - 0.5f));
     int x1 = std::min(w - 1, (int)std::floor(xb - 0.5f));
     for (int x = x0; x <= x1; x++) {
-      g[(size_t)y * w + x] = 1;
+      cellule(x, y);
     }
   }
+}
+
+// partie d'un triangle au-dessus (dessus = true) ou au-dessous du plan y = niveau
+int couper(const Tri& t, float niveau, bool dessus, float x0, float z0, float (*poly)[2]) {
+  int n = 0;
+  for (int a = 0; a < 3 && n < 4; a++) {
+    const float* pa = t.p[a];
+    const float* pb = t.p[(a + 1) % 3];
+    bool ia = dessus ? pa[1] > niveau : pa[1] < niveau;
+    bool ib = dessus ? pb[1] > niveau : pb[1] < niveau;
+    if (ia) {
+      poly[n][0] = (pa[0] - x0) / kPas;
+      poly[n][1] = (pa[2] - z0) / kPas;
+      n++;
+    }
+    if (ia != ib && n < 4) {
+      float s = (niveau - pa[1]) / (pb[1] - pa[1]);
+      poly[n][0] = (pa[0] + (pb[0] - pa[0]) * s - x0) / kPas;
+      poly[n][1] = (pa[2] + (pb[2] - pa[2]) * s - z0) / kPas;
+      n++;
+    }
+  }
+  return n;
+}
+
+// trait d'un segment (coordonnees de grille) sans trou
+void tracer(std::vector<uint8_t>& g, int w, int h, float ax, float ay, float bx, float by) {
+  int n = 1 + (int)(std::max(std::abs(bx - ax), std::abs(by - ay)) * 4.f);
+  int px = -1, py = -1;
+  for (int s = 0; s <= n; s++) {
+    float f = (float)s / n;
+    int x = (int)std::floor(ax + (bx - ax) * f), y = (int)std::floor(ay + (by - ay) * f);
+    if (x < 0 || y < 0 || x >= w || y >= h) {
+      px = -1;
+      continue;
+    }
+    g[(size_t)y * w + x] = 1;
+    if (px >= 0 && px != x && py != y) {
+      g[(size_t)py * w + x] = 1;
+    }
+    px = x;
+    py = y;
+  }
+}
+
+// hauteur du triangle au centre de la cellule (x, y) de la grille
+float hauteur_a(const Tri& t, float x0, float z0, int x, int y) {
+  float ax = (t.p[0][0] - x0) / kPas, az = (t.p[0][2] - z0) / kPas;
+  float bx = (t.p[1][0] - x0) / kPas, bz = (t.p[1][2] - z0) / kPas;
+  float cx = (t.p[2][0] - x0) / kPas, cz = (t.p[2][2] - z0) / kPas;
+  float ymin = std::min({t.p[0][1], t.p[1][1], t.p[2][1]});
+  float ymax = std::max({t.p[0][1], t.p[1][1], t.p[2][1]});
+  float det = (bx - ax) * (cz - az) - (cx - ax) * (bz - az);
+  if (std::abs(det) < 0.05f) {
+    return ymin;
+  }
+  float px = x + 0.5f, pz = y + 0.5f;
+  float u = ((px - ax) * (cz - az) - (cx - ax) * (pz - az)) / det;
+  float v = ((bx - ax) * (pz - az) - (px - ax) * (bz - az)) / det;
+  float hy = t.p[0][1] + u * (t.p[1][1] - t.p[0][1]) + v * (t.p[2][1] - t.p[0][1]);
+  return std::clamp(hy, ymin, ymax);
 }
 
 // transformee de distance euclidienne exacte (Felzenszwalb), au carre, en cellules
@@ -251,11 +318,14 @@ uint16_t vers_half(float f) {
 void carte(const std::string& lv,
            const std::vector<Tri>& siens,
            const std::vector<Tri>& tous,
+           size_t siens_debut,
            const fs::path& out_dir) {
-  // zone cotiere jouable : centres des triangles qui croisent la mer (a 3 m pres), 1er et 99e
-  // centiles, au plus 700 m de cote autour du centre de la cote
+  // zone cotiere jouable
   std::vector<float> xs, zs;
   for (const auto& t : siens) {
+    if (t.autre) {
+      continue;  // la zone reste celle de la cote (meme grille qu'avant)
+    }
     float lo = std::min({t.p[0][1], t.p[1][1], t.p[2][1]});
     float hi = std::max({t.p[0][1], t.p[1][1], t.p[2][1]});
     if (lo < kMer + 3.f && hi > kMer - 3.f) {
@@ -279,11 +349,19 @@ void carte(const std::string& lv,
   }
   // terre : partie de chaque triangle au-dessus de la mer, en projection
   std::vector<uint8_t> sol((size_t)w * h, 0);
-  for (const auto& t : tous) {
+  std::vector<float> bas((size_t)w * h, 1e30f);
+  std::vector<uint8_t> ligne((size_t)w * h, 0);  // ou le decor coupe la surface de la mer
+  std::vector<uint8_t> fond((size_t)w * h, 0);  // du decor sous la mer (kFond)
+  bool surplomb_mer = false;
+  for (auto* k : kNiveauxSurplombMer) {
+    surplomb_mer |= lv == k;
+  }
+  for (size_t ti = 0; ti < tous.size(); ti++) {
+    const auto& t = tous[ti];
+    // surplombs : seulement le decor du niveau lui-meme
+    bool sien = ti >= siens_debut && ti < siens_debut + siens.size();
+    float ymin = std::min({t.p[0][1], t.p[1][1], t.p[2][1]});
     float ymax = std::max({t.p[0][1], t.p[1][1], t.p[2][1]});
-    if (ymax <= kMer) {
-      continue;
-    }
     float bx0 = std::min({t.p[0][0], t.p[1][0], t.p[2][0]});
     float bx1 = std::max({t.p[0][0], t.p[1][0], t.p[2][0]});
     float bz0 = std::min({t.p[0][2], t.p[1][2], t.p[2][2]});
@@ -292,25 +370,110 @@ void carte(const std::string& lv,
       continue;
     }
     float poly[4][2];
-    int n = 0;
-    for (int a = 0; a < 3 && n < 4; a++) {
-      const float* pa = t.p[a];
-      const float* pb = t.p[(a + 1) % 3];
-      if (pa[1] > kMer) {
-        poly[n][0] = (pa[0] - x0) / kPas;
-        poly[n][1] = (pa[2] - z0) / kPas;
-        n++;
-      }
-      if ((pa[1] > kMer) != (pb[1] > kMer) && n < 4) {
-        float s = (kMer - pa[1]) / (pb[1] - pa[1]);
-        poly[n][0] = (pa[0] + (pb[0] - pa[0]) * s - x0) / kPas;
-        poly[n][1] = (pa[2] + (pb[2] - pa[2]) * s - z0) / kPas;
-        n++;
+    if (surplomb_mer && !t.autre && ymin < kMer - kFond) {
+      int nf = couper(t, kMer - kFond, false, x0, z0, poly);
+      if (nf >= 3) {
+        remplir_avec(w, h, poly, nf, [&](int x, int y) { fond[(size_t)y * w + x] = 1; });
       }
     }
+    if (ymax <= kMer) {
+      continue;
+    }
+    if (ymin < kMer) {
+      float seg[2][2];
+      int m = 0;
+      for (int a = 0; a < 3 && m < 2; a++) {
+        const float* pa = t.p[a];
+        const float* pb = t.p[(a + 1) % 3];
+        if ((pa[1] > kMer) != (pb[1] > kMer)) {
+          float s = (kMer - pa[1]) / (pb[1] - pa[1]);
+          seg[m][0] = (pa[0] + (pb[0] - pa[0]) * s - x0) / kPas;
+          seg[m][1] = (pa[2] + (pb[2] - pa[2]) * s - z0) / kPas;
+          m++;
+        }
+      }
+      if (m == 2) {
+        tracer(ligne, w, h, seg[0][0], seg[0][1], seg[1][0], seg[1][1]);
+      }
+    }
+    if (t.autre) {
+      continue;  // decor hors cote : le trait seulement
+    }
+    int n = couper(t, kMer, true, x0, z0, poly);
     if (n >= 3) {
-      remplir(sol, w, h, poly, n);
+      remplir_avec(w, h, poly, n, [&](int x, int y) {
+        size_t i = (size_t)y * w + x;
+        sol[i] = 1;
+        bas[i] = sien ? std::min(bas[i], std::max(hauteur_a(t, x0, z0, x, y), kMer)) : kMer;
+      });
     }
+  }
+  {
+    bool appliquer = false;
+    for (auto* k : kNiveauxSurplomb) {
+      appliquer |= lv == k;
+    }
+    // le trait ou le decor coupe la mer reste de la terre (sans trou)
+    std::vector<uint8_t> sol0 = sol;
+    if (appliquer) {
+      for (size_t i = 0; i < sol.size(); i++) {
+        sol0[i] |= ligne[i];
+      }
+    }
+    std::vector<uint8_t> eau0((size_t)w * h, 0);
+    std::vector<int> file;
+    auto semer = [&](int x, int y) {
+      size_t i = (size_t)y * w + x;
+      if (!sol0[i] && !eau0[i]) {
+        eau0[i] = 1;
+        file.push_back((int)i);
+      }
+    };
+    for (int x = 0; x < w; x++) {
+      semer(x, 0);
+      semer(x, h - 1);
+    }
+    for (int y = 0; y < h; y++) {
+      semer(0, y);
+      semer(w - 1, y);
+    }
+    for (size_t k = 0; k < file.size(); k++) {
+      int i = file[k], x = i % w, y = i / w;
+      if (x > 0) semer(x - 1, y);
+      if (x < w - 1) semer(x + 1, y);
+      if (y > 0) semer(x, y - 1);
+      if (y < h - 1) semer(x, y + 1);
+    }
+    // largeur d'eau gagnee sous les surplombs, couche par couche depuis la mer d'origine
+    std::vector<uint8_t> sous((size_t)w * h, 0);
+    std::vector<int> couche = file, suivante;
+    size_t n_surplomb = 0;
+    for (int d = 0; d < (int)(kSurplombMax / kPas) && !couche.empty(); d++) {
+      suivante.clear();
+      for (int i : couche) {
+        int x = i % w, y = i / w;
+        int vois[4][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
+        for (auto& v : vois) {
+          if (v[0] < 0 || v[1] < 0 || v[0] >= w || v[1] >= h) {
+            continue;
+          }
+          size_t j = (size_t)v[1] * w + v[0];
+          if (sol0[j] && !ligne[j] && !sous[j] && bas[j] > kMer + kSurplomb) {
+            sous[j] = 1;
+            n_surplomb++;
+            suivante.push_back((int)j);
+          }
+        }
+      }
+      std::swap(couche, suivante);
+    }
+    if (appliquer) {
+      for (size_t i = 0; i < sol.size(); i++) {
+        sol[i] = sol0[i] && !sous[i];
+      }
+    }
+    lg::info("PC-REMAKE rivage : {} : {} cellules sous un surplomb ({})", lv, n_surplomb,
+             appliquer ? "eau" : "laissees en terre");
   }
   // mer = eau reliee au bord de la grille
   std::vector<uint8_t> mer((size_t)w * h, 0);
@@ -339,11 +502,7 @@ void carte(const std::string& lv,
     if (y > 0) pousser(x, y - 1);
     if (y < h - 1) pousser(x, y + 1);
   }
-  // les rivieres et les chenaux etroits ne sont pas la mer (pas de vagues ni d'ecume) : seule
-  // compte l'eau reliee au large par un passage d'au moins 2 x kChenal de large (ouverture
-  // morphologique : eau a plus de kChenal de la terre, reliee au bord, puis regonflee de
-  // kChenal dans l'eau). Ce qui en est retire est de l'EAU INTERIEURE (valeur kInterieur) : la
-  // surface de l'eau y reste (ocean_common.frag), le post n'y met ni vagues ni ecume.
+  // les rivieres et les chenaux etroits ne sont pas la mer (pas de vagues ni d'ecume)
   std::vector<uint8_t> mer0 = mer;
   {
     auto d_sol = distance(sol, w, h);
@@ -381,19 +540,126 @@ void carte(const std::string& lv,
       mer[i] = mer[i] && d_coeur[i] * kPas <= kChenal + 0.5f * kPas;
     }
   }
-  // distance a la terre des cellules de mer : les rivieres n'y comptent pas comme terre (une
-  // embouchure n'est pas un rivage) ; distance a la mer des cellules de terre : la mer seule
-  // (original : terre = !mer pour les deux distances)
+  // CRIQUES. Une petite crique reliee a la mer par une entree etroite passait pour une riviere
+  if (lv != "jungle" && lv != "swamp") {
+    constexpr float kCrique = 30.f;  // m
+    constexpr float kCriqueAire = 2500.f;  // m2
+    auto d_vers_mer = distance(mer, w, h);
+    std::vector<int> comp((size_t)w * h, -1);
+    std::vector<int> pile2, cellules;
+    size_t n_criques = 0;
+    for (size_t i0 = 0; i0 < mer.size(); i0++) {
+      if (!mer0[i0] || mer[i0] || comp[i0] >= 0) {
+        continue;
+      }
+      cellules.clear();
+      pile2.assign(1, (int)i0);
+      comp[i0] = (int)i0;
+      float dmax = 0.f;
+      while (!pile2.empty()) {
+        int i = pile2.back();
+        pile2.pop_back();
+        cellules.push_back(i);
+        dmax = std::max(dmax, d_vers_mer[i] * kPas);
+        int x = i % w, y = i / w;
+        int vois[4][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
+        for (auto& v : vois) {
+          if (v[0] < 0 || v[1] < 0 || v[0] >= w || v[1] >= h) {
+            continue;
+          }
+          size_t j = (size_t)v[1] * w + v[0];
+          if (mer0[j] && !mer[j] && comp[j] < 0) {
+            comp[j] = (int)i0;
+            pile2.push_back((int)j);
+          }
+        }
+      }
+      if (dmax <= kCrique && cellules.size() * kPas * kPas <= kCriqueAire) {
+        for (int i : cellules) {
+          mer[i] = 1;
+        }
+        n_criques++;
+      }
+    }
+    lg::info("PC-REMAKE rivage : {} : {} criques rendues a la mer", lv, n_criques);
+  }
+  // surplombs en mer (voir kNiveauxSurplombMer), depuis la mer seule
+  if (surplomb_mer) {
+    std::vector<int> couche, suivante;
+    for (size_t i = 0; i < mer.size(); i++) {
+      if (mer[i]) {
+        couche.push_back((int)i);
+      }
+    }
+    size_t n_mer = 0;
+    for (int d = 0; d < (int)(kSurplombMax / kPas) && !couche.empty(); d++) {
+      suivante.clear();
+      for (int i : couche) {
+        int x = i % w, y = i / w;
+        int vois[4][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
+        for (auto& v : vois) {
+          if (v[0] < 0 || v[1] < 0 || v[0] >= w || v[1] >= h) {
+            continue;
+          }
+          size_t j = (size_t)v[1] * w + v[0];
+          if (sol[j] && !mer[j] && !ligne[j] && fond[j] && bas[j] > kMer + kSurplomb) {
+            mer[j] = 1;
+            mer0[j] = 1;
+            n_mer++;
+            suivante.push_back((int)j);
+          }
+        }
+      }
+      std::swap(couche, suivante);
+    }
+    lg::info("PC-REMAKE rivage : {} : {} cellules de mer sous un surplomb", lv, n_mer);
+  }
+  // distance a la terre des cellules de mer
   std::vector<uint8_t> terre(mer.size());
   for (size_t i = 0; i < mer.size(); i++) {
     terre[i] = !mer0[i];
   }
   auto d_ter = distance(terre, w, h);  // distance a la terre (cellules de mer)
-  auto d_mer = distance(mer, w, h);    // distance a la mer (cellules de terre)
+  auto d_mer = distance(mer, w, h);  // distance a la mer (cellules de terre)
   std::vector<uint16_t> out((size_t)w * h);
+  std::vector<float> sdv((size_t)w * h);
   for (size_t i = 0; i < out.size(); i++) {
     float sd = mer[i] ? (d_ter[i] - 0.5f) * kPas : -(d_mer[i] - 0.5f) * kPas;
     sd = std::clamp(sd, -kBorne, kBorne);
+    sdv[i] = sd;
+  }
+  // TRAIT DE COTE LISSE
+  {
+    const int R = 6;
+    const float sig = 2.f;  // cases
+    float k[2 * R + 1];
+    float ks = 0.f;
+    for (int i = -R; i <= R; i++) {
+      k[i + R] = std::exp(-0.5f * i * i / (sig * sig));
+      ks += k[i + R];
+    }
+    std::vector<float> tmp(sdv.size());
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        float acc = 0.f;
+        for (int i = -R; i <= R; i++) {
+          acc += k[i + R] * sdv[(size_t)y * w + std::clamp(x + i, 0, w - 1)];
+        }
+        tmp[(size_t)y * w + x] = acc / ks;
+      }
+    }
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        float acc = 0.f;
+        for (int i = -R; i <= R; i++) {
+          acc += k[i + R] * tmp[(size_t)std::clamp(y + i, 0, h - 1) * w + x];
+        }
+        sdv[(size_t)y * w + x] = acc / ks;
+      }
+    }
+  }
+  for (size_t i = 0; i < out.size(); i++) {
+    float sd = sdv[i];
     if (mer0[i] && !mer[i]) {
       sd = kInterieur;
     }
@@ -418,13 +684,15 @@ void carte(const std::string& lv,
 void build_shore_maps(const fs::path& editor_dir, const fs::path& out_dir) {
   std::vector<std::vector<Tri>> par_niveau;
   std::vector<Tri> tous;
+  std::vector<size_t> debut;
   for (auto* lv : kNiveaux) {
+    debut.push_back(tous.size());
     par_niveau.push_back(lire_niveau(editor_dir, lv));
     tous.insert(tous.end(), par_niveau.back().begin(), par_niveau.back().end());
   }
   for (size_t i = 0; i < par_niveau.size(); i++) {
     if (!par_niveau[i].empty()) {
-      carte(kNiveaux[i], par_niveau[i], tous, out_dir);
+      carte(kNiveaux[i], par_niveau[i], tous, debut[i], out_dir);
     }
   }
 }

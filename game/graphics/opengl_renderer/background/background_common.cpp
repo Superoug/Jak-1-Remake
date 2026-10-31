@@ -15,8 +15,7 @@
 #include <unordered_map>
 #include <unordered_map>
 
-// (22/09 : <unistd.h> retire — POSIX seulement, cassait la compilation Windows ;
-// remove()/fopen() viennent de <cstdio>)
+// <unistd.h> retire
 #include <cstdio>
 
 #include "common/custom_data/Tfrag3Data.h"
@@ -27,53 +26,45 @@
 #include "common/util/os.h"
 #include "common/util/simd_util.h"
 
-// PC-REMAKE: see background_common.h
+// see background_common.h
 float g_grass_push[4] = {0.f, 0.f, 0.f, 0.f};
-// 20/10 : pas de Jak sur la neige (xyz = pieds, w = 0 rien / 0.5 neige / 1 neige profonde)
+// pas de Jak sur la neige
 float g_snow_step[4] = {0.f, 0.f, 0.f, 0.f};
-// 20/10 : herbe couchee autour de Jak pendant les cinematiques (xyz = centre, w = dose 0..1)
+// herbe couchee autour de Jak pendant les cinematiques
 float g_grass_clear[4] = {0.f, 0.f, 0.f, 0.f};
 float g_post_fx[4] = {0.f, 0.f, 0.f, 0.f};
-// PC-REMAKE 25/08 : qualite des effets (reflets SSR / halos / ombres contact)
+// qualite des effets (reflets SSR / halos / ombres contact)
 float g_fx_quality[4] = {2.f, 1.f, 1.f, 1.f};
 float g_sun_shadow_params[4] = {0.3f, -0.85f, 0.25f, 0.f};  // strength 0 = off
-float g_toon_fx[4] = {0.f, 0.f, 0.f, 0.f};                  // toon: neutral at zero
-float g_depth_fx[4] = {0.f, 0.f, 0.f, 0.f};                 // depth post: neutral at zero
-float g_light_fx[4] = {0.f, 0.f, 0.f, 0.f};                 // rebuilt lighting rig
-// RENDU REMAKE (12/10) : x = dose, y = nettete, z = vignette, w = etalonnage
+float g_toon_fx[4] = {0.f, 0.f, 0.f, 0.f};  // toon: neutral at zero
+float g_depth_fx[4] = {0.f, 0.f, 0.f, 0.f};  // depth post: neutral at zero
+float g_light_fx[4] = {0.f, 0.f, 0.f, 0.f};  // rebuilt lighting rig
+// RENDU REMAKE
 float g_grade_fx[4] = {1.0f, 0.35f, 0.5f, 1.0f};
 // x = exposition, y = contraste, z = saturation
 float g_grade_amt2[4] = {0.78f, 1.12f, 0.92f, 0.f};
 float g_sky_color[4] = {0.55f, 0.70f, 1.00f, 0.f};
+// nuages en volume
+float g_moon[4] = {0.f, 0.7f, -0.7f, 12.f};
+float g_cloud_light[8] = {1.f, 0.95f, 0.85f, 0.f, 0.45f, 0.55f, 0.7f, 0.42f};
 float g_ground_color[4] = {0.42f, 0.36f, 0.26f, 0.f};
 float g_night_fx[4] = {0.f, 0.f, 0.f, 0.f};
-// 20/10 : dose des rayons de soleil volumetriques (jungle, de jour) — 4e parametre de
-// pc-set-night-fx! (time-of-day.gc)
+// dose des rayons de soleil volumetriques (jungle, de jour)
 float g_shaft_amt = 0.f;
 int g_vie_zone = 0;  // lucioles : 0 rien, 1 village, 2 foret (pc-set-vie-zone!)
-// défauts calibrés au REPL (16/08) : houle douce
-// (troncs quasi muets), battement de feuilles ×2 final, palmiers de terrain réveillés, feuilles shrub vivantes
-// terrain (z) à ZÉRO : les palmiers penchés fondus dans le terrain restent
-// comme dans le jeu de base ; battement des palmiers du village calibré ×1,5
-// (16/08, dernier réglage en date)
-// battement ×0,75 (échelle 1.2) : réglage définitif (17/08 soir,
-// validé avec les palmiers penchés)
+// meteo enrichie (pc-set-meteo!, pc_meteo_run)
+int g_meteo_kind = 0;
+int g_meteo_pause = 0;
+float g_meteo_amt[2] = {0.f, 0.f};
+// défauts calibrés au REPL
 float g_palm_wind[4] = {0.7f, 1.2f, 0.f, 1.5f};
 float g_water_glitter[4] = {0.f, 0.f, 0.f, 0.f};
 float g_palm_debug = 0.f;
 std::string g_palm_debug_spec;
 u32 g_palm_debug_seq = 1;
-// PC-REMAKE 21/09 : detail intrinseque des sols — au village, la texture du sol
-// paraissait de basse qualite. Les sols sont des textures 128² etirees sur
-// des metres ; le shader re-echantillonne la MEME texture a 4x et n'en garde que
-// la haute frequence (grain), en luminance seulement : rien d'invente, couleurs
-// intactes, fondu de 4 a 18 m. Regle par nom ; gain global par fichier.
-// 22/09 QA : `touch /tmp/qa_opaque_foliage` force color.a = 1 sur les draws a
-// test d'alpha (feuillages) — dit en une image si la translucidite vient d'un
-// MELANGE actif sur ces draws
+// detail intrinseque des sols
 float g_pc_force_opaque = 0.f;
-// 14/10 : 0 par defaut — le detail inventait un motif absent de l'original (pas
-// fidele) ; reglable dans le menu Remake (original 21/09 : 1.4f)
+// 0 par defaut
 float g_pc_detail_gain = 0.f;
 float g_pc_detail_menu = 0.f;  // pose par GOAL (menu Remake Detail des sols)
 void update_detail_gain() {
@@ -104,8 +95,7 @@ float pc_detail_texture_amount(const std::string& debug_name) {
       return 0.f;
     }
   }
-  // sols et roches : grain plein ; le reste rien (bois, tissus, metal gardent
-  // leur dessin — un motif repete 4x y ferait des mini-planches)
+  // sols et roches
   static const char* kGround[] = {"ground", "sand",  "beach-0", "dirt",   "soil",  "grass",
                                   "floor",  "snow",  "rock",    "gravel", "pebble", "cobble",
                                   "path",   "mud",   "moss",    "cave",   "cliff",  "stone",
@@ -161,9 +151,7 @@ bool palm_debug_matches(s32 tex_idx, const std::string& name) {
   return name.find(s) != std::string::npos;
 }
 
-// Double-buffered: GOAL fills `pending` while the render thread reads `active`,
-// and the render thread swaps once per frame. That way the order in which the
-// lamp processes run inside a game frame doesn't matter.
+// Double-buffered: GOAL fills `pending` while the render thread reads `active`
 namespace {
 float s_lamp_pos[kMaxRemakeLamps * 4];
 float s_lamp_color[kMaxRemakeLamps * 4];
@@ -177,7 +165,7 @@ int s_all_prio[kMaxRemakePending] = {};
 int s_pending_prio[kMaxRemakePending] = {};
 int s_all_count = 0;
 
-// persistent fixtures, kept across frames (see pc_remake_add_static_lamp)
+// persistent fixtures, kept across frames
 constexpr int kMaxStaticLamps = 96;
 long long s_static_id[kMaxStaticLamps] = {};
 float s_static_pos[kMaxStaticLamps * 4] = {};
@@ -213,9 +201,7 @@ void pc_remake_add_static_lamp(long long id, float x, float y, float z, float ra
   s_static_prio[slot] = priority;
 }
 
-// PC-REMAKE 18/08 : retire une fixture par id — sans ca, la lueur d'un eco
-// RAMASSE restait allumee pour toujours (18/08 :
-// s_static_count n'etait jamais decremete nulle part).
+// retire une fixture par id
 void pc_remake_remove_static_lamp(long long id) {
   for (int i = 0; i < s_static_count; i++) {
     if (s_static_id[i] == id) {
@@ -232,7 +218,7 @@ void pc_remake_remove_static_lamp(long long id) {
   }
 }
 
-// PC-REMAKE 20/10 : faisceaux d'eco, meme double tampon que les lampes
+// faisceaux d'eco, meme double tampon que les lampes
 namespace {
 float s_beam_pending[kMaxRemakeBeams * 8];
 int s_beam_pending_n = 0;
@@ -248,13 +234,7 @@ void pc_remake_add_beam(float x0, float y0, float z0, float x1, float y1, float 
   b[0] = x0, b[1] = y0, b[2] = z0, b[3] = 0.f;
   b[4] = x1, b[5] = y1, b[6] = z1, b[7] = 0.f;
 }
-// 29/10 : LISTE VALIDEE EN UNE FOIS. GOAL declare ses lampes et faisceaux pendant que le moteur
-// dessine l'image precedente : l'echange fait par le moteur tombait au milieu des declarations
-// (liste a moitie remplie, ou la meme lampe deux fois : une lumiere doublee le temps d'une image,
-// une autre chassee des 48 places — des flashs la nuit au village). Le jeu valide maintenant sa
-// liste quand il envoie l'image au moteur (pc_remake_lamps_commit, gl_send_chain) ; le moteur ne
-// lit que des listes completes.
-// (original : le moteur prenait la liste en attente telle quelle a chaque image)
+// LISTE VALIDEE EN UNE FOIS
 namespace {
 std::mutex s_commit_mutex;
 bool s_commit_new = false;
@@ -293,30 +273,20 @@ const float* pc_remake_beams() {
   return s_beam_active;
 }
 
-// ===================== PC-REMAKE 20/10 : traces dans la neige =====================
+// ===================== PC-REMAKE traces dans la neige =====================
 namespace {
 struct SnowTrail {
-  // v3 : CHAMP DE DISTANCE. Chaque texel garde la distance (m) au chemin de Jak le plus proche,
-  // et non plus un relief tout fait : le profil du sillon (largeur, profondeur, bourrelet, bord
-  // irregulier) est calcule par la carte graphique selon l'epaisseur de neige — sillon plus
-  // large et plus profond en neige epaisse, bords lisses (la distance s'interpole sans marches ;
-  // v2 : relief pre-calcule, bord en dents de scie a 5 cm)
-  // R = distance au chemin (m, divisee par la largeur locale), G = hauteur des pieds (m),
-  // B = instant du dernier passage (s), A = profondeur tassee (m, avant epaisseur)
-  // v4 : texels de 10 cm (fenetre de 102 m, ±51 m autour de Jak) — la distance s'interpole sans
-  // perte ; a 5 cm (±25 m) la trace s'effacait d'un coup derriere Jak quand il traversait une
-  // etendue
+  // et non plus un relief tout fait
   static constexpr int N = 1024;
   static constexpr float kTexel = 0.10f;  // m
-  static constexpr float kFar = 9.f;      // distance d'un texel vierge
-  static constexpr float kReach = 1.8f;   // portee d'un pas (m) : sillon elargi + bourrelet
-  std::vector<float> data;                // N*N*4
+  static constexpr float kFar = 9.f;  // distance d'un texel vierge
+  static constexpr float kReach = 1.8f;  // portee d'un pas (m) : sillon elargi + bourrelet
+  std::vector<float> data;  // N*N*4
   GLuint tex = 0;
-  // grille grossiere (128 x 128 cases de 0,8 m, meme fenetre torique) : instant du dernier pas
-  // qui touche chaque case — le decoupage (tfrag3_snow.tesc) ne travaille que la ou Jak est passe
+  // grille grossiere (128 x 128 cases de 0,8 m, meme fenetre torique)
   static constexpr int NC = 128;
   static constexpr float kCell = kTexel * N / NC;  // m
-  std::vector<float> cells;                        // NC*NC
+  std::vector<float> cells;  // NC*NC
   GLuint cell_tex = 0;
   bool cells_dirty = false;
   static int wrapc(int i) { return ((i % NC) + NC) % NC; }
@@ -327,7 +297,7 @@ struct SnowTrail {
   int idle_frames = 0;
   int air_frames = 0;  // images sans contact depuis le dernier pas
   float walked = 0.f;  // distance parcourue (m) : alternance des pieds, irregularites
-  // bruit de valeur lisse (0..1) — irregularites de la trace, stables dans le monde
+  // bruit de valeur lisse (0..1)
   static float hash2(int x, int z) {
     unsigned h = (unsigned)x * 374761393u + (unsigned)z * 668265263u;
     h = (h ^ (h >> 13)) * 1274126177u;
@@ -417,7 +387,7 @@ struct SnowTrail {
     glBindTexture(GL_TEXTURE_2D, cell_tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, NC, NC, GL_RED, GL_FLOAT, cells.data());
   }
-  // fenetre centree sur (wx, wz) m : les colonnes / lignes qui y entrent sont videes
+  // fenetre centree sur (wx, wz) m
   void recenter(float wx, float wz) {
     int nx = (int)std::floor(wx / kTexel) - N / 2;
     int nz = (int)std::floor(wz / kTexel) - N / 2;
@@ -431,7 +401,7 @@ struct SnowTrail {
       cells_dirty = true;
     } else {
       for (int x = ox + N; x < nx + N; x++) clear_slot_column(x);  // vers +x
-      for (int x = nx; x < ox; x++) clear_slot_column(x);          // vers -x
+      for (int x = nx; x < ox; x++) clear_slot_column(x);  // vers -x
       for (int z = oz + N; z < nz + N; z++) clear_slot_row(z);
       for (int z = nz; z < oz; z++) clear_slot_row(z);
     }
@@ -441,9 +411,7 @@ struct SnowTrail {
   // un pas : distance au centre du pas (min avec les pas precedents), tassement, instant
   void stamp(float x, float y, float z, float kind, float now, int& bx0, int& bz0, int& bx1, int& bz1,
              float side_x = 0.f, float side_z = 0.f) {
-    // pas alternes gauche/droite (~3 cm de part et d'autre, une foulee de 0,45 m ; 8 cm : paroi
-    // en zigzag) ; largeur et profondeur qui varient le long du chemin (le bord irregulier est
-    // fait par le shader)
+    // pas alternes gauche/droite
     {
       float stride = std::sin(walked * 3.14159f / 0.45f);
       float off = 0.03f * stride;
@@ -452,9 +420,7 @@ struct SnowTrail {
     }
     const float wvar = 0.85f + 0.30f * vnoise(walked * 1.7f, 3.1f);
     const float dvar = 0.80f + 0.35f * vnoise(walked * 2.3f, 7.7f);
-    // TASSEMENT : la neige profonde s'enfonce beaucoup, la neige fine un peu (multiplie ensuite
-    // par l'epaisseur de neige au-dessus des pieds, dans le shader). Premier passage : 80 % ;
-    // chaque nouveau passage (plus de 0,6 s apres le precedent sur ce texel) tasse encore.
+    // TASSEMENT : la neige profonde s'enfonce beaucoup
     const bool deep = kind > 0.75f;
     const float dfull = (deep ? 0.42f : 0.20f) * dvar;
     int ix0 = (int)std::floor((x - kReach) / kTexel), ix1 = (int)std::floor((x + kReach) / kTexel);
@@ -506,24 +472,19 @@ struct SnowTrail {
 SnowTrail s_snow;
 }  // namespace
 
-// ===================== PC-REMAKE 25/10 : empreintes dans le sable =====================
-// Carte fine (2,5 cm par texel, 1024 x 1024 = 25,6 m, torique, centree sur Jak) : a chaque foulee
-// de Jak sur le sable, une vraie forme de pied (avant du pied + talon), alternee gauche / droite et
-// orientee dans le sens de la marche, creusee de 2 a 3 cm avec un petit bourrelet de sable autour.
-// R = relief (m : < 0 creux, > 0 bourrelet), G = instant du dernier passage (s), B = hauteur du sol
-// (m), A = 1 si marque. Le post (post_processing.frag) en tire la normale et le sable tasse.
+// ===================== PC-REMAKE empreintes dans le sable ===================== Carte fine
 namespace {
 struct SandPrints {
   static constexpr int N = 1024;
   static constexpr float kTexel = 0.025f;  // m
-  std::vector<float> data;                 // N*N*4
+  std::vector<float> data;  // N*N*4
   GLuint tex = 0;
   bool init = false;
   int ox = 0, oz = 0;
   bool have_last = false;
   float lx = 0.f, lz = 0.f;
   float since_step = 0.f;  // m parcourus depuis la derniere foulee
-  float side = 1.f;        // pied gauche (-1) / droit (+1)
+  float side = 1.f;  // pied gauche (-1) / droit (+1)
   float dir_x = 0.f, dir_z = 1.f;  // sens de la derniere marche
   int air_frames = 0;
   int idle_frames = 0;
@@ -602,7 +563,7 @@ struct SandPrints {
     ox = nx;
     oz = nz;
   }
-  // une empreinte de pied centree en (x, z) m, orientee selon (fx, fz) (unitaire)
+  // une empreinte de pied centree en (x, z) m, orientee selon (fx, fz)
   void foot(float x, float y, float z, float fx, float fz, float now, float depth) {
     const float rx = fz, rz = -fx;  // vers la droite du pied
     const float reach = 0.24f;
@@ -613,7 +574,6 @@ struct SandPrints {
         float cx = (ix + 0.5f) * kTexel - x, cz = (iz + 0.5f) * kTexel - z;
         float u = cx * fx + cz * fz;  // le long du pied (+ = orteils)
         float v = cx * rx + cz * rz;  // en travers
-        // avant du pied et talon (distance normalisee : < 1 dedans)
         float ea = std::sqrt(((u - 0.045f) / 0.085f) * ((u - 0.045f) / 0.085f) +
                              (v / 0.055f) * (v / 0.055f));
         float eb = std::sqrt(((u + 0.085f) / 0.050f) * ((u + 0.085f) / 0.050f) +
@@ -641,7 +601,7 @@ struct SandPrints {
 };
 SandPrints s_sand;
 
-// appele a chaque image par pc_snow_trail_frame : sur_sable = Jak touche le sable
+// appele a chaque image par pc_snow_trail_frame
 void pc_sand_frame(unsigned long long frame_idx, bool sur_sable) {
   if (!sur_sable) {
     if (++s_sand.air_frames > 18) {
@@ -658,8 +618,7 @@ void pc_sand_frame(unsigned long long frame_idx, bool sur_sable) {
   const bool atterrit = !s_sand.have_last;
   s_sand.air_frames = 0;
   if (atterrit) {
-    // retombee (saut, chute) : les deux pieds cote a cote, un peu plus profond, dans le sens de
-    // la derniere marche
+    // retombee (saut, chute)
     const float fx = s_sand.dir_x, fz = s_sand.dir_z;
     const float rx = fz, rz = -fx;
     s_sand.foot(x + rx * 0.09f, y, z + rz * 0.09f, fx, fz, now, 0.03f);
@@ -683,7 +642,7 @@ void pc_sand_frame(unsigned long long frame_idx, bool sur_sable) {
   s_sand.dir_x = fx;
   s_sand.dir_z = fz;
   s_sand.since_step += dist;
-  // foulee : 0,42 m en marchant, plus longue en courant (deplacement de cette image)
+  // foulee : 0,42 m en marchant, plus longue en courant
   const float stride = std::clamp(0.30f + dist * 3.0f, 0.42f, 0.70f);
   if (s_sand.since_step >= stride) {
     s_sand.since_step = 0.f;
@@ -707,14 +666,12 @@ u64 g_snow_geom_frame = ~0ull;
 int g_pc_merc_shaders_seq = 0;
 
 void pc_snow_trail_frame(unsigned long long frame_idx) {
-  // 25/10 : 0.25 = sable (time-of-day.gc) -> empreintes de pied, pas de sillon de neige
-  // (original : const float kind = g_snow_step[3];)
+  // 0.25 = sable (time-of-day.gc) -> empreintes de pied, pas de sillon de neige
   const bool sable = g_snow_step[3] > 0.2f && g_snow_step[3] < 0.3f;
   pc_sand_frame(frame_idx, sable);
   const float kind = sable ? 0.f : g_snow_step[3];
   if (kind <= 0.f) {
-    // breve perte de contact (pente, petit rebond) : la trace reste continue si Jak reprend
-    // pied tout pres ; au-dela de ~0,3 s (vrai saut), elle repart du point d'atterrissage
+    // breve perte de contact (pente, petit rebond)
     if (++s_snow.air_frames > 18) {
       s_snow.have_last = false;
     }
@@ -762,13 +719,12 @@ unsigned int pc_snow_cells_tex() {
 }
 
 unsigned int pc_snow_trail_tex() {
-  // la carte reste valide un moment apres le dernier pas (Jak saute, cinematique...)
+  // la carte reste valide un moment apres le dernier pas
   return (s_snow.init && s_snow.idle_frames < 60 * 600) ? s_snow.tex : 0;
 }
 
 void pc_remake_lamps_begin_frame() {
-  // 29/10 : la derniere liste VALIDEE par le jeu (voir pc_remake_lamps_commit) ; aucune nouvelle
-  // = liste vide pour cette image (on garde alors la precedente, regle ci-dessous)
+  // la derniere liste VALIDEE par le jeu (voir pc_remake_lamps_commit)
   {
     std::lock_guard<std::mutex> lk(s_commit_mutex);
     if (s_commit_new) {
@@ -785,7 +741,7 @@ void pc_remake_lamps_begin_frame() {
     }
   }
   {
-    // meme regle que les lampes : une liste vide = GOAL n'a pas encore tourne
+    // meme regle que les lampes
     static int beam_empty = 0;
     if (s_frame_beam_n > 0) {
       beam_empty = 0;
@@ -797,18 +753,9 @@ void pc_remake_lamps_begin_frame() {
       s_beam_active_n = 0;
     }
   }
-  // The game and render threads are not locked in step, so an empty pending
-  // list usually just means "GOAL hasn't run its lamp processes since the last
-  // swap" — publishing that straight away would make the lights strobe. Hold
-  // the previous set, and only drop it once the list has stayed empty long
-  // enough to mean the lamps really are gone (level change).
+  // The game and render threads are not locked in step
   static int empty_frames = 0;
-  // 27/10 : PERSISTANCE de chaque lampe. L'echange a lieu pendant que GOAL declare ses lampes :
-  // une liste a moitie remplie (non vide) passait telle quelle, et les lampes de l'autre moitie
-  // s'eteignaient le temps d'une image — la lumiere bleue d'une source d'eco clignotait une image
-  // sur deux au village. Une lampe deja vue reste allumee 3 images sans nouvelle declaration ;
-  // une lampe redeclaree (meme famille, meme priorite, a moins de 1,5 m) met a jour sa place.
-  // (original : la liste en attente remplacait tout, telle quelle)
+  // PERSISTANCE de chaque lampe
   static float v_pos[kMaxRemakePending * 4], v_col[kMaxRemakePending * 4];
   static int v_prio[kMaxRemakePending], v_age[kMaxRemakePending];
   static int v_n = 0;
@@ -837,7 +784,7 @@ void pc_remake_lamps_begin_frame() {
         }
       }
       if (best < 0) {
-        // meme lampe declaree deux fois dans la meme image : une seule
+        // meme lampe declaree deux fois dans la meme image
         bool double_ = false;
         for (int j = 0; j < v_n && !double_; j++) {
           if (pris[j] && famille(v_col[j * 4 + 3]) == fam) {
@@ -889,9 +836,6 @@ void pc_remake_lamps_begin_frame() {
     s_lamp_count = 0;
     v_n = 0;
   }
-  // (29/10 : la liste en attente est remise a zero par pc_remake_lamps_commit, cote jeu)
-  // fold in the fixtures; the nearest-N selection sorts everything out, and a
-  // lamp from another level simply never wins a slot because it is far away
   for (int i = 0; i < s_static_count && s_all_count < kMaxRemakePending; i++) {
     int j = s_all_count++;
     for (int k = 0; k < 4; k++) {
@@ -900,27 +844,17 @@ void pc_remake_lamps_begin_frame() {
     }
     s_all_prio[j] = s_static_prio[i];
   }
-  // et les lumières émissives scannées des niveaux chargés (lave, feux, lueurs)
+  // et les lumières émissives scannées des niveaux chargés
   pc_emissive_fold_into_all();
 }
 
 void pc_remake_select_lamps(const float* cam_xyz) {
-  // partial selection sort over the collected set: cheap at these counts and
-  // it keeps the lamps that actually matter for what is on screen
+  // partial selection sort over the collected set: cheap at these counts and it keeps the lamps that
   int n = s_all_count < kMaxRemakeLamps ? s_all_count : kMaxRemakeLamps;
   bool used[kMaxRemakePending] = {};
-  // BONUS de priorité : ~40 m d'avance au carré — une fixture PROCHE garde son
-  // avantage, mais une fixture à 2 km ne vole plus le slot d'une lave à 30 m.
-  // (Avant : la priorité était un VETO absolu — les statics du village
-  // remplissaient les 48 slots depuis l'autre bout du monde, et AUCUNE
-  // émissive n'atteignait jamais le shader. Diagnostic 18/08 : 48 slots —
-  // 0 emissives, 0 eco, 48 normales.)
+  // BONUS de priorité
   const float kPrioBonus = (4096.f * 40.f) * (4096.f * 40.f);
-  // 27/10 : STABILITE (clignotement la nuit en marchant). Deux lampes a
-  // egalite pres de la limite des 48 places s'echangeaient d'une image a l'autre (la camera
-  // oscille en marchant) : une lumiere qui s'allume et s'eteint. Une lampe deja choisie a l'image
-  // precedente garde sa place tant qu'une autre n'est pas nettement plus proche (25 % en distance
-  // au carre). (original : sans cette preference)
+  // STABILITE (clignotement la nuit en marchant)
   static float s_prev[kMaxRemakeLamps * 3];
   static int s_prev_n = 0;
   auto deja = [&](int i) {
@@ -947,8 +881,7 @@ void pc_remake_select_lamps(const float* cam_xyz) {
       float dx = s_all_pos[i * 4 + 0] - cam_xyz[0];
       float dy = s_all_pos[i * 4 + 1] - cam_xyz[1];
       float dz = s_all_pos[i * 4 + 2] - cam_xyz[2];
-      // measure from the edge of the lamp's reach, so a big village lamp wins
-      // over a tiny orb that happens to be a little closer
+      // measure from the edge of the lamp's reach
       float d = dx * dx + dy * dy + dz * dz - s_all_pos[i * 4 + 3] * s_all_pos[i * 4 + 3];
       if (garde[i]) {
         d = d > 0.f ? d * 0.75f : d * 1.25f;
@@ -990,7 +923,7 @@ void pc_remake_select_lamps(const float* cam_xyz) {
           pos++;
         }
       }
-      // 12/10 : doublons (meme position) parmi les elues
+      // doublons (meme position) parmi les elues
       int dup = 0;
       for (int i = 0; i < n; i++) {
         for (int j = i + 1; j < n; j++) {
@@ -1037,46 +970,26 @@ const float* pc_remake_lamp_color() {
   return s_lamp_color;
 }
 
-// ===================== PC-REMAKE : lumières émissives scannées =====================
-// objectif (18/08) : chaque objet du jeu qui est censé émettre
-// de la lumière doit éclairer autour de lui — lave, torches, feux, murs
-// précurseurs, éclairs du village de pierre. Au chargement d'un niveau on balaye
-// la géométrie tfrag : les draws dont la texture est dans le registre ci-dessous
-// sont regroupés en amas de ~24 m, et chaque amas devient une source ponctuelle
-// pour la passe différée (le système des lampes). La couleur de chaque source
-// est la couleur moyenne de sa texture — la lave rayonne SON orange, les glyphes
-// précurseurs LEUR bleu, sans couleur codée en dur.
+// ===================== PC-REMAKE
 
 namespace {
 struct EmissiveRule {
   const char* pattern;  // sous-chaîne du nom de texture (minuscules)
-  float intensity;      // force de la source (le signe négatif = visible de jour
+  float intensity;  // force de la source (le signe négatif = visible de jour
                         // est appliqué au moment du versement dans les lampes)
-  float radius_m;       // portée en mètres
-  float lift_m;         // surélévation du centre (la lumière au-dessus du sol)
-  // 21/09 : la regle ne vaut que si les PIXELS luisent vraiment (veines bleues,
-  // voile blanc) — certaines textures brillaient plus que d'autres sans raison
-  // : les arches de pierre rouge gravee de la cite engloutie
-  // s'appelaient circuitpattern et etaient boostees comme des circuits.
+  float radius_m;  // portée en mètres
+  float lift_m;  // surélévation du centre (la lumière au-dessus du sol)
+  // la regle ne vaut que si les PIXELS luisent vraiment (veines bleues, voile blanc)
   bool needs_glow = false;
 };
-// Inventaire tiré des dumps du décompilateur (18/08) : lava-floor, fcn-coal,
-// fcn-crackedfloor, cav-firebarrel-flame, mineshort-candle, vil2-sticklight-tip,
-// cmn-precursor-blue-glow, gen-bluelight, sun-*-glow, vil-fireplace…
+// Inventaire tiré des dumps du décompilateur
 const EmissiveRule kEmissiveRules[] = {
-    // famille FEU musclée (18/08 : la lave ne produisait pas de lumière) —
-    // le canyon doit BAIGNER dans l'orange
-    // lava generique EMBRASAIT tout le tube de lave : la-bas, TOUTES les
-    // textures s'appellent lava-... (prefixe du niveau — meme lava-lrkr-metal,
-    // le metal des lurkers !). Motifs chirurgicaux : la lave EN FUSION seule.
+    // famille FEU musclée (la lave ne produisait pas de lumière)
     {"lava-flow", 2.4f, 110.f, 2.5f},
     {"lava-floor", 2.4f, 110.f, 2.5f},
     {"lava-ground-hot", 1.6f, 40.f, 2.0f},
     {"magma", 2.4f, 110.f, 2.5f},
-    // 70 m -> 24 m (18/08) : calibre pour les champs de braises du canyon de
-    // feu, ce rayon noyait TOUTE la falaise du village de pierre, dont les
-    // braseros portent la meme texture (les lampes du village en
-    // concentrent beaucoup)
+    // 70 m -> 24 m
     {"-coal", 1.1f, 24.f, 1.5f},
     {"crackedfloor", 1.0f, 18.f, 1.2f},
     {"flame", 1.1f, 13.f, 1.0f},
@@ -1095,69 +1008,48 @@ const EmissiveRule kEmissiveRules[] = {
     {"ecovalve", 0.45f, 7.f, 0.8f},
     {"eco-valve", 0.45f, 7.f, 0.8f},
     {"-lamp", 1.0f, 13.f, 0.5f},
-    // Inventaire COMPLET du jeu (18/08) — familles trouvées en balayant les 20+ niveaux :
-    {"crystal", 1.25f, 18.f, 1.0f},        // grottes sombres, neige, village volcan
-    {"pinkbeam", 1.3f, 18.f, 1.5f},       // rayons roses de la citadelle
+    // Inventaire COMPLET du jeu
+    {"crystal", 1.25f, 18.f, 1.0f},  // grottes sombres, neige, village volcan
+    {"pinkbeam", 1.3f, 18.f, 1.5f},  // rayons roses de la citadelle
     {"beambar", 1.2f, 15.f, 1.2f},
-    {"hot-pipe", 1.0f, 12.f, 0.8f},       // cité engloutie
+    {"hot-pipe", 1.0f, 12.f, 0.8f},  // cité engloutie
     {"hot-coil", 1.0f, 10.f, 0.8f},
     {"blueeco-flash", 1.0f, 12.f, 0.8f},  // plaques d'éco bleu (temple, rolling…)
-    {"plat-eco", 0.9f, 10.f, 0.6f},       // plates-formes à éco
-    {"darkeco", 0.9f, 12.f, 0.8f},        // éco noir luisant (misty, grottes)
-    {"dark-eco", 0.8f, 9.f, 0.8f},        // caisses/barils d'éco noir
-    {"dkecobomb", 1.1f, 14.f, 1.0f},      // bombe du boss final
-    {"sun-orb", 0.9f, 10.f, 0.6f},        // orbes de la cité engloutie
-    {"-light", 0.9f, 12.f, 0.8f},         // rol-light, fin-light, cmn-light…
-    // 25/08 (objectif : les châteaux/vaisseaux d'éco doivent faire de la
-    // VRAIE lumière) : les grandes structures précurseur portent leurs veines
-    // de circuits et leurs écritures lumineuses — elles deviennent des lampes.
+    {"plat-eco", 0.9f, 10.f, 0.6f},  // plates-formes à éco
+    {"darkeco", 0.9f, 12.f, 0.8f},  // éco noir luisant (misty, grottes)
+    {"dark-eco", 0.8f, 9.f, 0.8f},  // caisses/barils d'éco noir
+    {"dkecobomb", 1.1f, 14.f, 1.0f},  // bombe du boss final
+    {"sun-orb", 0.9f, 10.f, 0.6f},  // orbes de la cité engloutie
+    {"-light", 0.9f, 12.f, 0.8f},  // rol-light, fin-light, cmn-light…
+    // (objectif : les châteaux/vaisseaux d'éco doivent faire de la VRAIE lumière)
     {"circuitpattern", 1.15f, 16.f, 1.2f, true},
     {"tube-script", 0.7f, 10.f, 1.0f, true},
     {"precursor-glass", 0.9f, 12.f, 1.0f, true},
-    // 26/08 (objets susceptibles de faire de la lumiere, tous
-    // allumes) — inventaire complet des textures, manquants averes :
-    {"thicklava", 2.2f, 90.f, 2.5f},          // lave epaisse du tube
-    {"vil3-lava", 2.2f, 90.f, 2.5f},          // le lac de lave du village volcan
-    {"lava-cracked-floor", 1.4f, 30.f, 1.5f}, // sol craquele (tiret != crackedfloor)
+    // (objets susceptibles de faire de la lumiere, tous allumes)
+    {"thicklava", 2.2f, 90.f, 2.5f},  // lave epaisse du tube
+    {"vil3-lava", 2.2f, 90.f, 2.5f},  // le lac de lave du village volcan
+    {"lava-cracked-floor", 1.4f, 30.f, 1.5f},  // sol craquele (tiret != crackedfloor)
     {"lava-craked-floor", 1.4f, 30.f, 1.5f},  // typo d'origine des artistes
-    {"lava-vent-fire", 1.6f, 18.f, 1.2f},     // events de feu
-    {"energycoil", 1.0f, 12.f, 0.8f},         // bobines d'energie du tube
-    {"energyrail", 0.8f, 10.f, 0.6f},         // rails d'energie
-    {"boulderfire", 1.4f, 16.f, 1.0f},        // rochers enflammes du canyon
-    {"firebarrel", 1.1f, 12.f, 0.8f},         // barils de feu des grottes
-    {"multitileglow", 0.9f, 12.f, 1.0f},      // lueur du sage rouge
-    {"smallblueglow", 0.9f, 12.f, 0.8f},      // lueurs bleues cite engloutie
-    {"lightning", 1.2f, 14.f, 1.5f},          // eclairs des pylones (vil2)
-    {"watchtower-lens", 1.4f, 16.f, 1.0f},    // lentilles des tours de guet (jungle)
-    // 21/09 (tournee de tous les niveaux, tubes jaunes de la cite
-    // sous-marine) : les EXTREMITES des tubes chauds sont peintes avec deux
-    // aplats 4x4 (sun-yellow = le disque jaune, sun-red = sa couronne rouge) —
-    // sans ces regles le tube brillait mais pas sa bouche. Prefixe sun- =
-    // cite engloutie seulement (sunken/sunkenb).
+    {"lava-vent-fire", 1.6f, 18.f, 1.2f},  // events de feu
+    {"energycoil", 1.0f, 12.f, 0.8f},  // bobines d'energie du tube
+    {"energyrail", 0.8f, 10.f, 0.6f},  // rails d'energie
+    {"boulderfire", 1.4f, 16.f, 1.0f},  // rochers enflammes du canyon
+    {"firebarrel", 1.1f, 12.f, 0.8f},  // barils de feu des grottes
+    {"multitileglow", 0.9f, 12.f, 1.0f},  // lueur du sage rouge
+    {"smallblueglow", 0.9f, 12.f, 0.8f},  // lueurs bleues cite engloutie
+    {"lightning", 1.2f, 14.f, 1.5f},  // eclairs des pylones (vil2)
+    {"watchtower-lens", 1.4f, 16.f, 1.0f},  // lentilles des tours de guet (jungle)
+    // (tournee de tous les niveaux, tubes jaunes de la cite sous-marine)
     {"sun-yellow", 1.3f, 14.f, 1.0f},
     {"sun-red", 0.9f, 10.f, 0.8f},
-    // 21/09 : le lac de lave du village volcan est en fait un BASSIN DE
-    // SOUFRE (vil3-sulfurpool-center, jaune 177/171/57 d'origine) — sans regle,
-    // relumiere + hemispherique le delavaient en blanc creme ; en source il
-    // garde son jaune et rechauffe la rive.
+    // le lac de lave du village volcan est en fait un BASSIN DE SOUFRE
     {"sulfurpool-center", 0.8f, 30.f, 0.5f},
 };
-// Faux amis : rebords métalliques éclairés, bois des poteaux, ciels,
-// végétation brûlée (éteinte, elle ne brille pas)…
+// Faux amis : rebords métalliques éclairés, bois des poteaux, ciels, végétation brûlée
 const char* kEmissiveExcludes[] = {"metalrim", "metal-dark", "hilite", "-wood", "sky",
                                    "cloud",    "envmap",     "grate",  "burn"};
 
-// PC-REMAKE 18/08 : seul le VRAI FEU garde sa pleine force en plein soleil.
-// Une lampe, une lueur precurseur ou un cristal n'eclaire pas une falaise a
-// midi — c'etait la teinte jaune-vert sur la falaise du village de pierre.
-// GRANDES SURFACES de feu : elles eclairent de partout a la fois et ne
-// s'eteignent pas au soleil. Une TORCHE n'en fait pas partie — c'est une
-// petite flamme ponctuelle (torches du centre du village peu
-// naturelles, 18/08) : elle doit sculpter comme une lampe et
-// s'effacer de jour, tout en gardant une couleur de flamme.
-// 26/08 (objectif : les objets d'eco bleu emettent comme les
-// boules) : ces surfaces passent dans la FAMILLE ECO du shader — couleur
-// bleue franche + depot additif, au lieu du luminaire discret.
+// seul le VRAI FEU garde sa pleine force en plein soleil
 bool emissive_pattern_is_blue_eco(const char* pattern) {
   static const char* kBlueEco[] = {"ecovalve",           "eco-valve",
                                    "plat-eco",           "blueeco-flash",
@@ -1184,8 +1076,7 @@ bool emissive_pattern_is_fire(const char* pattern) {
   return false;
 }
 
-// petites flammes : traitees comme des sources PONCTUELLES (directionnelles,
-// discretes de jour) mais avec une couleur de feu plus franche qu'une lampe
+// petites flammes
 bool emissive_pattern_is_flame(const char* pattern) {
   static const char* kFlame[] = {"flame", "bonfire", "candle", "torch", "fireplace"};
   for (const char* f : kFlame) {
@@ -1197,12 +1088,12 @@ bool emissive_pattern_is_flame(const char* pattern) {
 }
 
 struct PcScannedLight {
-  float pos[4];    // xyz monde + rayon
+  float pos[4];  // xyz monde + rayon
   float color[4];  // rgb + intensité (positive ici)
-  float weight;    // nombre de sommets de l'amas (pour le tri)
-  bool fire;       // grande surface de feu (plein jour, enveloppante)
-  bool flame;      // petite flamme : ponctuelle, mais couleur de feu
-  bool blue_eco;   // objet a eco bleu : famille eco (couleur pleine + depot)
+  float weight;  // nombre de sommets de l'amas (pour le tri)
+  bool fire;  // grande surface de feu (plein jour, enveloppante)
+  bool flame;  // petite flamme : ponctuelle, mais couleur de feu
+  bool blue_eco;  // objet a eco bleu : famille eco (couleur pleine + depot)
 };
 std::mutex s_emissive_mutex;
 std::map<std::string, std::vector<PcScannedLight>> s_emissive_levels;
@@ -1221,10 +1112,7 @@ const EmissiveRule* emissive_rule_for(const std::string& lower_name) {
   return nullptr;
 }
 
-// 21/09 : une texture circuit ne luit que si elle contient des veines
-// bleues/cyan claires (>= 2 % des texels) ou un voile clair (>= 20 %) — les
-// variantes -glow, les rubans bleus vil1/vil2/vil3, le verre precurseur.
-// Les pierres rouges gravees (sun-, cit-, rol-, cmn-, jngb-) sont ecartees.
+// une texture circuit ne luit que si elle contient des veines bleues/cyan claires (>= 2 % des texels)
 bool emissive_has_glow_pixels(const tfrag3::Texture& tex) {
   u32 total = 0, blue = 0, bright = 0;
   for (u32 px : tex.data) {
@@ -1251,12 +1139,11 @@ bool emissive_has_glow_pixels(const tfrag3::Texture& tex) {
   }
   return blue >= total / 50 + 1 || bright >= total / 5;
 }
-// verdict par nom (rempli par le scan au chargement, lu par le boost du rendu)
+// verdict par nom
 std::mutex s_glow_verdict_mutex;
 std::unordered_map<std::string, bool> s_glow_verdict;
 
-// Couleur moyenne des texels visibles, normalisée pour rester vive : une
-// texture de braises presque noire donne quand même son orange.
+// Couleur moyenne des texels visibles, normalisée pour rester vive
 void emissive_avg_color(const tfrag3::Texture& tex, float out[3]) {
   double sr = 0, sg = 0, sb = 0, sw = 0;
   for (u32 px : tex.data) {
@@ -1265,7 +1152,7 @@ void emissive_avg_color(const tfrag3::Texture& tex, float out[3]) {
       continue;
     }
     float r = (float)(px & 0xff), g = (float)((px >> 8) & 0xff), b = (float)((px >> 16) & 0xff);
-    // pondère par la luminosité : les texels ÉCLATANTS définissent la teinte
+    // pondère par la luminosité
     float w = (0.299f * r + 0.587f * g + 0.114f * b) / 255.f;
     w = w * w;
     sr += r * w;
@@ -1278,10 +1165,7 @@ void emissive_avg_color(const tfrag3::Texture& tex, float out[3]) {
     return;
   }
   float r = (float)(sr / sw) / 255.f, g = (float)(sg / sw) / 255.f, b = (float)(sb / sw) / 255.f;
-  // Teinte creusee (pow) puis normalisee. 2.2 -> 1.5 le 18/08 : a 2.2 la
-  // moindre lampe rendait un ORANGE criard (trop jaune au lieu d'une
-  // belle lumiere). Le blanchiment final se fait au versement,
-  // par famille : une lampe eclaire BLANC CHAUD, la lave reste orange.
+  // Teinte creusee (pow) puis normalisee
   r = std::pow(r, 1.5f);
   g = std::pow(g, 1.5f);
   b = std::pow(b, 1.5f);
@@ -1305,11 +1189,10 @@ void pc_emissive_scan_level(const tfrag3::Level& lvl) {
     float color[3] = {1.f, 1.f, 1.f};
   };
   std::unordered_map<u64, Cell> cells;
-  // cache par texture : règle + couleur moyenne
+  // cache par texture
   std::unordered_map<s32, std::pair<const EmissiveRule*, std::array<float, 3>>> tex_cache;
 
-  // même balayage pour le terrain (tfrag) ET les objets instanciés (TIE) —
-  // lampes, foyers, murs précurseurs… sont du TIE, pas du terrain
+  // même balayage pour le terrain (tfrag) ET les objets instanciés (TIE)
   auto scan_draws = [&](const std::vector<tfrag3::StripDraw>& draws,
                         const std::vector<tfrag3::PreloadedVertex>& verts) {
     for (const auto& draw : draws) {
@@ -1359,9 +1242,7 @@ void pc_emissive_scan_level(const tfrag3::Level& lvl) {
         c.color[1] = col[1];
         c.color[2] = col[2];
       };
-      // Échantillonne 1 sommet sur 4 : les centroïdes n'ont pas besoin de tout,
-      // et les niveaux de lave (canyon de feu, tube) matchent des surfaces
-      // entières — sans ça le fil du chargeur calerait plusieurs secondes.
+      // Échantillonne 1 sommet sur 4
       constexpr u32 kStride = 4;
       if (!draw.runs.empty()) {
         for (const auto& run : draw.runs) {
@@ -1409,7 +1290,6 @@ void pc_emissive_scan_level(const tfrag3::Level& lvl) {
     L.color[1] = c.color[1];
     L.color[2] = c.color[2];
     // un amas dense rayonne plus fort, plafonné à la valeur de sa règle
-    // (diviseur ajusté au stride de 4)
     L.color[3] = c.rule->intensity * std::min(1.f, 0.55f + (float)c.w / 40.f);
     L.weight = (float)c.w;
     L.fire = emissive_pattern_is_fire(c.rule->pattern);
@@ -1435,7 +1315,7 @@ void pc_emissive_scan_level(const tfrag3::Level& lvl) {
   }
   lg::info("[QA] emissives : niveau '{}' -> {} sources ({} amas bruts)", lvl.level_name,
            lights.size(), cells.size());
-  // DEBUG temporaire : si rien ne matche, montrer ce que contiennent les noms
+  // DEBUG temporaire
   if (cells.empty()) {
     std::string sample;
     int shown = 0;
@@ -1476,20 +1356,14 @@ float pc_emissive_texture_boost(const std::string& debug_name) {
     return 0.f;
   }
   if (rule->needs_glow) {
-    // verdict du scan (pixels) ; inconnu = pas de boost
+    // verdict du scan (pixels)
     std::lock_guard<std::mutex> g(s_glow_verdict_mutex);
     auto it = s_glow_verdict.find(lower);
     if (it == s_glow_verdict.end() || !it->second) {
       return 0.f;
     }
   }
-  // dérivé de l'intensité de la règle — INCANDESCENCE : lave ~3.4, braises
-  // ~2.7, lueurs bleues ~2.0 ; au-delà du seuil du bloom, la surface gagne
-  // son halo automatiquement (v1 à ~2.0 : terne, 18/08)
-  // objets trop brillants (18/08) : éclat propre réduit — les sources
-  // se lisent, la LUMIÈRE portée fait le spectacle. Et l'incandescence est
-  // reservee au feu/flammes : des dizaines de cristaux geants auto-illumines
-  // delavaient tout village3 en blanc-lavande (tournee 18/08 soir).
+  // dérivé de l'intensité de la règle
   if (emissive_pattern_is_fire(rule->pattern) || emissive_pattern_is_flame(rule->pattern)) {
     return 1.0f + 0.45f * rule->intensity;
   }
@@ -1499,10 +1373,9 @@ float pc_emissive_texture_boost(const std::string& debug_name) {
 float pc_lava_texture_kind(const std::string& debug_name) {
   std::string lower = debug_name;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-  // croute : sol craquele du canyon de feu et du tube de lave (lave dans les fissures)
+  // croute : sol craquele du canyon de feu et du tube de lave
   static const char* kCroute[] = {"crackedfloor", "cracked-floor", "craked-floor"};
-  // en fusion : nappes et coulees ; fcn-coal = la lave du canyon de feu entre les plaques (les
-  // braseros vil2-coal / vil3-coal des villages n'en font pas partie)
+  // en fusion : nappes et coulees
   static const char* kFusion[] = {"lava-flow", "lava-floor", "thicklava", "magma", "vil3-lava",
                                   "fcn-coal"};
   for (const char* k : kCroute) {
@@ -1522,21 +1395,24 @@ float pc_reflect_texture_kind(const std::string& debug_name) {
   std::string n = debug_name;
   std::transform(n.begin(), n.end(), n.begin(), ::tolower);
   auto has = [&](const char* k) { return n.find(k) != std::string::npos; };
-  // cartes d'environnement : ce sont deja les reflets d'origine (etie, emerc)
+  // cartes d'environnement
   if (has("environment")) {
     return 0.f;
   }
-  // metal use ou couvert (rouille, pique, boue, crasse), tissu ou pelage dores : mats
+  // metal use ou couvert (rouille, pique, boue, crasse), tissu ou pelage dores
   if (has("rust") || has("pitted") || has("mud") || has("dirty") || has("burlap") ||
       has("muse-") || has("snacker") || has("shinywhite")) {
     return 0.f;
+  }
+  // EAU calme du decor (marais)
+  if (n == "swp-water") {
+    return 3.f;
   }
   // vitres, lentilles, lunettes (le cadre d'une vitre est en metal)
   if ((has("glass") && !has("frame")) || has("lens")) {
     return 2.f;
   }
-  // metal poli : le bronze precurseur (lisse ou a motifs : circuits, bandes, boucliers,
-  // anneaux, spheres, plaques murales), metaux precieux, acier
+  // metal poli
   if (has("precursor-metal") || has("precmetal") || has("precursor-circuitpattern") ||
       has("precursor-plainstripe") || has("precursor-shield") || has("precursor-tube") ||
       has("precursor-spheres") || has("precursor-wallplate") || has("precursor-pillars") ||
@@ -1545,8 +1421,13 @@ float pc_reflect_texture_kind(const std::string& debug_name) {
       has("steel")) {
     return 1.f;
   }
-  // metal ordinaire : toles, plaques, rivets, boulons, tuyaux, chaines, charnieres, cuivre
-  // (vert-de-gris), armures, grands anneaux precurseurs
+  // autres pieces de bronze precurseur dont le nom ne dit pas "metal"
+  if (has("warpgate-ring") || has("precursor-plat") || has("plat-eco") ||
+      has("temp-precursor") || has("precursor-pusher") || has("irisdoor") ||
+      has("rolling-precursor")) {
+    return 1.f;
+  }
+  // metal ordinaire
   if (has("metal") || has("pipe") || has("rivet") || has("bolt") || has("chain") ||
       has("plating") || has("hinge") || has("screw") || has("glass-frame") || has("copper") ||
       has("armor") || has("stonehenge")) {
@@ -1575,15 +1456,9 @@ void pc_emissive_fold_into_all() {
         s_all_pos[j * 4 + k] = L.pos[k];
         s_all_color[j * 4 + k] = L.color[k];
       }
-      // encodage : -(i+16) = VRAI FEU (pleine puissance jour et nuit — la lave
-      // ne s'eteint pas au soleil) ; -(i+64) = LUMINAIRE (lampe, lueur, cristal,
-      // eco) qui s'attenue fortement en plein jour. Le shader lit le seuil -40.
-      // BLANC CHAUD : une lampe, une lueur, un cristal eclairent presque
-      // blanc (teinte a 40 %) ; le vrai feu garde son orange (teinte a 82 %)
+      // encodage : -(i+16) = VRAI FEU
       {
-        // 19/08 : dans le modele lineaire, la teinte se rend proprement —
-        // les luminaires du monde (cristaux, lueurs precurseurs) colorent
-        // selon LEUR texture (0.75), le feu garde son orange (0.85)
+        // dans le modele lineaire, la teinte se rend proprement
         float keep = L.fire ? 0.85f : (L.flame ? 0.70f : 0.75f);
         for (int k = 0; k < 3; k++) {
           float c0 = s_all_color[j * 4 + k];
@@ -1610,7 +1485,7 @@ void OceanSim::step_and_export(float* dst_1024) {
   if (gain < 0.f) {
     return;  // bypass: the engine's original wave loop is left untouched
   }
-  // ---- self-calibration: learn the amplitude the game just produced --------
+  // --- self-calibration: learn the amplitude the game just produced
   float mn = 1e30f, mx = -1e30f, mean = 0.f;
   for (int i = 0; i < N * N; i++) {
     mn = std::min(mn, dst_1024[i]);
@@ -1628,7 +1503,7 @@ void OceanSim::step_and_export(float* dst_1024) {
              mean, native_amp);
   }
 
-  // ---- wave equation over a wrapping grid ---------------------------------
+  // --- wave equation over a wrapping grid
   constexpr float c2 = 0.22f;  // propagation speed^2 (stable below 0.25)
   constexpr float damping = 0.995f;
   float next[N * N];
@@ -1674,7 +1549,7 @@ void OceanSim::step_and_export(float* dst_1024) {
     cur[((jz + N) % N) * N + ((jx + N) % N)] -= 0.9f * (g_grass_push[3] - 0.3f);
   }
 
-  // ---- write back, matched to the game's own amplitude --------------------
+  // --- write back, matched to the game's own amplitude
   float smn = 1e30f, smx = -1e30f;
   for (int i = 0; i < N * N; i++) {
     smn = std::min(smn, cur[i]);
@@ -1687,9 +1562,7 @@ void OceanSim::step_and_export(float* dst_1024) {
   const float scale = (native_amp * gain) / sim_amp;
   const float sim_mid = 0.5f * (smx + smn);
 
-  // This grid also answers the height queries used for BUOYANCY, so it is
-  // smoothed before being written: sharp per-cell spikes would make anything
-  // floating on the water jitter (they did).
+  // This grid also answers the height queries used for BUOYANCY
   float smooth[N * N];
   for (int y = 0; y < N; y++) {
     for (int x = 0; x < N; x++) {
@@ -1708,18 +1581,7 @@ void OceanSim::step_and_export(float* dst_1024) {
 
 }
 
-// ---------------------------------------------------------------------------
-// PC-REMAKE: characters (merc) receive sun shadows.
-//
-// Merc vertices arrive in VIEW space (the bone matrices bake the camera in),
-// while the shadow map is indexed in world space. The background pipeline gives
-// us the combined matrix A (perspective * view, as pc_camera) and the camera
-// translation T, and merc gives us the perspective matrix P. From
-//     clip = -(A * [world - T, 1])   and   clip = P * view_pos
-// it follows that
-//     light_clip = light_vp * Translate(T) * (-A^-1) * P * view_pos
-// which collapses into the single matrix computed here.
-// ---------------------------------------------------------------------------
+// characters (merc) receive sun shadows
 namespace {
 // column-major 4x4 helpers
 void mat_mul(const float* a, const float* b, float* out) {
@@ -1819,21 +1681,20 @@ bool compute_sun_light_from_camera(const math::Vector4f* camera_matrix,
   float step2[16];
   mat_mul(TR, step1, step2);  // Translate(T) * ...
 
-  // DOUBLE TAMPON : merc ÉCHANTILLONNE la carte → matrice de LECTURE (celle de
-  // la carte complète de la frame précédente), jamais celle des casteurs
+  // DOUBLE TAMPON
   mat_mul((g_sun_shadow.pingpong_primed && !g_sun_shadow.cache_mode) ? g_sun_shadow.receive_vp
                                                                      : g_sun_shadow.light_vp,
           step2, out16);
   return true;
 }
 
-// free-function bridge for the kernel binding (no graphics types in kmachine)
+// free-function bridge for the kernel binding
 void ocean_sim_set_gain(float g) {
   g_ocean_sim.gain = g;
 }
 
 void ocean_sim_step_and_export(float* dst_1024) {
-  // A/B switch: PC_REMAKE_OCEAN=0 keeps the original 2001 wave loop.
+  // A/B switch: PC_REMAKE_OCEAN=0 keeps the original 2001 wave loop
   static int s_enabled = -1;
   if (s_enabled < 0) {
     const char* e = getenv("PC_REMAKE_OCEAN");
@@ -1862,8 +1723,7 @@ void pc_normal_target(bool on) {
 void (*g_sun_shadow_merc_hook)(void* shader_lib) = nullptr;
 
 bool SunShadowMap::enabled() const {
-  // 20/10 : la carte est aussi rendue pour les rayons de soleil (cabane : force d'ombre 0,
-  // aucun receveur assombri) (original : return g_sun_shadow_params[3] > 0.001f;)
+  // la carte est aussi rendue pour les rayons de soleil
   return g_sun_shadow_params[3] > 0.001f || g_shaft_amt > 0.001f;
 }
 
@@ -1872,45 +1732,39 @@ void SunShadowMap::maybe_update_for_frame(const float* cam_trans, unsigned long 
     return;
   }
   last_frame_stamp = frame_idx;
-  // DOUBLE TAMPON (17/08, ombres qui disparaissaient et revenaient en
-  // mouvement) : la carte écrite la frame DERNIÈRE devient la carte de LECTURE
-  // (avec receive_vp = la matrice qui l'a rendue), l'autre devient la cible des
-  // casteurs de cette frame. Les receveurs lisent donc toujours une carte
-  // COMPLÈTE et cohérente — plus jamais de trou d'une frame quand la matrice
-  // bouge (re-ancrage ou soleil). Incompatible avec l'ancien cache statique
-  // (cache_mode, off par défaut), qui garde alors l'ancien comportement.
+  // DOUBLE TAMPON (ombres qui disparaissaient et revenaient en mouvement)
   if (ready && !cache_mode) {
     std::swap(tex, static_tex);
     std::swap(fbo, static_fbo);
     std::memcpy(receive_vp, light_vp, sizeof(receive_vp));
     pingpong_primed = true;
   }
-  // ANCRAGE : ne re-poser la matrice que sur événement rare — c'est ce qui rend
-  // les ombres immobiles au sol pendant les déplacements du joueur.
+  // ANCRAGE : ne re-poser la matrice que sur événement rare
   constexpr float kMeter = 4096.f;
-  const float kMoveH = 8.f * kMeter;   // errance horizontale tolérée autour de l'ancre
+  const float kMoveH = 8.f * kMeter;  // errance horizontale tolérée autour de l'ancre
   const float kMoveV = 12.f * kMeter;  // errance verticale tolérée
-  // POSITION ANCRÉE, SOLEIL FLUIDE (v3) : les paliers de
-  // soleil provoquaient une re-pose GLOBALE visible toutes les ~3 s (le soleil
-  // du jeu est rapide). La vérité d'ingénierie : seule la POSITION doit être
-  // gelée (c'est elle qui faisait ramper les ombres avec le joueur) ; le
-  // soleil, lui, doit être suivi CONTINÛMENT — les ombres tournent alors
-  // lentement et sans à-coups, comme dans la réalité.
-  bool need = !ready || !anchor_valid;
-  if (!need) {
-    const float dx = cam_trans[0] - anchor_pos[0];
-    const float dz = cam_trans[2] - anchor_pos[2];
-    need = (dx * dx + dz * dz > kMoveH * kMoveH) ||
-           (std::fabs(cam_trans[1] - anchor_pos[1]) > kMoveV);
-  }
-  if (need) {
-    anchor_pos[0] = cam_trans[0];
+  // POSITION ANCRÉE, SOLEIL FLUIDE (v3)
+  (void)kMoveH;
+  (void)kMoveV;
+  {
+    static float fwd[2] = {0.f, 0.f};
+    // direction du regard
+    float fx = g_clip_from_world[3], fz = g_clip_from_world[11];
+    const float fl = std::sqrt(fx * fx + fz * fz);
+    if (fl > 1e-6f && g_world_from_clip_ok) {
+      fx /= fl;
+      fz /= fl;
+      const float k = anchor_valid ? 0.04f : 1.f;
+      fwd[0] += (fx - fwd[0]) * k;
+      fwd[1] += (fz - fwd[1]) * k;
+    }
+    const float avance = 50.f * kMeter;
+    anchor_pos[0] = cam_trans[0] + fwd[0] * avance;
     anchor_pos[1] = cam_trans[1];
-    anchor_pos[2] = cam_trans[2];
+    anchor_pos[2] = cam_trans[2] + fwd[1] * avance;
     anchor_valid = true;
   }
-  // matrice reconstruite chaque frame : position = l'ANCRE (stable), soleil =
-  // continu ; la translation reste ancrée au texel dans update_matrix
+  // matrice reconstruite chaque frame
   update_matrix(anchor_pos);
 }
 
@@ -1932,8 +1786,7 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, tex, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
-    // seconde carte : partenaire du DOUBLE TAMPON (lue par les shaders après
-    // échange) — paramètres identiques à la première, compare mode compris
+    // seconde carte
     glGenTextures(1, &static_tex);
     glBindTexture(GL_TEXTURE_2D, static_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kSize, kSize, 0, GL_DEPTH_COMPONENT,
@@ -1953,10 +1806,7 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
     ready = true;
   }
 
-  // Sun direction: sheared top-down projection. The XZ footprint is axis
-  // aligned (rock solid); sunlight slant comes from shearing X/Z by the sun's
-  // horizontal components as depth decreases. Equivalent to a tilted ortho for
-  // moderate elevations and much harder to get wrong.
+  // Sun direction: sheared top-down projection
   float dx = g_sun_shadow_params[0], dy = g_sun_shadow_params[1], dz = g_sun_shadow_params[2];
   if (dy > -0.2f) {
     dy = -0.2f;  // keep the sun meaningfully above the horizon
@@ -1966,34 +1816,24 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
   float shear_z = -dz / dy;
 
   constexpr float kMeter = 4096.f;
-  // 120 m de demi-côté (17/08, coupure visible — la coupure des ombres se voyait
-  // depuis que la vue porte loin) ; texel ≈ 5,9 cm à 4096², le PCF lisse
-  const float extent = 120.f * kMeter;     // half-size of the shadowed square
-  const float up = 150.f * kMeter;         // top of the depth volume above camera
+  // 120 m de demi-côté
+  const float extent = 150.f * kMeter;  // half-size of the shadowed square
+  const float up = 150.f * kMeter;  // top of the depth volume above camera
   const float depth_range = 300.f * kMeter;
 
   float cx = cam_trans[0], cy = cam_trans[1], cz = cam_trans[2];
 
-  // Only the vertical is snapped here. Snapping cx/cz in WORLD space was the
-  // bug: the horizontal light-space offset is not cx/cz, it is
-  // (shear * top_y - c), and top_y moves with the camera height. Snapping one
-  // and not the other left a sub-texel residue that shifted every frame, which
-  // is what made the shadows swim with the camera. The real offset is snapped
-  // further down instead, in light space, where the texel grid actually lives.
+  // Only the vertical is snapped here
   const float texel = (2.f * extent) / (float)kSize;
   cy = std::floor(cy / (texel * 4.f)) * (texel * 4.f);  // coarser vertical grid
 
-  // light space:
-  //   u = (wx + shear_x * (top_y - wy) - cx) / extent
-  //   v = (wz + shear_z * (top_y - wy) - cz) / extent
-  //   d = (top_y - wy) / depth_range * 2 - 1     (near = high above)
+  // light space: u = (wx + shear_x * (top_y - wy) - cx) / extent v = (wz + shear_z * (top_y - wy) - cz)
   const float top_y = cy + up;
   const float su = 1.f / extent;
   const float sv = 1.f / extent;
   const float sd = 2.f / depth_range;
 
-  // column-major: clip = M * world
-  // u = su*wx - su*shear_x*wy + 0*wz + su*(shear_x*top_y - cx)
+  // column-major: clip = M * world u = su*wx - su*shear_x*wy + 0*wz + su*
   light_vp[0] = su;
   light_vp[1] = 0.f;
   light_vp[2] = 0.f;
@@ -2006,15 +1846,7 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
   light_vp[9] = sv;
   light_vp[10] = 0.f;
   light_vp[11] = 0.f;
-  // Snap the translation to whole texels of the shadow map, in the [-1,1] clip
-  // space it is expressed in. This is what pins the sampling grid to the world:
-  // the map now steps texel by texel as the camera moves instead of sliding
-  // continuously underneath the geometry.
-  // Centre the volume at the CAMERA's height, not at the top of the depth
-  // volume. u = su*(wx - cx) + su*shear*(top_y - wy); referencing the offset to
-  // top_y meant that as soon as the sun tilted, the whole footprint slid by
-  // shear * (top_y - cy) — up to three map widths. Shadows then only existed
-  // near noon, when the shear is zero.
+  // Snap the translation to whole texels of the shadow map, in the [-1,1] clip space it is expressed in
   const float ndc_texel = 2.f / (float)kSize;
   float off_u = su * (shear_x * cy - cx);
   float off_v = sv * (shear_z * cy - cz);
@@ -2027,8 +1859,7 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
 
   rendered_this_frame = false;
 
-  // PC-REMAKE perf: static-cache bookkeeping. A rebuild that started last frame
-  // is complete now (both TIE and TFRAG replayed into it during the frame).
+  // perf: static-cache bookkeeping
   if (static_pass_cleared) {
     static_dirty = false;
     static_ready = true;
@@ -2036,15 +1867,11 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
     static_pass_cleared = false;
   }
   frames_since_static++;
-  // dirty when the texel-snapped matrix moved, plus a safety refresh so level
-  // streaming (new chunks) reaches the cache within a couple of seconds
+  // dirty when the texel-snapped matrix moved
   if (memcmp(light_vp, cached_vp, sizeof(light_vp)) != 0 || frames_since_static > 120) {
     static_dirty = true;
   }
-  // Le cache est DÉSACTIVÉ par défaut : à chaque franchissement de texel par la
-  // caméra, une image mélangeait cache périmé et matrice fraîche → clignotement,
-  // et la mesure n'a montré AUCUN gain fps. Replays complets
-  // chaque frame = le chemin éprouvé. `touch /tmp/shadow_cache` pour ré-essayer.
+  // Le cache est DÉSACTIVÉ par défaut
   static int cache_check = 0;
   if ((cache_check++ & 63) == 0) {
     if (FILE* f = fopen("/tmp/shadow_cache", "r")) {
@@ -2058,13 +1885,13 @@ void SunShadowMap::update_matrix(const float* cam_trans) {
     static_dirty = true;
     static_ready = false;  // le blit du cache saute aussi : clear + replays complets
   }
-  // 14/10 : A/B de la passe differee (une lecture de fichier toutes les 64 images)
+  // A/B de la passe differee (une lecture de fichier toutes les 64 images)
   if ((cache_check & 63) == 1) {
     qa_immediate = fs::exists("/tmp/qa_shadow_immediate");
   }
 }
 
-// Depth-only raster state shared by every shadow pass.
+// Depth-only raster state shared by every shadow pass
 static void shadow_pass_raster_state() {
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
@@ -2084,21 +1911,19 @@ void SunShadowMap::ensure_frame_init(void* shader_lib) {
   int saved_vp[4] = {0, 0, 0, 0};
   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &saved_fbo);
   glGetIntegerv(GL_VIEWPORT, saved_vp);
-  // Unbind from the receive unit while we write (feedback loop = flicker).
+  // Unbind from the receive unit while we write (feedback loop = flicker)
   glActiveTexture(GL_TEXTURE14);
   glBindTexture(GL_TEXTURE_2D, 0);
   glActiveTexture(GL_TEXTURE0);
 
-  // Seed the working map with the cached static scenery...
+  // Seed the working map with the cached static scenery..
   if (static_ready) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, static_fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
     glBlitFramebuffer(0, 0, kSize, kSize, 0, 0, kSize, kSize, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
   } else {
-    // ...or clear it while the cache does not exist yet. The game runs the
-    // PS2's REVERSED depth convention and leaves its global clear depth at 0 —
-    // force 1 and restore (see the static replay clear as well).
+    // ...or clear it while the cache does not exist yet
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     GLfloat saved_clear_depth = 0.f;
     glGetFloatv(GL_DEPTH_CLEAR_VALUE, &saved_clear_depth);
@@ -2106,7 +1931,7 @@ void SunShadowMap::ensure_frame_init(void* shader_lib) {
     glClear(GL_DEPTH_BUFFER_BIT);
     glClearDepth(saved_clear_depth);
   }
-  // Dynamic character/prop casters, poses from the previous (invisible) frame.
+  // Dynamic character/prop casters, poses from the previous (invisible) frame
   glViewport(0, 0, kSize, kSize);
   shadow_pass_raster_state();
   if (g_sun_shadow_merc_hook) {
@@ -2135,14 +1960,13 @@ bool SunShadowMap::begin_static_replay(void* shader_lib) {
   if (cache_mode) {
     glBindFramebuffer(GL_FRAMEBUFFER, static_fbo);
   } else {
-    // chemin éprouvé : replays directs dans la carte reçue par les shaders
+    // chemin éprouvé
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
   }
   glViewport(0, 0, kSize, kSize);
   shadow_pass_raster_state();
   if (cache_mode && !static_pass_cleared) {
-    // first static replay of the rebuild: clear the cache and remember the
-    // matrix it is built for
+    // first static replay of the rebuild: clear the cache and remember the matrix it is built for
     GLfloat saved_clear_depth = 0.f;
     glGetFloatv(GL_DEPTH_CLEAR_VALUE, &saved_clear_depth);
     glClearDepth(1.0);
@@ -2180,8 +2004,7 @@ void SunShadowMap::begin_dynamic_pass(void* shader_lib) {
 void SunShadowMap::end_depth_pass() {
   // debug: dump the depth map to a PGM when the flag file exists
   {
-    // PERF 25/08 : le fopen tournait A CHAQUE passe (plusieurs par frame) —
-    // un syscall par passe pour un outil de debug. Sonde 1 passe sur 64.
+    // PERF le fopen tournait A CHAQUE passe (plusieurs par frame)
     static int qa_gate = 0;
     static int cool = 0;
     if ((qa_gate++ & 63) != 0) {
@@ -2281,7 +2104,7 @@ void SunShadowMap::flush_deferred(void* shader_lib, unsigned long long frame_idx
 
 void SunShadowMap::bind_disabled(unsigned int program) {
   if (!ready) {
-    // cree les textures/FBO (jamais fait si le jeu demarre dans un interieur)
+    // cree les textures/FBO
     float origin[3] = {0.f, 0.f, 0.f};
     update_matrix(origin);
   }
@@ -2294,11 +2117,9 @@ void SunShadowMap::bind_disabled(unsigned int program) {
 
 void SunShadowMap::bind_for_receive(unsigned int program) const {
   glActiveTexture(GL_TEXTURE14);
-  // DOUBLE TAMPON : on lit la carte COMPLÈTE de la frame précédente (static_tex
-  // après l'échange du début de frame) avec la matrice qui l'a rendue
+  // DOUBLE TAMPON
   glBindTexture(GL_TEXTURE_2D, (pingpong_primed && !cache_mode) ? static_tex : tex);
-  // 21/09 QA : `touch /tmp/dump_shadow_rx` -> dump de la carte telle que LUE par
-  // les receveurs (complete, frame precedente) dans /tmp/shadowmap_rx.pgm
+  // QA : `touch /tmp/dump_shadow_rx` -> dump de la carte telle que LUE par les receveurs
   {
     static int gate = 0;
     if ((gate++ & 63) == 0) {
@@ -2448,16 +2269,7 @@ DoubleDraw setup_opengl_from_draw_mode(DrawMode mode, u32 tex_unit, bool mipmap)
                     mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   } else {
-    // PC-REMAKE 25/08 (rochers lointains completement bugges) :
-    // en mode sans filtrage (choix PS2 des artistes), la minification etait
-    // en GL_NEAREST SANS mipmap — a 500 m un pixel d'ecran couvre des dizaines
-    // de texels, le tirage point-a-point donnait un moire en croisillons et une
-    // couleur delavee sur tout l'horizon. La MAGNIFICATION reste NEAREST (le
-    // rendu net voulu de pres est intact) ; seule la minification lointaine
-    // passe par les mipmaps.
-    // PC-REMAKE : avec les textures HD, le tirage au pixel le plus proche ne rendait plus le net voulu
-    // par les artistes mais des CARRES visibles de pres (sable, murs). Agrandissement lisse.
-    // (original : MIN mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST ; MAG GL_NEAREST)
+    // (rochers lointains completement bugges)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                     mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -2502,14 +2314,7 @@ DoubleDraw setup_opengl_from_draw_mode(DrawMode mode, u32 tex_unit, bool mipmap)
     }
   }
 
-  // PC-REMAKE: smooth alpha-tested edges (foliage) by converting alpha into
-  // MSAA coverage — this is what makes grass blades look clean instead of
-  // stair-stepped. No-op when MSAA is off. Explicitly disabled otherwise so
-  // the state never leaks into non-cutout draws.
-  // SEULEMENT les vraies découpes (seuil ≥ 0.45, feuillage/herbe) : les draws à
-  // seuil BAS utilisent leur alpha comme simple test — le convertir en
-  // couverture rendait caisses, piliers et cheveux SEMI-TRANSPARENTS en MSAA 4
-  // (16/08 ; invisible sans MSAA 4).
+  // smooth alpha-tested edges (foliage) by converting alpha into MSAA coverage
   if (alpha_min >= 0.45f && mode.get_depth_write_enable()) {
     glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
   } else {
@@ -2602,7 +2407,7 @@ std::array<math::Vector4f, 4> make_new_cam_mat(const math::Vector4f cam_T_w[4],
   return result;
 }
 
-// PC-REMAKE : SCULPTURE DU DECOR (voir background_common.h)
+// SCULPTURE DU DECOR (voir background_common.h)
 namespace {
 std::unordered_map<GLuint, std::pair<GLuint, const PcSculptMap*>> s_sculpt_tex;  // thread GL
 bool sculpt_off_launch() {
@@ -2676,7 +2481,7 @@ void pc_sculpt_bind(GLuint color_tex, GLuint program) {
   glUniform1f(pc_uniform_loc(program, "sculpt_amp"), amp);
 }
 
-// PC-REMAKE : CARTES DE NORMALES DES SOLS (voir background_common.h)
+// CARTES DE NORMALES DES SOLS (voir background_common.h)
 namespace {
 struct PcNormalMap {
   GLuint tex = 0;
@@ -2763,7 +2568,7 @@ void pc_normal_bind(GLuint color_tex, GLuint program) {
   glUniform1f(pc_uniform_loc(program, "nrm_amt"), dose);
 }
 
-// PC-REMAKE : COUCHE DE DETAIL DES SOLS (voir background_common.h)
+// COUCHE DE DETAIL DES SOLS (voir background_common.h)
 namespace {
 GLuint s_det_tex = 0;
 bool s_det_tried = false;
@@ -2780,7 +2585,7 @@ bool det_off_now() {
   }
   return off;
 }
-// 0 sable, 1 terre, 2 herbe, 3 roche ; -1 = pas un sol
+// 0 sable, 1 terre, 2 herbe, 3 roche
 int det_kind_for_name(const std::string& debug_name) {
   if (pc_detail_texture_amount(debug_name) <= 0.f) {
     return -1;
@@ -2796,6 +2601,10 @@ int det_kind_for_name(const std::string& debug_name) {
     return false;
   };
   if (has({"snow", "lava", "crystal", "fringe"})) {
+    return -1;
+  }
+  // planchers en bois
+  if (has({"wood", "plank", "board", "deck", "carpet", "rug", "tile"})) {
     return -1;
   }
   if (has({"leafyground", "grass", "moss"})) {
@@ -2889,9 +2698,7 @@ void pc_det_bind(GLuint color_tex, GLuint program) {
   glUniform1i(pc_uniform_loc(program, "det_kind"), kind);
 }
 
-// PC-REMAKE : SOLS — 1 sol (sable, terre, chemin, neige : relief adouci, il scintillait), 2 sol d'herbe
-// (vert etalonne : la texture d'origine est un vert-jaune tres sature que la lumiere refaite poussait
-// vers un citron pale, presque blanc en plein jour)
+// SOLS — 1 sol
 float pc_sol_kind(const std::string& debug_name) {
   std::string n = debug_name;
   std::transform(n.begin(), n.end(), n.begin(), ::tolower);
@@ -2918,8 +2725,7 @@ bool pc_vert_off() {
   return off;
 }
 
-// PC-REMAKE : PALMES — dose du pli et du relief des folioles (/tmp/pc_fronde : dose d'essai,
-// /tmp/qa_no_fronde : coupe) ; une texture de palme = nervure au bord s = 0
+// PALMES — dose du pli et du relief des folioles
 float pc_fronde_dose() {
   static int poll = 0;
   static float dose = 1.f;
@@ -2943,7 +2749,7 @@ bool pc_is_palm_leaf_texture(const std::string& n) {
          n.find("frond") != std::string::npos;
 }
 
-// PC-REMAKE : bord des couches de sol guide par la texture — /tmp/qa_no_solmel = coupe (A/B)
+// bord des couches de sol guide par la texture
 bool pc_sol_melange_off() {
   static int poll = 0;
   static bool off = false;
@@ -2957,7 +2763,7 @@ bool pc_sol_melange_off() {
   return off;
 }
 
-// 22/10 : dose du RELIEF DES SURFACES (tfrag3.frag, relief_amt) — /tmp/qa_no_relief = coupe (A/B)
+// dose du RELIEF DES SURFACES (tfrag3.frag, relief_amt)
 float g_relief_amt = 1.f;
 float pc_relief_amount() {
   static int poll = 0;
@@ -2988,11 +2794,9 @@ void first_tfrag_draw_setup(const GoalBackgroundCameraData& settings,
   glUniform1f(pc_uniform_loc(id, "sol_kind"), 0.f);
   glUniform1f(pc_uniform_loc(id, "fronde_pli"), 0.f);
   glUniform1f(pc_uniform_loc(id, "fronde_pli_f"), 0.f);
-  glUniform1f(pc_uniform_loc(id, "nrm_amt"), 0.f);  // PC-REMAKE : cartes de normales des sols
-  glUniform1i(pc_uniform_loc(id, "det_kind"), -1);  // PC-REMAKE : detail des sols
-  // le tableau de detail a toujours son unite : laisse sur l'unite 0 (celle de tex_T0, type
-  // different), il rendait les draws invalides dans les programmes qui ne passent pas par
-  // pc_det_bind (sol de neige deformable : la neige ne se dessinait plus du tout)
+  glUniform1f(pc_uniform_loc(id, "nrm_amt"), 0.f);  // cartes de normales des sols
+  glUniform1i(pc_uniform_loc(id, "det_kind"), -1);  // detail des sols
+  // le tableau de detail a toujours son unite
   glUniform1i(pc_uniform_loc(id, "det_tex"), 22);
   glUniform1i(pc_uniform_loc(id, "gfx_hack_no_tex"), Gfx::g_global_settings.hack_no_tex);
   glUniform1i(pc_uniform_loc(id, "decal"), false);
@@ -3249,7 +3053,7 @@ void shadow_vis_from_light(const float* vp,
                            const std::vector<tfrag3::VisNode>& nodes,
                            std::vector<u8>& out) {
   out.resize(nodes.size());
-  // rayon de la sphere exprime dans chaque axe de l'espace lumiere (borne sure)
+  // rayon de la sphere exprime dans chaque axe de l'espace lumiere
   const float ku = std::fabs(vp[0]) + std::fabs(vp[4]) + std::fabs(vp[8]);
   const float kv = std::fabs(vp[1]) + std::fabs(vp[5]) + std::fabs(vp[9]);
   const float kd = std::fabs(vp[2]) + std::fabs(vp[6]) + std::fabs(vp[10]);
@@ -3624,11 +3428,7 @@ u32 make_all_visible_index_list(std::pair<int, int>* group_out,
   return idx_buffer_ptr;
 }
 
-// PC-REMAKE: inverse of the exact matrix the background vertex shaders use, so
-// the post pass can turn (screen uv, depth) back into a world position. Built
-// from the same `newcam` that first_tfrag_draw_setup uploads as `pc_camera`,
-// including the two quirks of that shader: the whole thing is negated, the w of
-// the translation column is dropped, and y is scaled by SCISSOR_ADJUST.
+// inverse of the exact matrix the background vertex shaders use, so the post pass can turn
 float g_world_from_clip[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 float g_clip_from_world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 bool g_world_from_clip_ok = false;

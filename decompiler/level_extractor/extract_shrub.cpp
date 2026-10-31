@@ -16,7 +16,7 @@
 #include "decompiler/level_extractor/extract_common.h"
 #include "decompiler/level_extractor/level_editor.h"
 
-// Windows (MSVC, clang-cl) ne definit M_PI qu'avec _USE_MATH_DEFINES.
+// Windows (MSVC, clang-cl) ne definit M_PI qu'avec _USE_MATH_DEFINES
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -71,8 +71,7 @@ struct ShrubInstanceInfo {
   u32 color_idx;
   std::array<math::Vector4f, 4> mat;
   math::Vector4f bsphere;
-  // PC-REMAKE 13/10 (editeur de niveaux) : origine de l'instance
-  // 0 = artistes, 1 = touffe clonee, 2 = tapis d'herbe, 3 = ajout de l'editeur
+  // (editeur de niveaux)
   u8 src = 0;
   int add_id = 0;
 };
@@ -80,7 +79,7 @@ struct ShrubInstanceInfo {
 struct ShrubProtoInfo {
   std::vector<ShrubFrag> frags;
   std::vector<ShrubInstanceInfo> instances;
-  std::string name;  // PC-REMAKE : le semeur et les remakes s'y réfèrent
+  std::string name;  // le semeur et les remakes s'y réfèrent
 };
 
 std::string debug_dump_proto_to_obj(const ShrubProtoInfo& proto) {
@@ -339,11 +338,7 @@ ShrubProtoInfo extract_proto(const shrub_types::PrototypeBucketShrub& proto,
   return result;
 }
 
-// PC-REMAKE: the beach pebbles are flat sprite quads (proto names containing
-// "pebble"). Rebuild each sprite quad as a small squashed 3D pebble with the
-// SAME footprint and height, keeping the original texture (UVs pinned inside
-// the stone of that very quad in the atlas) and the designer tint (mean quad
-// color, shaded by the fake normal so the pebble reads as round).
+// the beach pebbles are flat sprite quads (proto names containing "pebble")
 namespace {
 u32 pebble_hash(u32 x) {
   x ^= x >> 16;
@@ -407,7 +402,7 @@ void remake_pebble_proto(ShrubProtoInfo& proto, const std::string& name) {
   out.settings = template_draw->settings;
   out.start_vtx_idx = 0;
   auto& vs_out = out.vertices;
-  const int R = 8;   // latitude bands
+  const int R = 8;  // latitude bands
   const int S = 16;  // segments around — a 16-gon silhouette reads as round
   for (size_t qi = 0; qi < quads.size(); qi++) {
     const auto& q = quads[qi];
@@ -420,10 +415,7 @@ void remake_pebble_proto(ShrubProtoInfo& proto, const std::string& name) {
     const float ybot = (std::abs(q.mn.y()) <= std::abs(q.mx.y())) ? q.mn.y() : q.mx.y();
     const float ytop = (ybot == q.mn.y()) ? q.mx.y() : q.mn.y();
     const float up = (ytop >= ybot) ? 1.f : -1.f;
-    // vrai galet : ellipsoïde asymétrique (dessous plat enterré, dessus bombé),
-    // émis en SOUPE DE TRIANGLES explicites (adc F,F,T par face) — les formes
-    // triangle persistaient à travers 3 maillages en rubans, on n'accorde
-    // plus aucune confiance à l'interprétation des strips en aval.
+    // vrai galet
     const u32 hsh = pebble_hash((u32)qi * 977u + (u32)name.size() * 131u);
     const float ang0 = (hsh & 255) * (2.f * (float)M_PI / 256.f);
     const float elong = 1.1f + ((hsh >> 8) & 127) / 127.f * 0.4f;
@@ -473,11 +465,7 @@ void remake_pebble_proto(ShrubProtoInfo& proto, const std::string& name) {
            frag.draws.front().vertices.size());
 }
 
-// PC-REMAKE (17/08, herbe du village à la place des
-// touffes noires) : les dômes palmbush de la PLAGE deviennent des
-// touffes d'herbe façon village — deux quads en croix par dôme source, UV sur
-// le rect st du quad (le créneau de texture est ré-habillé en herbe du village
-// côté texture_replacements). Soupe de triangles (adc F,F,T), comme les galets.
+// (herbe du village à la place des touffes noires)
 void remake_bush_to_grass_proto(ShrubProtoInfo& proto,
                                 const std::string& name,
                                 const ShrubDraw* adgif_from = nullptr) {
@@ -543,8 +531,7 @@ void remake_bush_to_grass_proto(ShrubProtoInfo& proto,
     const float ytop = (ybot == q.mn.y()) ? q.mx.y() : q.mn.y();
     const u32 hsh = pebble_hash((u32)qi * 613u + 41u);
     const float ang = (hsh & 255) * ((float)M_PI / 256.f);
-    // GROSSES touffes :
-    // pleine hauteur du dôme et empreinte large
+    // GROSSES touffes
     const float h = std::max(std::abs(ytop - ybot) * 1.0f, 1536.f);
     const float w = std::max(rx, rz) * 1.05f;
     const float y0 = ybot;
@@ -561,11 +548,10 @@ void remake_bush_to_grass_proto(ShrubProtoInfo& proto,
     auto emit_cross = [&](float a) {
       const float dx = std::cos(a) * w;
       const float dz = std::sin(a) * w;
-      // plein cadre (0..4096 en unités st shrub) quand la texture est le
-      // créneau ré-habillé ; sinon le rect st du quad source
+      // plein cadre (0..4096 en unités st shrub) quand la texture est le créneau ré-habillé
       const math::Vector2f s0 = full_uv ? math::Vector2f(0.f, 0.f) : q.st_mn;
       const math::Vector2f s1 = full_uv ? math::Vector2f(4096.f, 4096.f) : q.st_mx;
-      // deux triangles en soupe (adc F,F,T) — haut de touffe sur st_mn.y
+      // deux triangles en soupe (adc F,F,T)
       push(cx - dx, y0, cz - dz, s0.x(), s1.y(), false);
       push(cx - dx, y1, cz - dz, s0.x(), s0.y(), false);
       push(cx + dx, y0, cz + dz, s1.x(), s1.y(), true);
@@ -585,15 +571,10 @@ void remake_bush_to_grass_proto(ShrubProtoInfo& proto,
 }
 }  // namespace
 
-// PC-REMAKE: grass densification. Prototypes whose name matches this list get
-// extra jittered clones baked into the level at extraction time, so fields read
-// as lush instead of sparse. Deterministic (hashed from instance position) so
-// every extraction produces identical levels.
+// grass densification
 namespace {
 bool is_densify_shrub_proto(const std::string& name) {
-  // PC-REMAKE : jamais la couronne des petits palmiers ("palmplant-top" contient "plant" : chaque
-  // petit palmier recevait deux couronnes de feuilles en plus). "bushpalm" (herbe du village)
-  // reste densifie.
+  // jamais la couronne des petits palmiers
   if (name.find("palmplant") != std::string::npos) {
     return false;
   }
@@ -608,13 +589,7 @@ bool is_densify_shrub_proto(const std::string& name) {
   return false;
 }
 
-// PC-REMAKE (17/08) : TRANSPLANTATION du proto d'herbe du village (l'herbe
-// de chez Samos) vers d'autres niveaux. Le village sérialise son proto
-// dominant dans un fichier texte ; la plage le charge et l'utilise tel quel
-// (géométrie en éventail + texture village via le combo global). Le fichier
-// est GÉNÉRÉ chez le joueur, dans decompiler_out (rien du jeu n'est distribué) ;
-// extract_all_levels extrait le village avant les autres niveaux pour qu'il
-// existe quand la plage le lit.
+// : TRANSPLANTATION du proto d'herbe du village (l'herbe de chez Samos) vers d'autres niveaux
 std::string village_grass_file() {
   return (file_util::get_jak_project_dir() / "decompiler_out" / "jak1" /
           "village_grass_proto.txt")
@@ -631,8 +606,7 @@ void dump_grass_proto(const ShrubProtoInfo& proto) {
   for (auto& frag : proto.frags) {
     for (auto& d : frag.draws) {
       fprintf(f, "draw %u\n", d.settings.combo_tex);
-      // le mode de dessin est re-dérivé du proto hôte à la charge ; seuls le
-      // combo de texture et les sommets comptent
+      // le mode de dessin est re-dérivé du proto hôte à la charge
       fprintf(f, "verts %zu\n", d.vertices.size());
       for (auto& v : d.vertices) {
         fprintf(f, "%f %f %f %f %f %u %u %u %d\n", v.xyz.x(), v.xyz.y(), v.xyz.z(), v.st.x(),
@@ -649,7 +623,7 @@ bool load_grass_proto_into(ShrubProtoInfo& proto, const std::string& name) {
   if (!f) {
     return false;
   }
-  // gabarit de réglages : le premier draw existant du proto hôte
+  // gabarit de réglages
   const ShrubDraw* tpl = nullptr;
   for (auto& fr : proto.frags) {
     for (auto& d : fr.draws) {
@@ -743,7 +717,7 @@ void extract_instance(const shrub_types::InstanceShrubbery& inst,
 
   protos.at(result.proto_idx).instances.push_back(result);
 
-  // PC-REMAKE: bake extra grass clones around the original tuft.
+  // bake extra grass clones around the original tuft
   if (result.proto_idx < densify_flags.size() && densify_flags[result.proto_idx]) {
     constexpr int kClones = 2;
     constexpr float kMeter = 4096.f;
@@ -918,8 +892,7 @@ void make_draws(tfrag3::Level& lev,
                         combo_tex, combo_tex >> 16, combo_tex & 0xffff, combo_tex & 0xffff));
               }
             }
-            // PC-REMAKE 14/10 : pas de HD calculee pour l'herbe et les buissons (rendu
-            // valide = textures d'origine) sauf pc_faithful_hd_models
+            // pas de HD calculee pour l'herbe et les buissons (rendu valide = textures d'origine) sauf
             auto resolved = tdb.resolve_texture(combo_tex, tdb.faithful_hd_models);
             // add a new texture to the level data
             idx_in_lev_data = lev.textures.size();
@@ -1000,24 +973,17 @@ void make_draws(tfrag3::Level& lev,
   tree_out.packed_vertices.total_vertex_count = global_vert_counter;
 }
 
-// PC-REMAKE: seed a continuous grass carpet on grass-material ground triangles
-// (FF15-style fields). Uses the level's own most-common grass prototype so the
-// look stays coherent, inherits time-of-day color from the nearest designer
-// instance, and skips steep triangles. Deterministic. Paths/sand/dirt are
-// naturally excluded because their collision material is not grass.
+// seed a continuous grass carpet on grass-material ground triangles (FF15-style fields)
 namespace {
 
-// PC-REMAKE: samples the visual ground color so the carpet respects painted
-// wear paths (yellowed trails) that stay "grass" in collision. Built from the
-// unpacked tfrag vertices: nearest ground vertex in a 2D grid -> its draw's
-// texture texel. A tuft is only planted where the ground texel is green.
+// samples the visual ground color so the carpet respects painted wear paths (yellowed trails) that
 struct GroundSampler {
   static constexpr float kCell = 2.f * 4096.f;  // 2 m grid
   struct Sample {
     float x, z;
     s32 tex;
     float s, t;
-    // 13/10 : couleur d'eclairage peinte du sol a ce sommet (palettes par heure)
+    // couleur d'eclairage peinte du sol a ce sommet (palettes par heure)
     const tfrag3::TfragTree* tree = nullptr;
     u32 cidx = 0;
   };
@@ -1062,8 +1028,7 @@ struct GroundSampler {
     }
   }
 
-  // texel test for one sample: green-dominant ground = grass; yellow/beige
-  // wear paths have r >= g
+  // texel test for one sample: green-dominant ground = grass; yellow/beige wear paths have r >= g
   bool sample_is_green(const Sample& smp) const {
     if (smp.tex < 0 || smp.tex >= (s32)level->textures.size()) {
       return true;
@@ -1096,8 +1061,7 @@ struct GroundSampler {
     return g > r * 1.05f && g > b * 1.05f;
   }
 
-  // 13/10 : luminance de l'eclairage PEINT du sol en (x, z), pour chacune des 8
-  // palettes horaires (moyenne ponderee des 4 sommets les plus proches, 3 m)
+  // luminance de l'eclairage PEINT du sol en (x, z), pour chacune des 8 palettes horaires
   bool ground_light(float x, float z, float out[8]) const {
     float acc[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     float wsum = 0.f;
@@ -1138,10 +1102,7 @@ struct GroundSampler {
     return true;
   }
 
-  // true when the visual ground at (x, z) looks like green grass. The nearest
-  // vertex is not enough: at a path edge it often belongs to the neighbouring
-  // grass polygon, which is exactly how tufts ended up ON the brown trails.
-  // Every close-by sample must be green.
+  // true when the visual ground at (x, z) looks like green grass
   bool is_green_at(float x, float z) const {
     const Sample* cand[4] = {nullptr, nullptr, nullptr, nullptr};
     float cand_d[4] = {1e30f, 1e30f, 1e30f, 1e30f};
@@ -1177,9 +1138,7 @@ struct GroundSampler {
     if (!cand[0]) {
       return true;  // no visual ground data: fall back to collision-only
     }
-    // le plus proche doit etre vert, et AUCUN voisin a moins de 1,2 m ne doit
-    // etre un texel de sentier (2 m rasait trop large : plus d'herbe devant la
-    // hutte de Samos)
+    // le plus proche doit etre vert, et AUCUN voisin a moins de 1,2 m ne doit etre un texel de sentier
     const float kNear = 1.2f * 4096.f * 1.2f * 4096.f;
     for (int k = 0; k < 4; k++) {
       if (!cand[k]) {
@@ -1205,26 +1164,19 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
     return;
   }
   constexpr float kMeter = 4096.f;
-  // 12/10 (tapis d'herbe des images de reference) : plafond releve pour les zones de depart (voir plus bas)
+  // (tapis d'herbe des images de reference)
   int kMaxSeeded = 15000;  // garde-fou perf par niveau
 
-  // Densité et taille des touffes, par niveau. La plage est une grande étendue
-  // plate et verte : la même règle que Sandover y plante beaucoup trop de
-  // touffes, et trop grandes. Les autres niveaux gardent
-  // le réglage validé.
+  // Densité et taille des touffes, par niveau
   float area_per_tuft = 2.5f * kMeter * kMeter;  // ~1 touffe / 2.5 m^2
-  float scale_lo = 0.65f, scale_span = 0.35f;    // taille relative au modèle
+  float scale_lo = 0.65f, scale_span = 0.35f;  // taille relative au modèle
   if (level_for_ground.level_name == "beach") {
-    // 17/08 : la plage porte désormais la VRAIE herbe de Samos (transplantée) —
-    // mêmes densité et tailles que le village
+    // la plage porte désormais la VRAIE herbe de Samos (transplantée)
     area_per_tuft = 2.5f * kMeter * kMeter;
     scale_lo = 0.65f;
     scale_span = 0.35f;
   }
-  // 12/10 RENDU REMAKE : un VRAI tapis dans les zones de depart (village, plage,
-  // ile de l'entrainement) — densite x2.8 (1 touffe / 0,9 m2) et tailles plus
-  // variees (0,50 a 1,10) pour un gazon naturel, plafond 26 000 par niveau.
-  // (original : 2,5 m2, 0,65 + 0,35, plafond 15 000)
+  // RENDU REMAKE
   if (level_for_ground.level_name == "village1" || level_for_ground.level_name == "beach" ||
       level_for_ground.level_name == "training") {
     area_per_tuft = 0.9f * kMeter * kMeter;
@@ -1248,8 +1200,7 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
   }
   auto& proto = protos[best_proto];
 
-  // visual-ground sampler: keeps the carpet off painted wear paths and
-  // non-green ground (snow, scorched dirt), even where collision says "grass"
+  // visual-ground sampler: keeps the carpet off painted wear paths and non-green ground
   GroundSampler ground;
   ground.build(level_for_ground);
 
@@ -1262,10 +1213,7 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
     }
   }
 
-  // 13/10 : calibration couleur des touffes <-> eclairage peint du sol. Pour
-  // chaque touffe d'artiste : luminance de sa couleur / luminance du sol sous
-  // elle, par palette horaire -> rapport median. Candidats = couleurs distinctes
-  // des touffes d'artistes.
+  // calibration couleur des touffes <-> eclairage peint du sol
   bool calibrated = false;
   float kratio[8] = {1, 1, 1, 1, 1, 1, 1, 1};
   float kweight[8] = {1, 1, 1, 1, 1, 1, 1, 1};
@@ -1337,11 +1285,7 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
              kweight[6] * kratio[6], kweight[7] * kratio[7]);
   }
 
-  // couleur d'une touffe automatique en (x, z). L'eclairage peint du sol est
-  // suivi a 50 % autour de sa valeur typique : l'ombre peinte sous un palmier
-  // reste lisible, mais l'herbe (texture sombre x couleur sombre, touffes
-  // empilees) ne vire plus au noir — mesure a l'ecran : herbe 3x plus sombre
-  // que le sol nu au meme endroit
+  // couleur d'une touffe automatique en (x, z)
   auto pick_color = [&](float x, float z, u32 fallback) -> u32 {
     if (!calibrated) {
       return fallback;
@@ -1355,12 +1299,7 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
     for (const auto& [cidx, lum] : cand_lum) {
       float e = 0.f;
       for (int p = 0; p < 8; p++) {
-        // v2 : 0.5 -> 0.25 (le diagnostic couleur unique a prouve que les
-        // plaques venaient de l'ombre PEINTE sous les palmiers ; l'ombre en temps
-        // reel du soleil la remplace et suit l'heure)
-        // v3 : 0.25 -> 0.10 — l'ombre des palmiers et des falaises est desormais
-        // portee EN TEMPS REEL par le soleil ; l'ombre peinte, doublee, faisait des
-        // plaques sombres (Rocher du Geyser, ronds noirs)
+        // plaques venaient de l'ombre PEINTE sous les palmiers
         float target = kratio[p] * (gmed[p] + 0.10f * (gl[p] - gmed[p]));
         float dlt = lum[p] - target;
         e += kweight[p] * dlt * dlt;
@@ -1383,11 +1322,6 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
         }
       }
     }
-    // 13/10 (Rocher du Geyser : grandes plaques d'herbe sombre, ronds noirs)
-    // les touffes d'ARTISTES de l'herbe gardent leur nuance, mais a moitie de
-    // l'ecart a la valeur typique : semees clairsemees sur un sol en 2001, leurs
-    // couleurs sombres etaient des touffes ; en tapis dense, ce sont des taches.
-    // (original : couleur d'artiste telle quelle)
     {
       float lmed[8];
       for (int p = 0; p < 8; p++) {
@@ -1505,14 +1439,9 @@ void seed_grass_carpet(std::vector<ShrubProtoInfo>& protos,
           inst.color_idx = ref.color_idx;
         }
       }
-      // 13/10 (ronds noirs d'ombre un peu partout, Rocher du Geyser) : la
-      // touffe d'artiste la plus proche pouvait etre a l'ombre d'un palmier ou
-      // d'une falaise — toute la zone autour heritait de sa couleur sombre, en
-      // plaques rondes, sur un sol pourtant clair. La couleur suit maintenant
-      // l'eclairage PEINT DU SOL sous la touffe (8 palettes horaires), parmi les
-      // couleurs des touffes d'artistes (rien n'est invente).
+      // (ronds noirs d'ombre un peu partout, Rocher du Geyser)
       inst.color_idx = pick_color(pos.x(), pos.z(), inst.color_idx);
-      // [QA] 13/10 : QA_CARPET_FIXED=<index> force la couleur du tapis (diagnostic)
+      // [QA] QA_CARPET_FIXED=<index> force la couleur du tapis (diagnostic)
       if (const char* qf = getenv("QA_CARPET_FIXED")) {
         inst.color_idx = (u32)atoi(qf);
       }
@@ -1535,11 +1464,7 @@ void clear_auto_grass_near_actors(std::vector<ShrubProtoInfo>& protos, const std
   if (g_grass_keep_clear.empty()) {
     return;
   }
-  // 20/10 : plus de bord net (pas de trou visible). Autour de chaque objet (rayon
-  // r de la table) : herbe automatique retiree jusqu'a 0,8 r, puis de plus en plus presente
-  // et de plus en plus haute jusqu'a 2,6 r (tirage stable par position, touffes reduites
-  // jusqu'a moitie pres du centre). Touffes des artistes : jamais touchees.
-  // (17/10 : retrait net de tout dans le rayon r)
+  // plus de bord net (pas de trou visible)
   constexpr float kMeter = 4096.f;
   int removed = 0, shrunk = 0;
   for (auto& proto : protos) {
@@ -1603,15 +1528,7 @@ void set_grass_keep_clear(const std::vector<math::Vector4f>& zones) {
   g_grass_keep_clear = zones;
 }
 
-// ============================================================================
-// PC-REMAKE 26/10 : POSE DE L'HERBE AUTOMATIQUE SUR LE VRAI SOL. Les touffes clonees autour des
-// touffes d'artistes etaient decalees a cote SANS changer de hauteur (en l'air au-dessus d'une
-// pente, d'une marche ou d'un bord, enfoncees dans un talus) ; le tapis, seme sur la collision
-// herbe, ne savait pas s'il y avait un mur, un rocher ou une maison juste au-dessus. Chaque
-// touffe automatique est recalee sur la collision du niveau et retiree si le sol manque, s'il
-// est trop raide, si quelque chose la recouvre ou si un mur est a moins d'environ 35 cm.
-// Touffes des artistes : jamais touchees.
-// ============================================================================
+// POSE DE L'HERBE AUTOMATIQUE SUR LE VRAI SOL
 namespace {
 thread_local std::vector<GrassSeedTri> g_grass_collision;
 
@@ -1641,8 +1558,7 @@ struct GrilleCollision {
     }
   }
 
-  // segment p0 -> p1 contre les triangles des cases traversees ; t (0..1) du premier impact et
-  // composante verticale de sa normale
+  // segment p0 -> p1 contre les triangles des cases traversees
   bool segment(const math::Vector3f& p0, const math::Vector3f& p1, float* t_out,
                float* ny_out, u32* mat_out = nullptr) const {
     const math::Vector3f d = p1 - p0;
@@ -1703,6 +1619,259 @@ struct GrilleCollision {
   }
 };
 
+// HERBE AJOUTEE SUR LES CHEMINS
+struct SolVisuel {
+  static constexpr float kCell = 2.f * 4096.f;
+  struct Tri {
+    const tfrag3::TfragTree* tree;
+    s32 tex;
+    u32 v[3];
+    bool couche;  // couche posee par-dessus (TRANS / DIRT)
+  };
+  std::unordered_map<u64, std::vector<u32>> grille;
+  std::vector<Tri> tris;
+  const tfrag3::Level* level = nullptr;
+
+  static u64 cle(s32 cx, s32 cz) { return ((u64)(u32)cx << 32) | (u64)(u32)cz; }
+
+  void build(tfrag3::Level& lev) {
+    level = &lev;
+    using K = tfrag3::TFragmentTreeKind;
+    for (auto& tree : lev.tfrag_trees[0]) {
+      if (tree.kind != K::NORMAL && tree.kind != K::TRANS && tree.kind != K::DIRT) {
+        continue;
+      }
+      tree.unpack();
+      const auto& vs = tree.unpacked.vertices;
+      const bool couche = tree.kind != K::NORMAL;
+      auto ajoute = [&](u32 a, u32 b, u32 c, s32 tex) {
+        if (a >= vs.size() || b >= vs.size() || c >= vs.size() || a == b || b == c || a == c) {
+          return;
+        }
+        u32 id = (u32)tris.size();
+        tris.push_back(Tri{&tree, tex, {a, b, c}, couche});
+        float x0 = std::min({vs[a].x, vs[b].x, vs[c].x}), x1 = std::max({vs[a].x, vs[b].x, vs[c].x});
+        float z0 = std::min({vs[a].z, vs[b].z, vs[c].z}), z1 = std::max({vs[a].z, vs[b].z, vs[c].z});
+        s32 cx0 = (s32)std::floor(x0 / kCell), cx1 = (s32)std::floor(x1 / kCell);
+        s32 cz0 = (s32)std::floor(z0 / kCell), cz1 = (s32)std::floor(z1 / kCell);
+        if ((cx1 - cx0) > 40 || (cz1 - cz0) > 40) {
+          return;  // triangle geant (fond lointain) : jamais sous une touffe
+        }
+        for (s32 cx = cx0; cx <= cx1; cx++) {
+          for (s32 cz = cz0; cz <= cz1; cz++) {
+            grille[cle(cx, cz)].push_back(id);
+          }
+        }
+      };
+      for (auto& draw : tree.draws) {
+        if (draw.tree_tex_id < 0) {
+          continue;
+        }
+        // bandes de triangles
+        for (auto& run : draw.runs) {
+          for (u32 j = 0; j + 2 < run.length; j++) {
+            ajoute(run.vertex0 + j, run.vertex0 + j + 1, run.vertex0 + j + 2, draw.tree_tex_id);
+          }
+        }
+        u32 n = 0, a = 0, b = 0;
+        for (u32 idx : draw.plain_indices) {
+          if (idx == UINT32_MAX) {
+            n = 0;
+            continue;
+          }
+          if (n >= 2) {
+            ajoute(a, b, idx, draw.tree_tex_id);
+          }
+          a = b;
+          b = idx;
+          n++;
+        }
+      }
+    }
+  }
+
+  // couleur moyenne (3 x 3 texels) et opacite de la texture en (s, t)
+  bool texel(s32 tex_id, float s, float t, float& r, float& g, float& b, float& a) const {
+    if (tex_id < 0 || tex_id >= (s32)level->textures.size()) {
+      return false;
+    }
+    const auto& tex = level->textures[tex_id];
+    if (tex.w <= 0 || tex.h <= 0 || tex.data.empty()) {
+      return false;
+    }
+    float fs = s - std::floor(s), ft = t - std::floor(t);
+    int px = std::min((int)(fs * tex.w), tex.w - 1);
+    int py = std::min((int)(ft * tex.h), tex.h - 1);
+    r = g = b = a = 0.f;
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        u32 c = tex.data[((py + dy + tex.h) % tex.h) * tex.w + (px + dx + tex.w) % tex.w];
+        r += (float)(c & 0xff);
+        g += (float)((c >> 8) & 0xff);
+        b += (float)((c >> 16) & 0xff);
+        a += (float)((c >> 24) & 0xff);
+      }
+    }
+    r /= 9.f;
+    g /= 9.f;
+    b /= 9.f;
+    a /= 9.f;
+    return true;
+  }
+
+  // part de texels verts d'une texture
+  mutable std::unordered_map<s32, float> part_verte_cache;
+  float part_verte(s32 tex_id) const {
+    auto it = part_verte_cache.find(tex_id);
+    if (it != part_verte_cache.end()) {
+      return it->second;
+    }
+    float f = 0.f;
+    if (tex_id >= 0 && tex_id < (s32)level->textures.size()) {
+      const auto& tex = level->textures[tex_id];
+      size_t n = 0, v = 0;
+      for (size_t i = 0; i < tex.data.size(); i += 7) {
+        u32 c = tex.data[i];
+        float r = (float)(c & 0xff), g = (float)((c >> 8) & 0xff), b = (float)((c >> 16) & 0xff);
+        n++;
+        if (g > r * 1.05f && g > b * 1.05f) {
+          v++;
+        }
+      }
+      f = n ? (float)v / (float)n : 0.f;
+    }
+    part_verte_cache[tex_id] = f;
+    return f;
+  }
+
+  // 1 = herbe, 0 = chemin (pas vert), -1 = rien de connu sous ce point
+  int vert_au_point(float x, float y, float z, float* rgb = nullptr, s32* tex_vu = nullptr) const {
+    auto it = grille.find(cle((s32)std::floor(x / kCell), (s32)std::floor(z / kCell)));
+    if (it == grille.end()) {
+      return -1;
+    }
+    const float kH = 0.8f * 4096.f;
+    float meilleur = 1e30f;
+    float base[3] = {0, 0, 0};
+    bool a_base = false;
+    float couche[3] = {0, 0, 0};
+    float couche_d = 1e30f;
+    s32 tex_base = -1, tex_couche = -1;
+    bool a_couche = false;
+    for (u32 id : it->second) {
+      const Tri& tr = tris[id];
+      const auto& vs = tr.tree->unpacked.vertices;
+      const auto &A = vs[tr.v[0]], &B = vs[tr.v[1]], &C = vs[tr.v[2]];
+      // barycentriques dans le plan XZ
+      float d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+      if (std::abs(d) < 1e-3f) {
+        continue;
+      }
+      float l0 = ((B.z - C.z) * (x - C.x) + (C.x - B.x) * (z - C.z)) / d;
+      float l1 = ((C.z - A.z) * (x - C.x) + (A.x - C.x) * (z - C.z)) / d;
+      float l2 = 1.f - l0 - l1;
+      if (l0 < -1e-3f || l1 < -1e-3f || l2 < -1e-3f) {
+        continue;
+      }
+      float h = l0 * A.y + l1 * B.y + l2 * C.y;
+      float dh = std::abs(h - y);
+      if (dh > kH) {
+        continue;
+      }
+      float s = l0 * A.s + l1 * B.s + l2 * C.s;
+      float t = l0 * A.t + l1 * B.t + l2 * C.t;
+      float r, g, b, a;
+      if (!texel(tr.tex, s, t, r, g, b, a)) {
+        continue;
+      }
+      if (tr.couche) {
+        // surcouche visible seulement si elle couvre plus de la moitie
+        float va = 128.f;
+        const auto& col = tr.tree->colors;
+        auto alpha_sommet = [&](const tfrag3::PreloadedVertex& v) {
+          return v.color_index < col.color_count ? (float)col.read(v.color_index, 2, 3) : 128.f;
+        };
+        va = l0 * alpha_sommet(A) + l1 * alpha_sommet(B) + l2 * alpha_sommet(C);
+        float couvre = std::min(a / 128.f, 1.f) * std::min(va / 128.f, 1.f);
+        if (couvre > 0.5f && dh < couche_d) {
+          couche_d = dh;
+          couche[0] = r;
+          couche[1] = g;
+          couche[2] = b;
+          a_couche = true;
+          tex_couche = tr.tex;
+        }
+      } else if (dh < meilleur) {
+        meilleur = dh;
+        base[0] = r;
+        base[1] = g;
+        base[2] = b;
+        a_base = true;
+        tex_base = tr.tex;
+      }
+    }
+    if (!a_base && !a_couche) {
+      return -1;
+    }
+    const float* c = a_couche ? couche : base;
+    if (tex_vu) {
+      *tex_vu = a_couche ? tex_couche : tex_base;
+    }
+    if (rgb) {
+      rgb[0] = c[0];
+      rgb[1] = c[1];
+      rgb[2] = c[2];
+    }
+    return (c[1] > c[0] * 1.05f && c[1] > c[2] * 1.05f) ? 1 : 0;
+  }
+};
+
+void retirer_herbe_sur_chemins(std::vector<ShrubProtoInfo>& protos, tfrag3::Level& lev) {
+  SolVisuel sol;
+  sol.build(lev);
+  if (sol.tris.empty()) {
+    return;
+  }
+  constexpr float M = 4096.f;
+  int retirees[4] = {0, 0, 0, 0}, testees[4] = {0, 0, 0, 0};
+  for (auto& pr : protos) {
+    std::vector<ShrubInstanceInfo> garde;
+    garde.reserve(pr.instances.size());
+    for (auto& in : pr.instances) {
+      // seulement l'herbe ajoutee automatiquement (touffes clonees, tapis)
+      if (in.src != 1 && in.src != 2) {
+        garde.push_back(in);
+        continue;
+      }
+      testees[in.src]++;
+      const float x = in.mat[3][0], y = in.mat[3][1], z = in.mat[3][2];
+      // le centre, et 4 points a 35 cm
+      float coul[3] = {0, 0, 0};
+      s32 tex_vu = -1;
+      int c = sol.vert_au_point(x, y, z, coul, &tex_vu);
+      // plaques de terre peintes dans une pelouse (texture en bonne partie verte)
+      const bool pelouse = c == 0 && sol.part_verte(tex_vu) > 0.25f;
+      int chemin_autour = 0;
+      const float o = (pelouse ? 0.55f : 0.35f) * M;
+      const float off[4][2] = {{o, 0}, {-o, 0}, {0, o}, {0, -o}};
+      for (auto& d : off) {
+        if (sol.vert_au_point(x + d[0], y, z + d[1]) == 0) {
+          chemin_autour++;
+        }
+      }
+      bool chemin = c == 0 && chemin_autour >= (pelouse ? 4 : 2);
+      if (chemin) {
+        retirees[in.src]++;
+        continue;
+      }
+      garde.push_back(in);
+    }
+    pr.instances = std::move(garde);
+  }
+  lg::info("PC-REMAKE herbe sur les chemins ({}) : touffes clonees {} retirees sur {}, tapis {} sur {}",
+           lev.level_name, retirees[1], testees[1], retirees[2], testees[2]);
+}
+
 void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::string& level) {
   if (g_grass_collision.empty()) {
     return;
@@ -1710,8 +1879,7 @@ void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::str
   constexpr float M = 4096.f;
   GrilleCollision g;
   g.build(g_grass_collision);
-  // taille propre de chaque type de plante (sommets du modele, a l'echelle 1) : portee des brins
-  // (80 % des sommets) et hauteur
+  // taille propre de chaque type de plante (sommets du modele, a l'echelle 1)
   std::vector<float> portee(protos.size(), 1.2f * M), hauteur(protos.size(), 1.3f * M);
   for (size_t pi = 0; pi < protos.size(); pi++) {
     std::vector<float> rs;
@@ -1731,7 +1899,7 @@ void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::str
     }
   }
   int recalees = 0, vide = 0, pente = 0, dessus = 0, mur = 0, reduites = 0, total = 0;
-  // [QA] QA_HERBE_DUMP=1 : position (m) et raison de chaque touffe retiree ou recalee de > 0,3 m
+  // [QA] QA_HERBE_DUMP=1
   static const bool qa_dump = getenv("QA_HERBE_DUMP") != nullptr;
   auto qa = [&](const char* raison, float qx, float qy, float qz, float dy) {
     if (qa_dump) {
@@ -1751,9 +1919,7 @@ void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::str
       }
       total++;
       const float x = inst.mat[3][0], y = inst.mat[3][1], z = inst.mat[3][2];
-      // 1. le sol : rayon vertical ; touffe clonee (hauteur de sa touffe d'origine) : de 0,7 m
-      //    au-dessus a 1,6 m au-dessous ; tapis (pose sur la collision) : +-0,3 m. Impact le plus
-      //    PROCHE de la hauteur de depart (un toit au-dessus n'est pas le sol).
+      // 1. le sol : rayon vertical
       const float haut = (inst.src == 1 ? 0.7f : 0.3f) * M, bas = (inst.src == 1 ? 1.6f : 0.3f) * M;
       float sol_y = 0.f, sol_ny = 0.f, ecart = 1e30f;
       bool trouve = false;
@@ -1778,12 +1944,9 @@ void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::str
       if (!trouve) {
         qa("vide", x, y, z, 0.f);
         vide++;
-        continue;  // pas de sol sous la touffe (bord de falaise, vide, objet sans collision)
+        continue;  // pas de sol sous la touffe
       }
-      // 1b. sol en plusieurs couches (collision herbe doublee d'une couche de pierre ou de
-      //     terre 20 cm plus haut, au village) : une surface de sol plate a moins de 40 cm
-      //     au-dessus est le vrai sol (la touffe monte dessus), pas un toit. Bois, metal, paille :
-      //     planchers et toits, la touffe reste dessous (et sera retiree)
+      // 1b. sol en plusieurs couches
       for (int k = 0; k < 3; k++) {
         float t, ny;
         u32 mat = 0;
@@ -1806,9 +1969,7 @@ void poser_herbe_automatique(std::vector<ShrubProtoInfo>& protos, const std::str
       if (ech < 1e-3f) {
         ech = 1.f;
       }
-      // 2. place libre autour : la plus courte distance a un mur, un rocher, un pied de maison
-      //    (8 directions, 3 hauteurs dans la touffe) et rien au-dessus. Les brins doivent tenir
-      //    dedans : sinon la touffe est reduite (jusqu'a 35 % de sa taille), sinon retiree.
+      // 2. place libre autour
       const float r_brins = portee[pi] * ech, h_brins = hauteur[pi] * ech;
       float libre = 1e30f;
       for (int k = 0; k < 8; k++) {
@@ -1878,9 +2039,7 @@ void set_grass_collision(const std::vector<GrassSeedTri>& tris) {
   g_grass_collision = tris;
 }
 
-// ============================================================================
-// PC-REMAKE 13/10 : EDITEUR DE NIVEAUX (voir level_editor.h)
-// ============================================================================
+// EDITEUR DE NIVEAUX (voir level_editor.h)
 namespace {
 constexpr u32 kShrubLibMagic = 0x5053474a;  // "JGSP"
 
@@ -1896,8 +2055,7 @@ fs::path shrub_library_path(const std::string& level, const std::string& proto) 
   return fs::path(level_editor::library_dir()) / level / (sanitize_file_name(proto) + ".shrub");
 }
 
-// bibliotheque : chaque niveau depose ses arbustes (geometrie finale) pour que
-// l'editeur puisse les planter dans N'IMPORTE QUEL niveau
+// bibliotheque
 void write_shrub_library(const std::string& level, const ShrubProtoInfo& proto) {
   std::vector<u8> out;
   auto put = [&](const void* p, size_t n) {
@@ -1996,7 +2154,7 @@ std::vector<level_editor::ExportPart> shrub_export_parts(const ShrubProtoInfo& p
           part.tex_page = pit != tdb.tpage_names.end() ? pit->second : "";
         }
       }
-      // memes regles que make_draws : adc = le ruban continue, sinon il repart
+      // memes regles que make_draws
       std::vector<int> strip;
       auto flush = [&]() {
         for (size_t i = 2; i < strip.size(); i++) {
@@ -2043,7 +2201,7 @@ void editor_apply_and_export_shrubs(std::vector<ShrubProtoInfo>& protos,
   }
   const auto edits = level_editor::load_edits(level);
 
-  // 2. ajouts (avant les suppressions : la couleur vient des voisins d'origine)
+  // 2. ajouts
   std::vector<std::pair<math::Vector3f, u32>> color_refs;
   for (const auto& p : protos) {
     for (const auto& inst : p.instances) {
@@ -2096,7 +2254,7 @@ void editor_apply_and_export_shrubs(std::vector<ShrubProtoInfo>& protos,
     protos[pidx].instances.push_back(inst);
   }
 
-  // 3. suppressions (jamais les ajouts : on les retire de la liste des ajouts)
+  // 3. suppressions
   size_t removed = 0;
   for (auto& p : protos) {
     const size_t before = p.instances.size();
@@ -2145,10 +2303,10 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
 
   auto& protos = tree->info.prototype_inline_array_shrub;
   std::vector<ShrubProtoInfo> proto_info;
-  // PC-REMAKE: flag grass-like prototypes for densification by name.
+  // flag grass-like prototypes for densification by name
   std::vector<char> densify_flags;
   for (auto& proto : protos.data) {
-    // inventaire (chasse aux dômes de la plage, 17/08)
+    // inventaire (chasse aux dômes de la plage, )
     lg::info("PC-REMAKE shrub proto '{}' niveau '{}'", proto.name, out.level_name);
     proto_info.push_back(extract_proto(proto, tex_db, map, version));
     proto_info.back().name = proto.name;
@@ -2161,11 +2319,11 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
       }
       break;
     }
-    // PC-REMAKE: flat pebble sprites -> real 3D pebbles (same footprint)
+    // flat pebble sprites -> real 3D pebbles (same footprint)
     if (proto.name.find("pebble") != std::string::npos) {
       remake_pebble_proto(proto_info.back(), proto.name);
     }
-    // l'herbe de Samos : le village sérialise son proto dominant
+    // l'herbe de Samos
     if (out.level_name == "village1" && proto.name == "grass.mb") {
       dump_grass_proto(proto_info.back());
     }
@@ -2173,11 +2331,7 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
     densify_flags.push_back(is_densify_shrub_proto(proto.name) ? 1 : 0);
   }
 
-  // PC-REMAKE (17/08, l'herbe de devant la maison de Samos, la même partout) :
-  // sur la PLAGE, les dômes bch-bush ET les touffes pâles d'auteur deviennent
-  // des croix d'herbe façon village. Les touffes pâles sont REDIRIGÉES vers le
-  // créneau de texture ré-habillé (palmbush-outer = herbe du village) — leur
-  // propre texture (bch-beachgrass) reste intouchée pour l'herbe du fort.
+  // (l'herbe de devant la maison de Samos, la même partout)
   if (out.level_name == "beach") {
     ShrubDraw bush_tpl_copy;
     bool have_tpl = false;
@@ -2201,8 +2355,7 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
       if (!is_bush && !is_pale) {
         continue;
       }
-      // priorité : la VRAIE herbe de Samos transplantée (géométrie + texture du
-      // village). Repli croix si le fichier n'existe pas encore (1re passe).
+      // priorité : la VRAIE herbe de Samos transplantée (géométrie + texture du village)
       if (load_grass_proto_into(pi, nm)) {
         continue;
       }
@@ -2223,12 +2376,14 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
     }
   }
 
-  // PC-REMAKE: continuous grass carpet on grass-material ground.
+  // continuous grass carpet on grass-material ground
   seed_grass_carpet(proto_info, densify_flags, grass_seed_tris, out, &tree->time_of_day);
 
-  // PC-REMAKE 26/10 : herbe automatique posee sur le vrai sol, jamais en l'air ni dans un mur
+  // herbe automatique posee sur le vrai sol, jamais en l'air ni dans un mur
   poser_herbe_automatique(proto_info, out.level_name);
-  // [QA] QA_SANS_HERBE_AUTO=1 : aucune herbe automatique (comparaison avec le jeu d'origine)
+  // et jamais sur un chemin de sable (couleur visible au point exact)
+  retirer_herbe_sur_chemins(proto_info, out);
+  // [QA] QA_SANS_HERBE_AUTO=1
   if (getenv("QA_SANS_HERBE_AUTO")) {
     for (auto& pr : proto_info) {
       std::vector<ShrubInstanceInfo> k;
@@ -2241,10 +2396,10 @@ void extract_shrub(const shrub_types::DrawableTreeInstanceShrub* tree,
     }
   }
 
-  // PC-REMAKE 17/10 : pas d'herbe automatique sur les piles d'energie, orifices d'eco...
+  // pas d'herbe automatique sur les piles d'energie, orifices d'eco..
   clear_auto_grass_near_actors(proto_info, out.level_name);
 
-  // PC-REMAKE 13/10 : modifications de l'editeur de niveaux + export pour l'app
+  // modifications de l'editeur de niveaux + export pour l'app
   editor_apply_and_export_shrubs(proto_info, out.level_name, tex_db);
 
   // time of day colors

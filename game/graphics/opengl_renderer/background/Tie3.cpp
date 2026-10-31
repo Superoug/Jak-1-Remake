@@ -116,8 +116,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
       // wind metadata
       lod_tree[l_tree].instance_info = &tree.wind_instance_info;
       lod_tree[l_tree].wind_draws = &tree.instanced_wind_draws;
-      // [QA 22/09] modes de dessin des feuillages TIE (statiques + vent) : le
-      // toit se voyait a travers la feuille du palmier
+      // [QA] modes de dessin des feuillages TIE (statiques + vent)
       {
         auto dump = [&](const char* kind, const auto& d) {
           const auto& m = d.mode;
@@ -193,7 +192,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
                             sizeof(tfrag3::PreloadedVertex),             // stride
                             (void*)offsetof(tfrag3::PreloadedVertex, r)  // offset (0)
       );
-      // PC-REMAKE : decor affine : 3e couleur peinte + poids (tfrag3.vert)
+      // decor affine
       glEnableVertexAttribArray(6);
       glVertexAttribIPointer(6, 1, GL_UNSIGNED_INT, sizeof(tfrag3::PreloadedVertex),
                              (void*)offsetof(tfrag3::PreloadedVertex, color_index3));
@@ -201,16 +200,15 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
       // allocate dynamic index buffer for the fallback "not multidraw" mode.
       glGenBuffers(1, &lod_tree[l_tree].single_draw_index_buffer);
 
-      // projecteur violet : pour TOUS les arbres (statiques compris — hypothèse
-      // principale pour les penchés), reclassification à chaud dans le rendu
+      // projecteur violet
       lod_tree[l_tree].tex_names = &lev_data->textures;
       lod_tree[l_tree].palm_debug_seq_built = 0;
-      lod_tree[l_tree].static_draw_snow.clear();  // 20/10 : reclasse au premier rendu
+      lod_tree[l_tree].static_draw_snow.clear();  // reclasse au premier rendu
 
       // set up wind
       if (wind_idx_buffer_len > 0) {
         lod_tree[l_tree].wind_matrix_cache.resize(tree.wind_instance_info.size());
-        // PC-REMAKE: static (unbent) matrices, blended in the shader by local height
+        // static (unbent) matrices, blended in the shader by local height
         lod_tree[l_tree].wind_matrix_cache_static.resize(tree.wind_instance_info.size());
         lod_tree[l_tree].wind_vertex_index_buffer =
             loader_data->tie_data[l_geo][l_tree].wind_indices;
@@ -218,9 +216,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
         for (auto& draw : tree.instanced_wind_draws) {
           lod_tree[l_tree].wind_vertex_index_offsets.push_back(off);
           off += draw.vertex_index_stream.size();
-          // PC-REMAKE: proto-local vertical extent of this draw, so the shader can
-          // anchor the base (no sway) and free the top (full sway). Plus the xz
-          // centre/radius: the angle around the trunk identifies each frond.
+          // proto-local vertical extent of this draw, so the shader can anchor the base (no sway) and free the
           float y0 = 1e30f, y1 = -1e30f;
           float x0 = 1e30f, x1 = -1e30f, z0 = 1e30f, z1 = -1e30f;
           for (u32 vi : draw.vertex_index_stream) {
@@ -248,38 +244,31 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
             z1 = 1.f;
           }
           lod_tree[l_tree].wind_draw_yrange.push_back(math::Vector2f(y0, y1));
-          // copie AVANT fusion : l'étendue du draw seul (couronne des penchés)
+          // copie AVANT fusion
           lod_tree[l_tree].wind_draw_yrange_local.push_back(math::Vector2f(y0, y1));
           lod_tree[l_tree].wind_draw_xzc.push_back(
               math::Vector4f((x0 + x1) * 0.5f, (z0 + z1) * 0.5f,
                              std::max((x1 - x0), (z1 - z0)) * 0.5f, 0.f));
-          // détachement tronc/feuilles : les draws à texture d'écorce sont
-          // épinglés au repos (matrice statique pure dans le shader)
+          // détachement tronc/feuilles
           {
             char is_trunk = 0;
             char is_graft = 0;
             if (draw.tree_tex_id >= 0 &&
                 draw.tree_tex_id < (int)lev_data->textures.size()) {
               const auto& tn = lev_data->textures[draw.tree_tex_id].debug_name;
-              // beard = la barbe de fibres des palmiers penchés : accrochée
-              // au tronc, elle doit rester immobile avec lui (17/08)
+              // beard = la barbe de fibres des palmiers penchés
               if (tn.find("trunk") != std::string::npos ||
                   tn.find("bark") != std::string::npos ||
                   tn.find("-wood") != std::string::npos ||
                   tn.find("beard") != std::string::npos) {
                 is_trunk = 1;
               }
-              // NEUTRALISÉ 17/08 : la classification par texture attrapait AUSSI
-              // les couronnes des palmiers TIE déjà validés (elles portent
-              // palm-leaf) → boost ×3 involontaire sur les bons arbres.
-              // La greffe étant révoquée (le violet a prouvé qu'elle ratait les
-              // penchés), is_graft reste 0 partout.
+              // NEUTRALISÉ la classification par texture attrapait AUSSI les couronnes des palmiers TIE déjà
               (void)tn;
             }
             lod_tree[l_tree].wind_draw_is_trunk.push_back(is_trunk);
             lod_tree[l_tree].wind_draw_is_graft.push_back(is_graft);
-            // 26/10 : les poissons suspendus du village (vil-nufish, vil-nufishfin) portent le
-            // vent d'origine (raideur 0.25), mais ce ne sont pas des feuilles
+            // les poissons suspendus du village
             char is_hanging = 0;
             if (draw.tree_tex_id >= 0 && draw.tree_tex_id < (int)lev_data->textures.size() &&
                 lev_data->textures[draw.tree_tex_id].debug_name.find("nufish") !=
@@ -289,10 +278,7 @@ void Tie3::load_from_fr3_data(const LevelData* loader_data) {
             lod_tree[l_tree].wind_draw_is_hanging.push_back(is_hanging);
           }
         }
-        // PC-REMAKE: a proto's trunk and crown are separate draws, but they share
-        // the same instance list. Merge the y ranges per instance-set so the
-        // trunk normalizes against the WHOLE tree (otherwise the trunk's own top
-        // counts as "tree top" and catches wind).
+        // a proto's trunk and crown are separate draws, but they share the same instance list
         {
           auto& draws = tree.instanced_wind_draws;
           auto& ranges = lod_tree[l_tree].wind_draw_yrange;
@@ -507,7 +493,7 @@ bool Tie3::set_up_common_data_from_dma(DmaFollower& dma, SharedRenderState* rend
  * Does common setup for all category, but only renderers default_category.
  */
 void Tie3::render(DmaFollower& dma, SharedRenderState* render_state, ScopedProfilerNode& prof) {
-  // [QA-TEST 25/08] QA_NO_TIE=1 coupe le renderer d'objets instancies
+  // [QA] QA_NO_TIE=1 coupe le renderer d'objets instancies
   static const bool qa_no_tie = getenv("QA_NO_TIE") != nullptr;
   if (qa_no_tie) {
     m_enabled = false;
@@ -640,7 +626,7 @@ void Tie3::setup_tree(int idx,
   prof.add_tri(num_tris);
 }
 
-void qa_gpu_split(int slot, const char* name);  // OpenGLRenderer.cpp (sonde [QA-GPU])
+void qa_gpu_split(int slot, const char* name);  // OpenGLRenderer.cpp (sonde [QA])
 namespace {
 void set_uniform(GLuint uniform, const math::Vector4f& val) {
   glUniform4f(uniform, val.x(), val.y(), val.z(), val.w());
@@ -694,7 +680,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
   if (use_envmap) {
     // if we use envmap, use the envmap-style math for the base draw to avoid rounding issue.
     init_etie_cam_uniforms(m_etie_base_uniforms, m_common_data.settings.camera);
-    // 13/10 : les objets precurseurs recoivent l'ombre du soleil (etie_base.frag)
+    // les objets precurseurs recoivent l'ombre du soleil (etie_base.frag)
     if (g_sun_shadow.enabled()) {
       g_sun_shadow.bind_for_receive(render_state->shaders[ShaderId::ETIE_BASE].id());
     } else {
@@ -702,8 +688,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     }
   }
 
-  // projecteur violet : reclassification à chaud (statiques + vent) quand la
-  // spec de /tmp/palm_debug change
+  // projecteur violet
   update_palm_debug_flag();
   if (tree.palm_debug_seq_built != g_palm_debug_seq && tree.tex_names) {
     tree.palm_debug_seq_built = g_palm_debug_seq;
@@ -724,8 +709,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     classify(tree.draws, tree.static_draw_palm_debug);
     classify(tree.wind_draws, tree.wind_draw_palm_debug);
   }
-  // émissives TIE : bâti une fois (lampes qui ne semblaient pas allumées,
-  // 18/08 — l'auto-illumination n'était câblée que sur le terrain)
+  // émissives TIE
   if (tree.draws && tree.tex_names &&
       tree.static_draw_emissive.size() != tree.draws->size()) {
     tree.static_draw_emissive.assign(tree.draws->size(), 0.f);
@@ -742,8 +726,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     }
   }
 
-  // 20/10 : SOL DE NEIGE DEFORMABLE — au centre des etendues, la neige epaisse est faite de
-  // monticules TIE poses par-dessus le terrain : ils sont creuses comme le terrain (TFragment)
+  // SOL DE NEIGE DEFORMABLE
   if (tree.draws && tree.tex_names && tree.static_draw_snow.size() != tree.draws->size()) {
     tree.static_draw_snow.assign(tree.draws->size(), 0);
     for (size_t i = 0; i < tree.draws->size(); i++) {
@@ -771,8 +754,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
   glPrimitiveRestartIndex(UINT32_MAX);
 
   int last_texture = -1;
-  // PC-REMAKE 21/09 : TFRAG3 et ETIE_BASE ecrivent la normale monde dans le
-  // G-buffer (la 2e passe envmap, additive, n'y touche pas)
+  // TFRAG3 et ETIE_BASE ecrivent la normale monde dans le G-buffer
   pc_normal_target(true);
   for (size_t draw_idx = tree.category_draw_indices[(int)category];
        draw_idx < tree.category_draw_indices[(int)category + 1]; draw_idx++) {
@@ -805,7 +787,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
 
     auto double_draw = setup_tfrag_shader(render_state, draw.mode,
                                           use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3);
-    // PC-REMAKE : carte de hauteur sculptee de cette texture (relief par pixel ; 0 = sans)
+    // carte de hauteur sculptee de cette texture
     if (!use_envmap) {
       pc_sculpt_bind(draw.tree_tex_id >= 0 ? m_textures->at(draw.tree_tex_id) : 0,
                      render_state->shaders[ShaderId::TFRAG3].id());
@@ -813,7 +795,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
                      render_state->shaders[ShaderId::TFRAG3].id());
       pc_det_bind(draw.tree_tex_id >= 0 ? m_textures->at(draw.tree_tex_id) : 0,
                   render_state->shaders[ShaderId::TFRAG3].id());
-      // PC-REMAKE : palmes pliees + relief des folioles
+      // palmes pliees + relief des folioles
       const float pli = (draw.tree_tex_id >= 0 && tree.tex_names &&
                          draw.tree_tex_id < (int)tree.tex_names->size() &&
                          pc_is_palm_leaf_texture((*tree.tex_names)[draw.tree_tex_id].debug_name))
@@ -826,7 +808,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
 
     glUniform1i(use_envmap ? m_etie_base_uniforms.decal : m_uniforms.decal,
                 draw.mode.get_decal() ? 1 : 0);
-    // projecteur violet (uniform absent d'ETIE_BASE : location -1, ignoré sans mal)
+    // projecteur violet
     glUniform1f(
         pc_uniform_loc(
             render_state->shaders[use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3].id(),
@@ -850,7 +832,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
             render_state->shaders[use_envmap ? ShaderId::ETIE_BASE : ShaderId::TFRAG3].id(),
             "reflet_kind"),
         draw_idx < tree.static_draw_reflet.size() ? tree.static_draw_reflet[draw_idx] : 0.f);
-    // 21/09 : le detail intrinseque des sols est reserve au terrain (programme partage)
+    // le detail intrinseque des sols est reserve au terrain
     if (!use_envmap) {
       glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "detail_amt"),
                   0.f);
@@ -892,12 +874,12 @@ void Tie3::draw_matching_draws_for_tree(int idx,
         ASSERT(false);
     }
   }
-  // le programme TFRAG3 est partagé : ne pas laisser traîner la teinte violette
+  // le programme TFRAG3 est partagé
   if (!use_envmap) {
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "palm_debug"),
                 0.f);
   }
-  // 20/10 : monticules de neige, decoupes et creuses (programme TFRAG3_SNOW, patchs)
+  // monticules de neige, decoupes et creuses
   if (!snow_draws.empty()) {
     const ShaderId sid = ShaderId::TFRAG3_SNOW;
     const GLuint pid = pc_snow_tess_begin(settings.camera, render_state);
@@ -932,9 +914,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
   }
   pc_normal_target(false);
 
-  // PC-REMAKE sun shadows: opaque TIE geometry (palm trunks, huts, fences)
-  // casts into the shadow map. Draw the whole category's index range (not the
-  // frustum-culled subset) so shadows don't pop as the camera turns.
+  // sun shadows: opaque TIE geometry (palm trunks, huts, fences) casts into the shadow map
   if (g_sun_shadow.enabled() && category == tfrag3::TieCategory::NORMAL) {
     size_t first_draw = tree.category_draw_indices[(int)category];
     size_t end_draw = tree.category_draw_indices[(int)category + 1];
@@ -947,8 +927,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
         end += g.num_inds;
       }
       if (end > start && g_sun_shadow.deferred()) {
-        // 14/10 : passe d'ombres DIFFEREE (voir SunShadowMap::flush_deferred) — on
-        // enregistre les plages, le dessin se fait en fin d'image
+        // passe d'ombres DIFFEREE (voir SunShadowMap::flush_deferred)
         static bool shadow_cull_d = true;
         static int shadow_cull_poll_d = 0;
         if ((shadow_cull_poll_d++ % 256) == 0) {
@@ -978,9 +957,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
         // static scenery: only replayed when the cached layer is stale
         if (g_sun_shadow.begin_static_replay(&render_state->shaders)) {
           glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tree.index_buffer);
-          // 14/10 : seuls les groupes qui touchent la carte d'ombres (voir
-          // shadow_vis_from_light) — original : glDrawElements(start, end - start)
-          // de toute la categorie. /tmp/qa_no_shadow_cull = ancien chemin (A/B).
+          // seuls les groupes qui touchent la carte d'ombres (voir shadow_vis_from_light)
           static bool shadow_cull = true;
           static int shadow_cull_poll = 0;
           if ((shadow_cull_poll++ % 256) == 0) {
@@ -1018,7 +995,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
     }
   }
 
-  // [QA] 14/10 : `touch /tmp/qa_no_wind` coupe a chaud la passe de vent (mesure)
+  // [QA] `touch /tmp/qa_no_wind` coupe a chaud la passe de vent (mesure)
   static bool qa_no_wind = false;
   static int qa_no_wind_poll = 0;
   if ((qa_no_wind_poll++ & 63) == 0) {
@@ -1031,8 +1008,7 @@ void Tie3::draw_matching_draws_for_tree(int idx,
 
   glBindVertexArray(0);
 
-  // [QA] 13/10 : `touch /tmp/qa_no_envmap` coupe a chaud la passe de reflet des
-  // objets precurseurs (A/B des ronds noirs). Inerte sans le fichier.
+  // [QA] `touch /tmp/qa_no_envmap` coupe a chaud la passe de reflet des objets precurseurs
   static int qa_env_poll = 0;
   static bool qa_no_env = false;
   if ((qa_env_poll++ & 63) == 0) {
@@ -1054,7 +1030,7 @@ void Tie3::envmap_second_pass_draw(const Tree& tree,
                                    ScopedProfilerNode& prof,
                                    tfrag3::TieCategory category) {
   first_tfrag_draw_setup(settings.camera, render_state, ShaderId::ETIE);
-  // 13/10 : le reflet recoit l'ombre du soleil (etie.frag)
+  // le reflet recoit l'ombre du soleil (etie.frag)
   if (g_sun_shadow.enabled()) {
     g_sun_shadow.bind_for_receive(render_state->shaders[ShaderId::ETIE].id());
   } else {
@@ -1116,10 +1092,7 @@ void Tie3::envmap_second_pass_draw(const Tree& tree,
     }
 
     auto double_draw = setup_tfrag_shader(render_state, draw.mode, ShaderId::ETIE);
-    // 13/10 : le reflet est redessine SUR la passe de base (meme geometrie) ; avec
-    // le test de profondeur strict, des triangles entiers echouaient d'un cheveu
-    // (facettes sans reflet sur les objets precurseurs). Leger decalage vers la
-    // camera (profondeur inversee du PS2 : plus grand = plus proche).
+    // le reflet est redessine SUR la passe de base (meme geometrie)
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(env_offset_factor, env_offset_units);
 
@@ -1343,9 +1316,7 @@ void Tie3::render_tree_wind(int idx,
     auto mat = info.matrix;
 
     ASSERT(info.wind_idx * 4 <= m_wind_vectors.size());
-    // PC-REMAKE: mild stiffness floor so every tree keeps a hint of the native
-    // gusts; the visible undulation is the smooth sine in the vertex shader
-    // (houle continue comme l'herbe, sans à-coups).
+    // mild stiffness floor so every tree keeps a hint of the native gusts; the visible undulation is the
     do_wind_math(info.wind_idx, m_wind_vectors.data(), m_wind_data,
                  std::max(info.stiffness, 0.2f) * m_wind_multiplier, mat);
 
@@ -1370,8 +1341,7 @@ void Tie3::render_tree_wind(int idx,
     // vmaddw.xyzw vf13, vf23, vf0
     out[3] = cam[0] * mat[3].x() + cam[1] * mat[3].y() + cam[2] * mat[3].z() + cam[3];
 
-    // PC-REMAKE: camera-combined matrix WITHOUT the wind bend. The vertex shader
-    // blends toward it near the base so trunks stay planted while crowns sway.
+    // camera-combined matrix WITHOUT the wind bend
     {
       const auto& mat0 = info.matrix;
       auto& outs = tree.wind_matrix_cache_static[inst_id];
@@ -1381,17 +1351,13 @@ void Tie3::render_tree_wind(int idx,
       outs[3] = cam[0] * mat0[3].x() + cam[1] * mat0[3].y() + cam[2] * mat0[3].z() + cam[3];
     }
 
-    // PC-REMAKE: keep the WORLD-space wind matrix too, so palm crowns can be
-    // replayed into the sun shadow map (the cached one above is camera-combined).
+    // keep the WORLD-space wind matrix too, so palm crowns can be replayed into the sun shadow map
     if (g_sun_shadow.enabled()) {
       if (m_wind_world_matrices.size() < tree.instance_info->size()) {
         m_wind_world_matrices.resize(tree.instance_info->size());
       }
       auto& w = m_wind_world_matrices[inst_id];
-      // 19/08 : l'ombre utilise la matrice STATIQUE (arbre plante) — l'affichage
-      // des palmiers penches n'applique plus la matrice de vent (coupee dans le
-      // shader), mais l'ombre continuait de projeter cette animation folle
-      // (l'ombre des arbres restait agitée)
+      // l'ombre utilise la matrice STATIQUE (arbre plante)
       const auto& m0 = info.matrix;
       for (int c = 0; c < 4; c++) {
         for (int r = 0; r < 4; r++) {
@@ -1426,7 +1392,7 @@ void Tie3::render_tree_wind(int idx,
   int last_texture = -1;
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tree.wind_vertex_index_buffer);
 
-  // PC-REMAKE 21/09 : les couronnes au vent ecrivent aussi leur normale
+  // les couronnes au vent ecrivent aussi leur normale
   pc_normal_target(true);
   for (size_t draw_idx = 0; draw_idx < tree.wind_draws->size(); draw_idx++) {
     const auto& draw = tree.wind_draws->operator[](draw_idx);
@@ -1441,17 +1407,13 @@ void Tie3::render_tree_wind(int idx,
     }
     auto double_draw = setup_tfrag_shader(render_state, draw.mode, shader_id);
 
-    // PC-REMAKE: local vertical extent of this draw for the height-weighted wind
-    // PERF 25/08 : les adresses d'uniforms sont mises en cache par programme —
-    // on payait ~10 recherches par chaine PAR DRAW de vent (et un warn [QA]
-    // par 60 draws)
+    // local vertical extent of this draw for the height-weighted wind PERF les adresses d'uniforms sont
     const auto wind_prog = render_state->shaders[shader_id].id();
     struct WindUniformLocs {
       GLuint prog = 0;
       GLint yrange, yrange_local, xzc, time, palm_scales, trunk_pin, graft_boost, palm_debug, phase;
-      GLint hang_sway = -1;  // 26/10 : objets suspendus
-      // PERF 14/10 : les deux matrices etaient recherchees PAR NOM a chaque instance
-      // (~700 glGetUniformLocation par image au village)
+      GLint hang_sway = -1;  // objets suspendus
+      // PERF les deux matrices etaient recherchees PAR NOM a chaque instance
       GLuint cam_prog = 0;
       GLint camera = -1, camera_static = -1;
     };
@@ -1478,26 +1440,24 @@ void Tie3::render_tree_wind(int idx,
     glUniform2f(s_locs.yrange, yr.x(), yr.y());
     const auto& yrl = tree.wind_draw_yrange_local.at(draw_idx);
     glUniform2f(s_locs.yrange_local, yrl.x(), yrl.y());
-    // centre/rayon xz : phase par fronde (angle autour du tronc)
+    // centre/rayon xz
     const auto& xzc = tree.wind_draw_xzc.at(draw_idx);
     glUniform3f(s_locs.xzc, xzc.x(), xzc.y(), xzc.z());
-    // houle continue comme l'herbe : temps réel + phase par instance
+    // houle continue comme l'herbe
     glUniform1f(s_locs.time, (float)(render_state->frame_idx % 216000) / 60.f);
     // échelles réglables en direct (pc-set-palm-wind!)
     glUniform2f(s_locs.palm_scales, g_palm_wind[0], g_palm_wind[1]);
-    // détachement feuilles/tronc : draw de tronc → épinglé au repos
+    // détachement feuilles/tronc
     glUniform1f(s_locs.trunk_pin,
                 (draw_idx < tree.wind_draw_is_trunk.size() && tree.wind_draw_is_trunk[draw_idx])
                     ? 1.f
                     : 0.f);
-    // couronnes greffées : géométrie crown-locale (~3 m) → les amplitudes
-    // proportionnelles au span sont quasi nulles ; boost ×3 pour retrouver le
-    // débattement d'un arbre entier
+    // couronnes greffées
     glUniform1f(s_locs.graft_boost,
                 (draw_idx < tree.wind_draw_is_graft.size() && tree.wind_draw_is_graft[draw_idx])
                     ? 3.f
                     : 1.f);
-    // projecteur violet : draws de vent correspondant à la spec
+    // projecteur violet
     glUniform1f(s_locs.palm_debug,
                 (draw_idx < tree.wind_draw_palm_debug.size() && tree.wind_draw_palm_debug[draw_idx])
                     ? 1.f
@@ -1506,7 +1466,7 @@ void Tie3::render_tree_wind(int idx,
         draw_idx < tree.wind_draw_is_hanging.size() && tree.wind_draw_is_hanging[draw_idx];
     glUniform1f(s_locs.hang_sway, suspendu ? 1.f : 0.f);
     const auto loc_wind_phase = s_locs.phase;
-    // PC-REMAKE : palmes pliees en V et relief par pixel (palmes : dessin ; troncs : carte sculptee)
+    // palmes pliees en V et relief par pixel
     {
       const GLuint prog = render_state->shaders[shader_id].id();
       std::string tn;
@@ -1531,7 +1491,6 @@ void Tie3::render_tree_wind(int idx,
         }
       }
       glUniform1f(pc_uniform_loc(prog, "fronde_pli"), (palme && !off) ? dose : 0.f);
-      // (original : (!tronc && !off) ? 1.f : 0.f) — 26/10 : pas de relief de feuille sur un poisson
       glUniform1f(pc_uniform_loc(prog, "relief_feuille"), (!tronc && !suspendu && !off) ? 1.f : 0.f);
       pc_sculpt_bind((tronc && !off && draw.tree_tex_id >= 0) ? m_textures->at(draw.tree_tex_id) : 0,
                      prog);
@@ -1544,13 +1503,12 @@ void Tie3::render_tree_wind(int idx,
         continue;  // invisible, skip.
       }
 
-      // (original : pc_uniform_loc(..., "camera") / "camera_static" ici)
       glUniformMatrix4fv(s_locs.camera, 1, GL_FALSE,
                          tree.wind_matrix_cache.at(grp.instance_idx)[0].data());
-      // PC-REMAKE: unbent matrix — the shader anchors low vertices on it
+      // unbent matrix
       glUniformMatrix4fv(s_locs.camera_static, 1, GL_FALSE,
                          tree.wind_matrix_cache_static.at(grp.instance_idx)[0].data());
-      // phase déphasée par l'angle d'or : voisins jamais synchrones
+      // phase déphasée par l'angle d'or
       glUniform1f(loc_wind_phase, (float)grp.instance_idx * 2.39996f);
 
       prof.add_draw_call();
@@ -1583,12 +1541,9 @@ void Tie3::render_tree_wind(int idx,
 
   pc_normal_target(false);
 
-  // PC-REMAKE: palm crowns (and other wind-animated foliage) cast into the sun
-  // shadow map. Batched into ONE depth pass — switching render targets per
-  // instance costs ~15x the frame time.
+  // palm crowns (and other wind-animated foliage) cast into the sun shadow map
   if (g_sun_shadow.enabled() && !m_wind_world_matrices.empty() && g_sun_shadow.deferred()) {
-    // 14/10 : passe d'ombres DIFFEREE (voir SunShadowMap::flush_deferred) : memes
-    // casteurs (tries par la zone de la carte), matrices copiees, dessin en fin d'image
+    // passe d'ombres DIFFEREE (voir SunShadowMap::flush_deferred)
     const bool light_vis = tree.vis != nullptr;
     if (light_vis) {
       shadow_vis_from_light(g_sun_shadow.light_vp, tree.vis->vis_nodes, tree.shadow_vis_temp);
@@ -1632,10 +1587,7 @@ void Tie3::render_tree_wind(int idx,
     glUniform1i(pc_uniform_loc(sid, "tex_T0"), 0);
     glActiveTexture(GL_TEXTURE0);
     int shadow_last_tex = -1;
-    // 14/10 (bug) : les palmiers casteurs etaient tries par la CAMERA (vis_temp) — un
-    // palmier juste hors champ perdait son ombre au sol, qui apparaissait/disparaissait
-    // en tournant la camera. Tri par la zone de la CARTE D'OMBRES a la place (voir
-    // shadow_vis_from_light). (original : !tree.vis_temp.at(grp.vis_idx))
+    // (bug) : les palmiers casteurs etaient tries par la CAMERA (vis_temp)
     const bool light_vis = tree.vis != nullptr;
     if (light_vis) {
       shadow_vis_from_light(g_sun_shadow.light_vp, tree.vis->vis_nodes, tree.shadow_vis_temp);

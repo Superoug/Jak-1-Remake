@@ -2,7 +2,7 @@
 
 #include "third-party/imgui/imgui.h"
 
-void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
+void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA]
 
 /*
  * The glow renderer draws a sprite, but only if the center of the sprite is "visible".
@@ -596,7 +596,7 @@ void GlowRenderer::downsample_chain(SharedRenderState* render_state,
     // the grid fill order is the same as the downsample order, so we don't need to do all cells
     // if we aren't using all sprites.
     glDrawElements(GL_TRIANGLE_STRIP, num_sprites * 5, GL_UNSIGNED_INT, nullptr);
-    qa_glerr_check("glow draw #1 (ligne 596)");  // [QA-GLERR] 14/10
+    qa_glerr_check("glow draw #1 (ligne 596)");  // [QA]
   }
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
@@ -634,7 +634,7 @@ void GlowRenderer::draw_probes(SharedRenderState* render_state,
   glDepthFunc(GL_GEQUAL);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
-  qa_glerr_check("glow draw #2 (ligne 632)");  // [QA-GLERR] 14/10
+  qa_glerr_check("glow draw #2 (ligne 632)");  // [QA]
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
 
@@ -650,7 +650,7 @@ void GlowRenderer::debug_draw_probes(SharedRenderState* render_state,
   glBindFramebuffer(GL_FRAMEBUFFER, render_state->render_fb);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
-  qa_glerr_check("glow draw #3 (ligne 647)");  // [QA-GLERR] 14/10
+  qa_glerr_check("glow draw #3 (ligne 647)");  // [QA]
 }
 
 /*!
@@ -676,7 +676,7 @@ void GlowRenderer::draw_probe_copies(SharedRenderState* render_state,
   prof.add_tri(m_next_sprite * 2);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
-  qa_glerr_check("glow draw #4 (ligne 672)");  // [QA-GLERR] 14/10
+  qa_glerr_check("glow draw #4 (ligne 672)");  // [QA]
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
 
@@ -693,7 +693,7 @@ void GlowRenderer::debug_draw_probe_copies(SharedRenderState* render_state,
   glBindFramebuffer(GL_FRAMEBUFFER, render_state->render_fb);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
-  qa_glerr_check("glow draw #5 (ligne 688)");  // [QA-GLERR] 14/10
+  qa_glerr_check("glow draw #5 (ligne 688)");  // [QA]
 }
 
 void GlowRenderer::probe_and_copy_old(SharedRenderState* render_state, ScopedProfilerNode& prof) {
@@ -767,7 +767,7 @@ void GlowRenderer::probe_and_copy_new(SharedRenderState* render_state, ScopedPro
   prof.add_tri(m_next_sprite * 2);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
-  qa_glerr_check("glow draw #6 (ligne 761)");  // [QA-GLERR] 14/10
+  qa_glerr_check("glow draw #6 (ligne 761)");  // [QA]
 
   render_state->shaders[ShaderId::GLOW_PROBE_ON_GRID].activate();
   glDepthFunc(GL_GREATER);
@@ -775,7 +775,7 @@ void GlowRenderer::probe_and_copy_new(SharedRenderState* render_state, ScopedPro
   prof.add_tri(m_next_sprite * 2);
   glDrawElements(GL_TRIANGLE_STRIP, idx_end - idx_start, GL_UNSIGNED_INT,
                  (void*)(idx_start * sizeof(u32)));
-  qa_glerr_check("glow draw #7 (ligne 768)");  // [QA-GLERR] 14/10
+  qa_glerr_check("glow draw #7 (ligne 768)");  // [QA]
 
   glViewport(old_viewport[0], old_viewport[1], old_viewport[2], old_viewport[3]);
 }
@@ -828,11 +828,7 @@ void GlowRenderer::draw_sprites(SharedRenderState* render_state, ScopedProfilerN
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
   render_state->shaders[ShaderId::GLOW_DRAW].activate();
-  // PC-REMAKE (18/08) : les couronnes vanilla (halo des piles d'énergie, des
-  // orbes) étaient calibrées pour l'écran PS2 — sous notre bloom moderne elles
-  // deviennent des boules aveuglantes (la pile éblouissait, l'objet
-  // devenait indistinct). Réduction globale : l'objet redevient lisible,
-  // la VRAIE lumière autour vient désormais du système émissif.
+  // : les couronnes vanilla (halo des piles d'énergie, des orbes) étaient calibrées pour l'écran PS2
   if (!m_debug.enable_glow_boost) {
     m_debug.glow_boost = 0.05f;
   }
@@ -851,7 +847,8 @@ void GlowRenderer::draw_sprites(SharedRenderState* render_state, ScopedProfilerN
   glDepthFunc(GL_GEQUAL);
   glEnable(GL_BLEND);
   // Cv = (Cs - 0) * Ad + D
-  glBlendFunc(GL_ONE, GL_ONE);
+  // le canal alpha porte le masque d'eau des particules (Sprite3)
+  glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
   glBlendEquation(GL_FUNC_ADD);
 
   glDepthMask(GL_FALSE);
@@ -888,7 +885,7 @@ void GlowRenderer::draw_sprites(SharedRenderState* render_state, ScopedProfilerN
     prof.add_draw_call();
     prof.add_tri(2);
     glDrawElements(GL_TRIANGLE_STRIP, 5, GL_UNSIGNED_INT, (void*)(record.idx * sizeof(u32)));
-    qa_glerr_check("glow draw #8 (ligne 881)");  // [QA-GLERR] 14/10
+    qa_glerr_check("glow draw #8 (ligne 881)");  // [QA]
   }
   glEnable(GL_DEPTH_TEST);
 }

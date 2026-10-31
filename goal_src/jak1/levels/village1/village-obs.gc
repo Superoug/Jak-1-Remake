@@ -784,11 +784,7 @@
   (process-drawable-from-entity! this arg0)
   (initialize-skeleton this *hutlamp-sg* '())
   (set! (-> this pivot) (new 'process 'joint-mod-set-local this 3 #f #t #f))
-  ;; PC-REMAKE : le lampadaire s'enregistre comme source lumineuse FIXE. Une
-  ;; fois posé il le reste, même quand le jeu met son acteur en pause parce que
-  ;; Jak s'est éloigné — sinon les lampes du village s'éteignent une à une dès
-  ;; qu'on leur tourne le dos. Clef = adresse de l'entité, donc pas de doublon.
-  ;; Point d'émission ≈ 1 m au-dessus de la base, portée 18 m.
+  ;; le lampadaire s'enregistre comme source lumineuse FIXE
   (pc-register-village-lamps)
   (set-period (-> this clock) 900)
   (set! (-> this clock output) (rand-vu))

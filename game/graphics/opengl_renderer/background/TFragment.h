@@ -118,22 +118,20 @@ class TFragment : public BucketRenderer {
     GLuint vertex_buffer = -1;
     GLuint index_buffer = -1;
     GLuint single_draw_index_buffer = -1;
-    u32 index_count = 0;  // PC-REMAKE: full index buffer size (shadow casters)
+    u32 index_count = 0;  // full index buffer size (shadow casters)
     GLuint time_of_day_texture = -1;
     GLuint vao = -1;
     u32 vert_count = 0;
     const std::vector<tfrag3::StripDraw>* draws = nullptr;
-    // projecteur violet : draws correspondant à la spec de /tmp/palm_debug,
-    // reclassés à chaud quand la spec change (g_palm_debug_seq)
+    // projecteur violet
     std::vector<char> draw_palm_debug;
-    // PC-REMAKE émissives : boost d'auto-illumination par draw (0 = normal),
-    // bâti une fois par arbre depuis le registre des textures qui brillent
+    // émissives : boost d'auto-illumination par draw (0 = normal)
     std::vector<float> draw_emissive;
-    std::vector<float> draw_lava;  // 22/10 : lave animee (pc_lava_texture_kind)
+    std::vector<float> draw_lava;  // lave animee (pc_lava_texture_kind)
     std::vector<float> draw_reflet;  // metal et verre (pc_reflect_texture_kind)
-    std::vector<float> draw_detail;  // 21/09 : detail intrinseque des sols (0/1)
-    std::vector<float> draw_sol;     // PC-REMAKE : 0 rien, 1 sol, 2 sol d'herbe (etalonnage du vert)
-    std::vector<u8> draw_snow;       // 20/10 : sol de neige deformable (traces de Jak)
+    std::vector<float> draw_detail;  // detail intrinseque des sols
+    std::vector<float> draw_sol;  // 0 rien, 1 sol, 2 sol d'herbe (etalonnage du vert)
+    std::vector<u8> draw_snow;  // sol de neige deformable (traces de Jak)
     const std::vector<tfrag3::Texture>* tex_names = nullptr;
     u32 palm_debug_seq_built = 0;
     const tfrag3::PackedTimeOfDay* colors = nullptr;

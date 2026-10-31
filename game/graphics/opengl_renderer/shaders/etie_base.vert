@@ -3,12 +3,11 @@
 layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;
 layout (location = 2) in ivec2 time_of_day_index;  // (index A, index B) : milieux de subdivision = moyenne
-// PC-REMAKE 21/09 : normale (monde, deja tournee par l'instance a l'unpack)
+// normale (monde, deja tournee par l'instance a l'unpack)
 layout (location = 3) in vec4 normal_in;
-layout (location = 6) in uint color3_in;  // PC-REMAKE : 3e couleur + poids (prototypes remodeles)
+layout (location = 6) in uint color3_in;  // 3e couleur + poids (prototypes remodeles)
 out vec3 w_nor;
-// PC-REMAKE 13/10 : ombre du soleil (projection de lumiere sur les objets
-// precurseurs) — ils etaient les seuls du decor a ne pas la recevoir
+// ombre du soleil (projection de lumiere sur les objets precurseurs)
 uniform mat4 sun_light_vp;
 out vec4 sun_light_pos;
 
@@ -65,8 +64,7 @@ void main() {
     fragment_color = vec4(1.0, 1.0, 1.0, 1.0);
   } else {
     // time of day lookup
-    // PC-REMAKE : prototype remodele : melange des couleurs des trois coins du triangle d'origine
-    // (original : 0.5 * (A + B) seulement)
+    // prototype remodele
     uint cw0 = (color3_in >> 16) & 0xffu, cw1 = (color3_in >> 24) & 0xffu;
     if (cw0 + cw1 > 0u) {
       float a = float(cw0) / 255.0, b = float(cw1) / 255.0;

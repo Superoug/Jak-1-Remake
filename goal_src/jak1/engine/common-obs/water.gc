@@ -1073,7 +1073,7 @@
   (go (method-of-object this water-vol-startup))
   (none))
 
-;; PC-REMAKE 25/10 : JAK MOUILLE (merc2.frag) — appele par update-time-of-day (time-of-day.gc)
+;; JAK MOUILLE (merc2.frag)
 (define *remake-wet-top* 0.0)
 (define *remake-wet-low* 0.0)
 (define *remake-wet-line* 0.0) ;; hauteur mouillee au-dessus des pieds (unites du jeu)
@@ -1104,4 +1104,52 @@
                         (cond (swim 2.0) (wade 1.0) (else 0.0))
                         (-> *target* water height))))
     (else (pc-set-jak-wet! 0.0 0.0 0.0 0.0 0.0 0.0)))
+  0)
+
+;; JAK ENNEIGE (merc2.frag, jak_neige)
+(define *remake-neige-haut* 0.0)
+(define *remake-neige-bas* 0.0)
+(define *remake-neige-ligne* 0.0)
+(define *remake-neige-air* #f)
+
+(defun remake-update-snow-on-jak ()
+  "Neige accrochee a Jak, envoyee au rendu des personnages."
+  (let ((dt (seconds-per-frame)))
+    (cond
+      ((and *target* (= (-> *target* current-level name) 'snow))
+       (let* ((ctrl (-> *target* control))
+              (au-sol (not (time-elapsed? (-> ctrl last-time-on-surface) (seconds 0.05))))
+              (mat (-> ctrl ground-pat material))
+              (neige (and au-sol (or (= mat (pat-material snow)) (= mat (pat-material deepsnow)))))
+              (vit (fmin 1.0 (/ (-> ctrl ctrl-xz-vel) 40960.0))))
+         ;; dehors, la neige qui tombe se depose (~45 s pour le maximum)
+         (if *weather-off*
+             (set! *remake-neige-haut* (fmax 0.0 (- *remake-neige-haut* (/ dt 40.0))))
+             (set! *remake-neige-haut* (fmin 0.75 (+ *remake-neige-haut* (/ dt 45.0)))))
+         (cond
+           (neige
+            ;; reception dans la neige apres un saut
+            (when *remake-neige-air*
+              (set! *remake-neige-bas* (fmin 1.0 (+ *remake-neige-bas* 0.3)))
+              (set! *remake-neige-ligne* (fmax *remake-neige-ligne* 3600.0)))
+            (set! *remake-neige-bas* (fmin 1.0 (+ *remake-neige-bas* (* dt (+ 0.04 (* 0.2 vit))))))
+            (set! *remake-neige-ligne* (fmax *remake-neige-ligne* 2048.0)))
+           (else
+            ;; hors de la neige, elle tombe peu a peu des jambes
+            (set! *remake-neige-bas* (fmax 0.0 (- *remake-neige-bas* (/ dt 90.0))))))
+         (set! *remake-neige-air* (time-elapsed? (-> ctrl last-time-on-surface) (seconds 0.4)))))
+      (else
+       ;; hors de la montagne, tout fond (~20 s)
+       (set! *remake-neige-haut* (fmax 0.0 (- *remake-neige-haut* (/ dt 20.0))))
+       (set! *remake-neige-bas* (fmax 0.0 (- *remake-neige-bas* (/ dt 20.0)))))))
+  ;; l'eau la lave (Jak mouille, remake-update-wet)
+  (when (< 0.5 *remake-wet-low*)
+    (set! *remake-neige-bas* 0.0))
+  (when (< 0.5 *remake-wet-top*)
+    (set! *remake-neige-haut* 0.0))
+  (if (<= *remake-neige-bas* 0.0) (set! *remake-neige-ligne* 0.0))
+  (pc-set-jak-snow! *remake-neige-haut*
+                    *remake-neige-bas*
+                    *remake-neige-ligne*
+                    (if *target* (-> *target* control trans y) 0.0))
   0)

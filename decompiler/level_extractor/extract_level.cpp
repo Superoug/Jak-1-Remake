@@ -195,7 +195,7 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   lg::print("{}\n", bsp_header.print(settings));
    */
 
-  // PC-REMAKE 13/10 : editeur de niveaux — le niveau courant (modifications + export)
+  // editeur de niveaux
   level_editor::begin_level(bsp_header.name, dgo_name);
 
   const std::set<std::string> tfrag_trees = {
@@ -214,10 +214,7 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
 
   bool got_collide = false;
 
-  // PC-REMAKE: extract collision FIRST — jak1 stores it as a
-  // drawable-tree-collide-fragment inside the tree array, jak2+ in
-  // bsp_header.collide_hash — so shrub extraction below can seed a grass
-  // carpet on grass-material ground triangles.
+  // extract collision FIRST
   std::vector<GrassSeedTri> grass_seed_tris;
   if (config.extract_collision) {
     for (auto& draw_tree : bsp_header.drawable_tree_array.trees) {
@@ -240,7 +237,7 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
   }
   {
     const auto& cverts = level_data.collision.vertices;
-    // 26/10 : toute la collision aussi, pour poser l'herbe automatique (set_grass_collision)
+    // toute la collision aussi, pour poser l'herbe automatique
     std::vector<GrassSeedTri> all_collision_tris;
     all_collision_tris.reserve(cverts.size() / 3);
     for (size_t v = 0; v + 2 < cverts.size(); v += 3) {
@@ -262,11 +259,11 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
     }
   }
 
-  // PC-REMAKE: shrub extraction is deferred until after this loop (see below).
+  // shrub extraction is deferred until after this loop (see below)
   std::vector<std::pair<level_tools::shrub_types::DrawableTreeInstanceShrub*, std::string>>
       deferred_shrubs;
 
-  // PC-REMAKE: the decor (tie) replacement looks its files up by level name.
+  // the decor (tie) replacement looks its files up by level name
   level_data.level_name = bsp_header.name;
   for (auto& draw_tree : bsp_header.drawable_tree_array.trees) {
     if (tfrag_trees.count(draw_tree->my_type())) {
@@ -295,28 +292,22 @@ level_tools::BspHeader extract_bsp_from_level(const ObjectFileDB& db,
       auto as_shrub_tree =
           dynamic_cast<level_tools::shrub_types::DrawableTreeInstanceShrub*>(draw_tree.get());
       ASSERT(as_shrub_tree);
-      // PC-REMAKE: deferred below, AFTER tfrag extraction — the grass carpet
-      // samples the visual ground (tfrag texels) to avoid painted wear paths.
+      // deferred below, AFTER tfrag extraction
       deferred_shrubs.emplace_back(as_shrub_tree, fmt::format("{}-{}-shrub", dgo_name, i++));
     } else if (draw_tree->my_type() == "drawable-tree-collide-fragment") {
-      // PC-REMAKE: already extracted in the pre-pass above (grass carpet).
+      // already extracted in the pre-pass above (grass carpet)
     } else {
       lg::print("  unsupported tree {}\n", draw_tree->my_type());
     }
   }
 
-  // PC-REMAKE: jak1's collide_hash extraction moved BEFORE the tree loop (grass
-  // carpet seeding needs it). Shrubs run now, after tfrag, so the carpet can
-  // sample the visual ground and skip painted wear paths.
-  // PC-REMAKE: the name has to be set BEFORE the shrubs are extracted — the
-  // grass carpet tunes its density and tuft size per level and was reading an
-  // empty string here.
+  // jak1's collide_hash extraction moved BEFORE the tree loop (grass carpet seeding needs it)
   level_data.level_name = bsp_header.name;
-  // PC-REMAKE 17/10 : zones sans herbe automatique autour de certains objets (rayon en m)
+  // zones sans herbe automatique autour de certains objets (rayon en m)
   {
     static const std::unordered_map<std::string, float> kKeepClear = {
-        {"fuel-cell", 2.5f},     // piles d'energie (animation d'apparition et de collecte)
-        {"ecovent", 3.5f},       // orifices d'eco et leur socle
+        {"fuel-cell", 2.5f},  // piles d'energie (animation d'apparition et de collecte)
+        {"ecovent", 3.5f},  // orifices d'eco et leur socle
         {"ventblue", 3.5f},
         {"ventred", 3.5f},
         {"ventyellow", 3.5f},
@@ -484,8 +475,7 @@ void extract_from_level(const ObjectFileDB& db,
 
   Serializer ser;
   level_data.serialize(ser);
-  // PC-REMAKE 13/10 : export pour l'editeur de niveaux (avant que les textures ne
-  // soient videes : le sol a besoin de leurs noms)
+  // export pour l'editeur de niveaux
   level_editor::write_level(level_data, tex_db);
   if (!config.rip_levels) {
     level_data.textures.clear();
@@ -538,8 +528,7 @@ void extract_all_levels(const ObjectFileDB& db,
     num_workers = 1;
   }
 
-  // PC-REMAKE : le village d'abord, seul — il genere le proto d'herbe que la plage
-  // reprend (extract_shrub.cpp, village_grass_file). Les autres en parallele ensuite.
+  // le village d'abord, seul
   std::vector<std::string> rest = dgo_names;
   if (config.game_version == GameVersion::Jak1) {
     auto village = std::find(rest.begin(), rest.end(), "VI1.DGO");
@@ -556,7 +545,7 @@ void extract_all_levels(const ObjectFileDB& db,
       },
       rest.size(), std::max(1, std::min(num_workers, (int)rest.size())));
   threads.join();
-  // PC-REMAKE : cartes du rivage (vagues), a partir de l'export de l'editeur de niveaux
+  // cartes du rivage (vagues), a partir de l'export de l'editeur de niveaux
   if (config.game_version == GameVersion::Jak1) {
     build_shore_maps(file_util::get_jak_project_dir() / "decompiler_out" / "jak1" / "editor",
                      output_path.parent_path() / "rivages");

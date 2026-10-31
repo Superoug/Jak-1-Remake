@@ -4,6 +4,8 @@ layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;
 layout (location = 2) in vec3 rgba_base;
 layout (location = 3) in int time_of_day_index;
+// ecart a l'origine de l'instance (10 bits signes par axe, 2 cm), bit 30 = present
+layout (location = 4) in uint origine_in;
 
 uniform vec4 hvdf_offset;
 uniform mat4 camera;
@@ -13,25 +15,25 @@ uniform float fog_max;
 uniform int decal;
 uniform vec4 cam_trans;
 uniform mat4 pc_camera;
-// PC-REMAKE grass interaction: xyz = player world pos (1m = 4096 units),
-// w = push strength 0..1. Zero strength disables the effect entirely.
+// grass interaction: xyz = player world pos (1m = 4096 units), w = push strength 0..1
 uniform vec4 grass_push;
-// 20/10 : CINEMATIQUES (pile d'energie, scenes) : l'herbe autour de Jak se couche au sol pour
-// ne plus masquer la scene. xyz = pieds de Jak, w = dose 0..1 (fondu cote jeu).
+// CINEMATIQUES (pile d'energie, scenes)
 uniform vec4 grass_clear;
-// PC-REMAKE ambient wind: x = time (seconds), y = amplitude (world units at
-// blade tip), zw unused. Gives every tuft a gentle, phase-shifted sway.
+// ambient wind: x = time (seconds), y = amplitude (world units at blade tip), zw unused
 uniform vec4 grass_wind;
-// projecteur violet : draw désigné par la spec de /tmp/palm_debug
+// projecteur violet
 uniform float palm_debug;
 uniform sampler1D tex_T10; // note, sampled in the vertex shader on purpose.
+// CHAMPIGNONS ELASTIQUES
+uniform float champi;
+uniform vec4 champi_hist[24];
 
 out vec4 fragment_color;
 out vec3 tex_coord;
 out float fogginess;
-// PC-REMAKE 13/10 : position relative a la camera (normale de facette du G-buffer)
+// position relative a la camera (normale de facette du G-buffer)
 out vec3 v_rel;
-// PC-REMAKE sun shadows
+// sun shadows
 uniform mat4 sun_light_vp;
 out vec4 sun_light_pos;
 
@@ -50,14 +52,10 @@ void main() {
 
   // the itof0 is done in the preprocessing step.  now we have floats.
 
-  // PC-REMAKE grass interaction: bend vegetation vertices radially away from
-  // the player. Falloff is radial in the XZ plane; the bend is weighted by the
-  // vertex height above the player's feet so blade tips move more than roots,
-  // and the top of the tuft is pressed down slightly (trampling).
+  // grass interaction: bend vegetation vertices radially away from the player
   vec3 world_pos = position_in;
 
-  // PC-REMAKE ambient wind sway: two offset sine waves per world position give
-  // an organic ripple; weight grows with height so roots stay planted.
+  // ambient wind sway: two offset sine waves per world position give an organic ripple; weight grows
   if (grass_wind.y > 0.001) {
     float t = grass_wind.x;
     float phase = world_pos.x * 0.00012 + world_pos.z * 0.00017;
@@ -69,32 +67,32 @@ void main() {
   }
 
   if (grass_push.w > 0.001) {
-    const float PUSH_RADIUS = 7372.8;   // 1.8 m
-    const float PUSH_AMOUNT = 1843.2;   // 0.45 m max horizontal bend
+    const float PUSH_RADIUS = 7372.8;  // 1.8 m
+    const float PUSH_AMOUNT = 1843.2;  // 0.45 m max horizontal bend
     vec2 to_vert = world_pos.xz - grass_push.xz;
     float dist_xz = length(to_vert);
     float dy = world_pos.y - grass_push.y;
     // only affect vertices near the player and within a sane height band
     if (dist_xz < PUSH_RADIUS && dy > -2048.0 && dy < 8192.0) {
       float fall = 1.0 - dist_xz / PUSH_RADIUS;
-      fall = fall * fall;                                  // smooth falloff
-      float height_w = clamp(dy / 4096.0 + 0.35, 0.0, 1.0); // roots stay put
+      fall = fall * fall;  // smooth falloff
+      float height_w = clamp(dy / 4096.0 + 0.35, 0.0, 1.0);  // roots stay put
       vec2 dir = dist_xz > 1.0 ? to_vert / dist_xz : vec2(0.0, 1.0);
       float amount = grass_push.w * fall * height_w * PUSH_AMOUNT;
       world_pos.xz += dir * amount;
-      world_pos.y -= 0.35 * amount;                        // slight squash
+      world_pos.y -= 0.35 * amount;  // slight squash
     }
   }
 
   if (grass_clear.w > 0.001) {
-    const float CLEAR_IN = 4096.0 * 3.5;   // couchee a plat
+    const float CLEAR_IN = 4096.0 * 3.5;  // couchee a plat
     const float CLEAR_OUT = 4096.0 * 7.0;  // fondu : intacte au-dela
     vec2 to_c = world_pos.xz - grass_clear.xz;
     float dc = length(to_c);
     float dyc = world_pos.y - grass_clear.y;
     if (dc < CLEAR_OUT && dyc > -4096.0 * 3.0 && dyc < 4096.0 * 6.0) {
       float k = grass_clear.w * (1.0 - smoothstep(CLEAR_IN, CLEAR_OUT, dc));
-      // hauteur au-dessus du sol de Jak : les brins se couchent vers l'exterieur
+      // hauteur au-dessus du sol de Jak
       float above = max(dyc + 4096.0 * 0.3, 0.0);
       vec2 dir_c = dc > 1.0 ? to_c / dc : vec2(0.0, 1.0);
       world_pos.y -= above * 0.85 * k;
@@ -102,7 +100,45 @@ void main() {
     }
   }
 
-  // PC-REMAKE sun shadows (after grass-push deformation so shadows track bent blades)
+  if (champi > 0.5 && (origine_in & (1u << 30)) != 0u) {
+    // le champignon entier bouge d'un bloc
+    const float M = 4096.0;
+    const float W0 = 6.2831853 * 3.0;
+    const float Z = 0.30;
+    float wd = W0 * sqrt(1.0 - Z * Z);
+    ivec3 qi = ivec3(int(origine_in & 0x3ffu), int((origine_in >> 10) & 0x3ffu),
+                     int((origine_in >> 20) & 0x3ffu));
+    qi -= 1024 * ivec3(greaterThan(qi, ivec3(511)));
+    vec3 O = world_pos + vec3(qi) * (0.02 * M);
+    float x = 0.0;
+    float c_prec = -1.0;
+    for (int i = 0; i < 24; i++) {
+      vec4 hs = champi_hist[i];
+      if (hs.w < 0.0) {
+        continue;
+      }
+      float dxz = length(O.xz - hs.xz) / M;
+      float dyf = (hs.y - O.y) / M;  // hauteur des pieds au-dessus du pied du champignon
+      float c = (1.0 - smoothstep(0.7, 1.6, dxz)) * smoothstep(-0.4, 0.0, dyf) *
+                (1.0 - smoothstep(3.0, 4.0, dyf));
+      if (c_prec < 0.0) {
+        x = c;  // le plus ancien : etat de repos atteint
+      } else {
+        float tau = hs.w;
+        float S = 1.0 - exp(-Z * W0 * tau) * (cos(wd * tau) + (Z / sqrt(1.0 - Z * Z)) * sin(wd * tau));
+        x += (c - c_prec) * S;
+      }
+      c_prec = c;
+    }
+    if (abs(x) > 0.002) {
+      // ecrasement vertical autour du pied (18 % de sa hauteur au plus), il s'evase un peu
+      float k = 0.18 * x;
+      world_pos.y = O.y + (world_pos.y - O.y) * (1.0 - k);
+      world_pos.xz = O.xz + (world_pos.xz - O.xz) * (1.0 + 0.45 * k);
+    }
+  }
+
+  // sun shadows
   sun_light_pos = sun_light_vp * vec4(world_pos, 1.0);
 
   // Step 3, the camera transform

@@ -14,15 +14,10 @@ OceanMid::OceanMid() {
   vu.vf25 = Vf(1, 1, 1, 1);
 }
 
-// PC-REMAKE EAU TRANSPARENTE (25/08) : pont vers OceanNear — le mid accumule
-// ses sommets au bucket 4 mais se dessine au bucket ocean-near (63), APRÈS
-// Jak, en transparent. Pointeur posé chaque frame par run(), consommé par
-// OceanNear::render via flush_deferred (même frame, même thread de rendu).
+// EAU TRANSPARENTE
 OceanMid* g_ocean_mid_deferred = nullptr;
 
-// [QA-EAU] : bilan toutes les 300 frames — si des mids accumules ne sont
-// JAMAIS dessines (drop), l'eau disparait ces frames-la. A retirer une fois
-// le clignotement regle.
+// [QA] : bilan toutes les 300 frames
 int qa_eau_flush = 0;
 int qa_eau_drop = 0;
 
@@ -35,16 +30,14 @@ void OceanMid::flush_deferred(SharedRenderState* render_state, ScopedProfilerNod
   m_common_ocean_renderer.flush_mid_transparent(render_state, prof);
 }
 
-// PC-REMAKE QA : compte les programmes VU exécutés par image pour vérifier que
-// la transition proche/large (107/275) tourne réellement en jeu.
+// QA : compte les programmes VU exécutés par image pour vérifier que la transition proche/large
 static int qa_mid_frames = 0;
 static int qa_c46 = 0, qa_c73 = 0, qa_c107 = 0, qa_c275 = 0, qa_c41 = 0, qa_c43 = 0;
 
 void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProfilerNode& prof) {
-  // un différé de la frame précédente qui n'aurait jamais été dessiné (frame
-  // avortée) est simplement abandonné — ses sommets vont être réécrits
+  // un différé de la frame précédente qui n'aurait jamais été dessiné (frame avortée) est simplement
   if (m_flush_pending) {
-    qa_eau_drop++;  // [QA-EAU] une frame d'eau a ete PERDUE (jamais dessinee)
+    qa_eau_drop++;  // [QA] une frame d'eau a ete PERDUE (jamais dessinee)
   }
   m_flush_pending = false;
   {
@@ -178,14 +171,10 @@ void OceanMid::run(DmaFollower& dma, SharedRenderState* render_state, ScopedProf
       ASSERT_MSG(false, fmt::format("{} {}", data.vifcode0().print(), data.vifcode1().print()));
     }
   }
-  // PC-REMAKE EAU TRANSPARENTE (25/08) : ne PAS dessiner ici (bucket 4, avant
-  // Jak — la surface gravait sa profondeur et coupait le joueur immergé à la
-  // ligne de flottaison). Le dessin part au bucket ocean-near via
-  // flush_deferred. Ligne d'origine, à restaurer pour revenir en arrière :
-  // m_common_ocean_renderer.flush_mid(render_state, prof);
+  // EAU TRANSPARENTE
   m_flush_pending = true;
   g_ocean_mid_deferred = this;
-  // 17/10 : retenir les textures MAINTENANT (fraiches) pour le dessin differe
+  // retenir les textures MAINTENANT (fraiches) pour le dessin differe
   m_common_ocean_renderer.capture_mid_textures(render_state);
   qa_mid_frames++;
   if (qa_mid_frames >= 300) {

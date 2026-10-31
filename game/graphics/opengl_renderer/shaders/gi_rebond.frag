@@ -1,17 +1,12 @@
 #version 410 core
-// PC-REMAKE — LUMIERE REBONDIE (illumination globale a l'ecran), au QUART de la resolution puis
-// adoucie (gi_flou.frag) avant d'etre ajoutee par le post (post_processing.frag). Pour chaque
-// point, 16 points visibles autour de lui dans un disque de l'ecran (quelques metres) : ceux qui
-// sont au-dessus de sa surface et lui font face lui renvoient leur couleur (la scene sans HUD),
-// plus fort de face et de pres. Le sable au soleil eclaire le dessous des rochers, l'herbe verdit le
-// bas des murs, la lave teinte ses abords. Le ciel n'en fait pas partie (ambiant du post).
+// LUMIERE REBONDIE (illumination globale a l'ecran)
 
 in vec2 tex_coord;
 out vec4 color;
 
-uniform sampler2D depth_tex;   // unite 15 : profondeur resolue (inversee : 0 = ciel)
+uniform sampler2D depth_tex;  // unite 15 : profondeur resolue (inversee : 0 = ciel)
 uniform sampler2D normal_tex;  // unite 13 : G-buffer (rgb = normale * 0.5 + 0.5, a > 0.5 si presente)
-uniform sampler2D scene_tex;   // unite 12 : scene sans HUD
+uniform sampler2D scene_tex;  // unite 12 : scene sans HUD
 uniform float has_normal_tex;
 uniform mat4 inv_camera;
 uniform mat4 clip_from_world;  // relatif a la camera
@@ -72,7 +67,7 @@ void main() {
       N = -N;
     }
   }
-  // portee : 1,5 m de pres, jusqu'a 6 m au loin ; son rayon a l'ecran
+  // portee : 1,5 m de pres, jusqu'a 6 m au loin
   float R = clamp(vue * 0.10, 2.5 * M, 7.0 * M);
   vec3 droite = normalize(cross(P - cam_trans.xyz, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
   vec4 rc = clip_from_world * vec4(P + droite * R - cam_trans.xyz, 1.0);
@@ -83,9 +78,7 @@ void main() {
   vec3 recu = vec3(0.0);
   float wsum = 0.0;
   const int NS = 16;
-  // (v1 : directions de l'hemisphere projetees a l'ecran — elles tombaient presque toutes dans
-  //  le vide au-dessus du sol : les surfaces VISIBLES autour du point, dans un disque de
-  //  l'ecran, sont les vrais emetteurs)
+  // le vide au-dessus du sol
   for (int k = 0; k < NS; k++) {
     float u = (float(k) + 0.5) / float(NS);
     float phi = (float(k) + bruit) * 2.39996323;  // spirale de Vogel
@@ -109,26 +102,21 @@ void main() {
     if (recoit < 0.05) {
       continue;  // meme plan ou derriere la surface
     }
-    // la surface emettrice doit faire face au point ; le feuillage (herbe, palmes : lames fines
-    // a normale verticale par convention) renvoie des deux cotes
-    // (v1 : clamp(dot(Ns, -vd) * 1.2) partout — les touffes d'herbe rejetaient presque tout)
+    // la surface emettrice doit faire face au point
     float emet = 1.0;
     bool sok, sfeuille;
     vec3 Ns = normale(quv, S, sok, sfeuille);
     if (sok && !sfeuille) {
       emet = clamp(dot(Ns, -vd) * 1.2 + 0.2, 0.0, 1.0);
     } else if (sfeuille) {
-      emet = 0.35;  // (v1 : 0.7 — l'herbe verdissait l'herbe, effet fluo)
+      emet = 0.35;  // 0.7 — l'herbe verdissait l'herbe, effet fluo
     }
     float att = 1.0 / (1.0 + 4.0 * (dist / R) * (dist / R));
     float w = recoit * emet * att;
     recu += texture(scene_tex, quv).rgb * w;
     wsum += w;
   }
-  // couleur moyenne des emetteurs, dosee par leur couverture (un mur au bord du sol en recoit
-  // beaucoup, le milieu d'une plaine presque rien)
-  // (v1 : somme / 16 points — la plupart des points sont trop loin ou dans le meme plan : ~0)
+  // couleur moyenne des emetteurs, dosee par leur couverture
   vec3 moyen = wsum > 1e-4 ? recu / wsum : vec3(0.0);
-  // (v1 : plein a 15 % — trop rare ; 6 %)
   color = vec4(moyen * clamp(wsum / (float(NS) * 0.06), 0.0, 1.0), 1.0);
 }

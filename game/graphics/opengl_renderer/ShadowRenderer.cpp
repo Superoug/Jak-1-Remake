@@ -330,8 +330,7 @@ void ShadowRenderer::render(DmaFollower& dma,
 }
 
 void ShadowRenderer::draw(SharedRenderState* render_state, ScopedProfilerNode& prof) {
-  // 13/10 : les arbustes marquent la vegetation dans le stencil (Shrub.cpp) — ce
-  // renderer exige un stencil a zero : on l'efface s'il a servi
+  // les arbustes marquent la vegetation dans le stencil (Shrub.cpp)
   if (render_state->stencil_dirty) {
     const GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
     glDisable(GL_SCISSOR_TEST);
@@ -433,9 +432,7 @@ void ShadowRenderer::draw(SharedRenderState* render_state, ScopedProfilerNode& p
 
   // finally, draw shadow.
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ogl.index_buffer[0]);
-  // PC-REMAKE: soften the actor stencil shadow. The PS2-era volume projects the
-  // raw low-poly silhouette; halving its density makes the angular outline far
-  // less noticeable and reads as a modern soft contact shadow.
+  // soften the actor stencil shadow
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::SHADOW].id(), "color_uniform"),
               m_color.x() * 0.45f + 0.55f, m_color.y() * 0.45f + 0.55f,
               m_color.z() * 0.45f + 0.55f, m_color.w());

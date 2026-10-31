@@ -304,7 +304,7 @@
             :name (text-id ps2-options)
             :scale #t
             :param3 (game-option-menu gfx-ps2-options))
-       ;; PC-REMAKE 21/09 : sous-menu des réglages du remake
+       ;; sous-menu des réglages du remake
        (new 'static
             'game-option
             :option-type (game-option-type menu)
@@ -713,9 +713,7 @@
               (-> *pc-settings* speedrunner-mode?)))
        (new 'static 'game-option :option-type (game-option-type button) :name (text-id back) :scale #t)))
 
-;; PC-REMAKE 21/09 : réglages du remake (menu ajouté le 24/08).
-;; Les curseurs pointent sur les champs remake-* de *pc-settings* (voir
-;; time-of-day.gc) ; les valeurs sont sauvées dans pc-settings.gc.
+;; réglages du remake (menu ajouté le )
 (define *remake-options-pc*
   (new 'static
        'boxed-array
@@ -785,9 +783,7 @@
             :param1 0.0
             :param2 100.0
             :slider-step-size 5.0)
-       ;; 17/10 : option soleil des artistes retiree du menu (toujours active, voir
-       ;; pckernel-common.gc). Ancienne entree :
-       ;; (new 'static 'game-option :option-type (game-option-type on-off) :name (text-id remake-sun-visible) :scale #t)
+       ;; option soleil des artistes retiree du menu (toujours active, voir pckernel-common.gc)
        (new 'static
             'game-option
             :option-type (game-option-type slider)
@@ -2284,8 +2280,7 @@
   (set! (-> *gfx-ps2-options* 2 value-to-modify) (&-> *pc-settings* ps2-parts?))
   (set! (-> *gfx-ps2-options* 3 value-to-modify) (&-> *pc-settings* force-envmap?))
   (set! (-> *gfx-ps2-options* 4 value-to-modify) (&-> *pc-settings* ps2-actor-vis?))
-  ;; PC-REMAKE 21/09 : curseurs du menu Remake -> *pc-settings* (source de vérité,
-  ;; recopiée chaque image dans *remake-gfx* par (update *pc-settings*))
+  ;; curseurs du menu Remake -> *pc-settings*
   (set! (-> *remake-options-pc* 0 value-to-modify) (&-> *pc-settings* remake-night))
   (set! (-> *remake-options-pc* 1 value-to-modify) (&-> *pc-settings* remake-lamp-power))
   (set! (-> *remake-options-pc* 2 value-to-modify) (&-> *pc-settings* remake-lamp-range))
@@ -2294,8 +2289,7 @@
   (set! (-> *remake-options-pc* 5 value-to-modify) (&-> *pc-settings* remake-shadows))
   (set! (-> *remake-options-pc* 6 value-to-modify) (&-> *pc-settings* remake-godrays))
   (set! (-> *remake-options-pc* 7 value-to-modify) (&-> *pc-settings* remake-bloom))
-  ;; 17/10 : l'entree 8 (soleil des artistes) a quitte le menu ; les suivantes remontent d'un cran
-  ;; (original : 8 -> remake-sun-visible?, 9 -> remake-detail, 10 -> remake-grade)
+  ;; l'entree 8 (soleil des artistes) a quitte le menu
   (set! (-> *remake-options-pc* 8 value-to-modify) (&-> *pc-settings* remake-detail))
   (set! (-> *remake-options-pc* 9 value-to-modify) (&-> *pc-settings* remake-grade))
   (set! (-> *sound-options-pc* 0 value-to-modify) (&-> *pc-settings* memcard-volume-sfx))

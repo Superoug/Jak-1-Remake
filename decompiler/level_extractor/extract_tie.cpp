@@ -223,7 +223,7 @@ struct TieInstanceInfo {
 
   std::vector<TieInstanceFragInfo> frags;  // per-instance per-fragment info (just colors)
 
-  // PC-REMAKE 13/10 (editeur de niveaux) : 0 = artistes, 3 = ajout de l'editeur
+  // (editeur de niveaux)
   u8 src = 0;
   int add_id = 0;
 };
@@ -451,8 +451,7 @@ std::vector<TieProtoInfo> collect_instance_info(
     info.mat[3][2] += info.bsphere[2];
     info.wind_index = instance.wind_index;
 
-    // PC-REMAKE : catalogue des spécimens de feuillage (un par proto, position
-    // en mètres) pour la visite guidée de réglage du vent
+    // catalogue des spécimens de feuillage
     {
       static std::set<std::string> logged_specimens;
       const std::string& pname = protos->at(instance.bucket_index).name;
@@ -671,23 +670,16 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
     info.name = proto.name;
     // wind "stiffness" nonzero value means it has the wind effect
     info.stiffness = proto.stiffness;
-    // PC-REMAKE: certaines variantes de palmiers livrent stiffness 0 (immobiles).
-    // On les force dans le circuit du vent : elles héritent
-    // de toute l'animation des frondes. Le log permet de repérer les protos de
-    // feuillage nommés autrement.
+    // certaines variantes de palmiers livrent stiffness 0 (immobiles)
     {
       std::string lname = proto.name;
       std::transform(lname.begin(), lname.end(), lname.begin(),
                      [](unsigned char c) { return std::tolower(c); });
-      // TENTATIVE CHIRURGICALE (16/08, après le succès du
-      // détachement) : UNIQUEMENT les deux protos de palmiers penchés — leurs
-      // troncs seront épinglés par le détachement par texture d'écorce, leurs
-      // feuilles recevront le battement validé. Tout le reste demeure vanilla.
+      // TENTATIVE CHIRURGICALE (après le succès du détachement)
       const bool is_foliage = lname.find("palm-tilt") != std::string::npos ||
                               lname.find("palm-straight") != std::string::npos;
       if (is_foliage) {
-        // 0.10 = la raideur D'ORIGINE des palm-01/02 fluides (log d'inventaire) ;
-        // 0.30 rendait les penchés secs et brutaux (17/08)
+        // 0.10 = la raideur D'ORIGINE des palm-fluides (log d'inventaire)
         info.stiffness = 0.10f;
         lg::info("PC-REMAKE wind: proto force '{}' (stiffness 0 -> 0.10)", proto.name);
       } else {
@@ -816,12 +808,7 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
       info.frags.push_back(std::move(frag_info));
     }
 
-    // PC-REMAKE (17/08, identification au projecteur violet) :
-    // détection AUTOMATIQUE des palmiers penchés — tout proto resté immobile
-    // dont un draw porte la texture de couronne palm-leaf-colorful entre
-    // dans le circuit du vent. Fini les noms devinés : c'est la texture, prouvée
-    // à l'écran, qui désigne les protos. Le tronc (palmtree-trunk) et la barbe
-    // (palmtree-beard) sont épinglés par le détachement par texture côté rendu.
+    // (identification au projecteur violet)
     if (info.stiffness == 0.f && tex_db) {
       std::string crown_tex;
       for (auto& frag : info.frags) {
@@ -834,7 +821,7 @@ void update_proto_info(std::vector<TieProtoInfo>* out,
         }
       }
       if (!crown_tex.empty()) {
-        // même raideur que les palm-01/02 fluides d'origine
+        // même raideur que les palm-fluides d'origine
         info.stiffness = 0.10f;
         lg::info("PC-REMAKE wind: proto AUTO force '{}' (couronne '{}')", proto.name, crown_tex);
       }
@@ -2618,16 +2605,7 @@ void handle_draw_for_strip(tfrag3::TieTree& tree,
 }
 
 
-// ============================================================================
-// PC-REMAKE : PROTOTYPES DU DECOR REMODELES. Un prototype (hutte, rocher, poteau...) peut etre
-// remplace par custom_assets/jak1/tie_replacements/<niveau>/<prototype>.glb (repere local du
-// prototype, metres ; une primitive par texture, nommee comme la texture du jeu), au niveau de
-// detail le plus fin. Ce que le jeu peignait par sommet et par instance (couleurs du jour, nuit
-// comprise) est reporte sur la nouvelle geometrie : chaque sommet prend le melange des 3 couleurs
-// des coins du triangle d'origine le plus proche (PackedTieVertices::color_indices2/3).
-// Le mode de dessin, la texture et le reflet sont ceux de la piece d'origine de meme texture.
-// Sans fichier, rien ne change. Prototypes a vent (palmiers) : pas encore.
-// ============================================================================
+// PROTOTYPES DU DECOR REMODELES
 namespace {
 
 struct Remplacement {
@@ -2695,8 +2673,7 @@ std::optional<Remplacement> charger_remplacement(const std::string& level,
   return r;
 }
 
-// bandes de triangles (meme convention que le jeu : triangle k = (s_k, s_k+1, s_k+2) pair,
-// (s_k+1, s_k, s_k+2) impair), orientation des triangles conservee
+// bandes de triangles
 std::vector<std::vector<u32>> en_bandes(const std::vector<std::array<u32, 3>>& tris) {
   std::unordered_map<u64, std::vector<u32>> par_arete;  // arete orientee a->b -> triangles
   auto cle = [](u32 a, u32 b) { return ((u64)a << 32) | b; };
@@ -2707,7 +2684,7 @@ std::vector<std::vector<u32>> en_bandes(const std::vector<std::array<u32, 3>>& t
   }
   std::vector<char> pris(tris.size(), 0);
   auto troisieme = [&](u32 t, u32 a, u32 b) -> std::optional<u32> {
-    // le triangle t contient l'arete orientee a->b : renvoie son troisieme sommet
+    // le triangle t contient l'arete orientee a->b
     for (int e = 0; e < 3; e++) {
       if (tris[t][e] == a && tris[t][(e + 1) % 3] == b) {
         return tris[t][(e + 2) % 3];
@@ -2873,14 +2850,12 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
                                                  info.envmap_second_draw_category);
     }
 
-    // PC-REMAKE : prototype remodele (voir plus haut)
-    // geo 0 : modele refait ; geo 1 (premiere version de loin) : sa version allegee <nom>.lod1
-    // (prototypes a vent compris : palmiers ; le vent est applique par instance dans le shader)
+    // prototype remodele (voir plus haut) geo 0
     if (geo <= 1 && version == GameVersion::Jak1 && !proto.instances.empty()) {
       auto remp = charger_remplacement(lev.level_name.empty() ? "common" : lev.level_name,
                                        geo == 0 ? proto.name : proto.name + ".lod1");
       if (remp) {
-        // triangles d'origine (coins : fragment, indice de couleur, teinte de reflet)
+        // triangles d'origine
         struct Coin {
           math::Vector3f p;
           u32 frag;
@@ -2910,8 +2885,7 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
             }
           }
         }
-        // deux prototypes de meme nom dans un niveau (arbres differents, textures differentes) :
-        // le modele refait doit porter les textures de CE prototype, sinon on garde l'original
+        // deux prototypes de meme nom dans un niveau (arbres differents, textures differentes)
         bool memes_textures = true;
         for (const auto& prim : remp->prims) {
           if (!modele_par_tex.count(prim.tex)) {
@@ -2926,12 +2900,12 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
           completer_couleurs(tree.packed_vertices);
           if (tree.packed_vertices.color_indices2.size() < tree.packed_vertices.color_indices.size() ||
               tree.packed_vertices.color_indices2.empty()) {
-            // premier prototype remplace de l'arbre : les tableaux paralleles demarrent ici
+            // premier prototype remplace de l'arbre
             tree.packed_vertices.color_indices2 = tree.packed_vertices.color_indices;
             tree.packed_vertices.color_indices3 = tree.packed_vertices.color_indices;
             tree.packed_vertices.color_weights.assign(tree.packed_vertices.color_indices.size(), 0);
           }
-          // prototype a vent : une instance de vent par instance du prototype (matrice, rigidite)
+          // prototype a vent
           std::vector<u32> vent_idx;
           if (using_wind) {
             for (const auto& inst : proto.instances) {
@@ -2960,9 +2934,7 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
             s32 tex_lev = get_or_add_texture(strip_m.adgif.combo_tex, lev, tdb);
             DrawMode mode = process_draw_mode(strip_m.adgif, frag_m.prog_info.misc_x == 0,
                                               frag_m.has_magic_tex0_bit, version, info.category);
-            // une texture peut etre bornee (clamp) dans une bande d'origine et repetee dans une
-            // autre : le modele refait reunit toutes ses coordonnees ; si elles sortent de [0, 1]
-            // la texture doit se repeter, sinon le bord est etire en stries
+            // une texture peut etre bornee (clamp) dans une bande d'origine et repetee dans une autre
             {
               bool hors_s = false, hors_t = false;
               for (const auto& v : prim.vtx) {
@@ -2976,7 +2948,7 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
                 mode.set_clamp_t_enable(false);
               }
             }
-            // couleur de chaque sommet : triangle d'origine le plus proche
+            // couleur de chaque sommet
             struct Melange {
               u32 frag;
               u32 cii[3];
@@ -3007,7 +2979,7 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
               m.w0 = (u8)std::clamp((int)std::lround(bw.x() * 255.f), 0, 255);
               m.w1 = (u8)std::clamp((int)std::lround(bw.y() * 255.f), 0, 255 - m.w0);
               if (m.w0 == 0 && m.w1 == 0) {
-                m.w0 = 1;  // poids nul = code de la couleur d'origine : jamais tout sur le 3e coin
+                m.w0 = 1;  // poids nul = code de la couleur d'origine
               }
               const int k = bw.x() >= bw.y() && bw.x() >= bw.z() ? 0 : (bw.y() >= bw.z() ? 1 : 2);
               m.teinte = c[k].teinte;
@@ -3251,7 +3223,7 @@ void add_vertices_and_static_draw(tfrag3::TieTree& tree,
                      });
   }
 
-  completer_couleurs(tree.packed_vertices);  // PC-REMAKE
+  completer_couleurs(tree.packed_vertices);
   ASSERT(tree.static_draws.empty());
   tree.category_draw_indices[0] = 0;
   for (int i = 0; i < tfrag3::kNumTieCategories; i++) {
@@ -3313,13 +3285,7 @@ void merge_groups(std::vector<tfrag3::PackedTieVertices::MatrixGroup>& grps) {
   std::swap(result, grps);
 }
 
-// ============================================================================
-// PC-REMAKE 13/10 : EDITEUR DE NIVEAUX (voir level_editor.h)
-// Ajouts = clones d'une instance du meme objet DANS ce niveau (ses couleurs par
-// sommet), rattaches a la visibilite de l'instance la plus proche ; suppressions
-// par (objet, position). NB : la COLLISION du decor est celle du jeu d'origine
-// (un rocher retire laisse son mur invisible, un ajout n'a pas de collision).
-// ============================================================================
+// EDITEUR DE NIVEAUX (voir level_editor.h) Ajouts = clones d'une instance du meme objet DANS ce
 void editor_apply_tie_edits(std::vector<TieProtoInfo>& protos,
                             const level_editor::LevelEdits& edits,
                             const std::string& level) {
@@ -3343,7 +3309,7 @@ void editor_apply_tie_edits(std::vector<TieProtoInfo>& protos,
       }
     }
     if (!proto) {
-      // un niveau peut avoir plusieurs arbres TIE : l objet est dans l un d eux
+      // un niveau peut avoir plusieurs arbres TIE
       lg::debug("PC-REMAKE editeur [{}] : objet {} absent de cet arbre", level, a.proto);
       continue;
     }
@@ -3366,7 +3332,7 @@ void editor_apply_tie_edits(std::vector<TieProtoInfo>& protos,
     clone.bsphere = math::Vector4f(clone.mat[3][0], clone.mat[3][1], clone.mat[3][2],
                                    model->bsphere.w() * std::max(a.scale, 0.1f) +
                                        2.f * level_editor::kMeter);
-    // visibilite : celle de l'instance d'origine la plus proche (tous objets)
+    // visibilite
     float best = 1e30f;
     for (const auto& p : protos) {
       for (const auto& inst : p.instances) {
@@ -3493,8 +3459,7 @@ void extract_tie(const level_tools::DrawableTreeInstanceTie* tree,
         collect_instance_info(as_instance_array, &tree->prototypes.prototype_array_tie.data, geo);
     update_proto_info(&info, tex_map, tree->prototypes.prototype_array_tie.data, geo, version,
                       &tex_db);
-    // PC-REMAKE 13/10 : modifications de l'editeur de niveaux (memes a chaque LOD) —
-    // APRES update_proto_info : c'est lui qui donne leur nom aux objets
+    // modifications de l'editeur de niveaux (memes a chaque LOD)
     editor_apply_tie_edits(info, level_editor::load_edits(level_editor::current_level()),
                            level_editor::current_level());
     if (version < GameVersion::Jak2) {
@@ -3505,7 +3470,7 @@ void extract_tie(const level_tools::DrawableTreeInstanceTie* tree,
     emulate_tie_instance_program(info, version);
     emulate_kicks(info);
 
-    // PC-REMAKE 13/10 : export pour l'editeur (LOD le plus detaille seulement)
+    // export pour l'editeur (LOD le plus detaille seulement)
     if (geo == 0) {
       editor_export_ties(info, tex_db);
     }

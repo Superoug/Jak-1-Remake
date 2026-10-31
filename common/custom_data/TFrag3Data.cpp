@@ -17,11 +17,10 @@
 
 namespace tfrag3 {
 
-// PC-REMAKE: runtime Phong subdivision toggles (defined lower in this file,
-// forward-declared here because TieTree::unpack precedes them)
+// runtime Phong subdivision toggles
 extern bool g_tfrag_phong_subdiv;
 extern float g_tfrag_phong_strength;
-// PC-REMAKE : affinage du decor (defini plus bas)
+// affinage du decor (defini plus bas)
 size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
                             std::vector<u32>& indices,
                             std::vector<StripDraw>& draws,
@@ -255,7 +254,7 @@ void tie_normal_v3(__m128* out, const std::array<math::Vector4f, 4>& in) {
 }
  */
 
-// PC-REMAKE : couleurs a 3 indices des prototypes remodeles (voir PackedTieVertices)
+// couleurs a 3 indices des prototypes remodeles (voir PackedTieVertices)
 static inline void pc_tie_color_blend(const PackedTieVertices& pv, size_t i, PreloadedVertex& vtx) {
   if (i < pv.color_indices2.size()) {
     const u16 w = pv.color_weights[i];
@@ -360,8 +359,7 @@ void TieTree::unpack() {
                             draw.plain_indices.end());
   }
 
-  // PC-REMAKE: TIE subdivision is invoked by the Loader after unpack — it
-  // needs the level's texture names to protect foliage draws.
+  // TIE subdivision is invoked by the Loader after unpack
 }
 
 void ShrubTree::unpack() {
@@ -381,18 +379,27 @@ void ShrubTree::unpack() {
       vtx.s = proto_vtx.s;
       vtx.t = proto_vtx.t;
       memcpy(vtx.rgba_base, proto_vtx.rgba, 3);
+      // ecart du sommet a l'ORIGINE de son instance (pied de la plante)
+      {
+        auto q = [](float d) -> u32 {
+          s32 v = (s32)std::lround(d / (4096.f * 0.02f));
+          return (u32)(std::clamp(v, -511, 511) & 0x3ff);
+        };
+        const float ox = mat[3].x() - vtx.x, oy = mat[3].y() - vtx.y, oz = mat[3].z() - vtx.z;
+        const float lim = 4096.f * 0.02f * 511.f;
+        u32 bits = 0;
+        if (std::abs(ox) < lim && std::abs(oy) < lim && std::abs(oz) < lim) {
+          bits = q(ox) | (q(oy) << 10) | (q(oz) << 20) | (1u << 30);
+        }
+        memcpy(&vtx.pad0, &bits, 4);
+      }
       i++;
     }
   }
   ASSERT(i == unpacked.vertices.size());
 }
 
-// PC-REMAKE: runtime Phong subdivision of tfrag geometry. Every triangle is
-// split into four; the new edge-midpoints are curved along smoothed vertex
-// normals, so faceted cliffs and hills become genuinely rounder. Runs at level
-// load (nothing serialized), preserves per-vis-group culling, and converts the
-// tree from strips to plain triangles.
-// 22/09 : QA_NO_SUBDIV=1 desactive la subdivision Phong (A/B contre le rendu d'origine)
+// runtime Phong subdivision of tfrag geometry
 bool g_tfrag_phong_subdiv = [] {
   const char* e = getenv("QA_NO_SUBDIV");
   return !(e && e[0] == '1');
@@ -411,7 +418,7 @@ struct QuantPosHash {
   }
 };
 inline QuantPos quant(const PreloadedVertex& v) {
-  // weld tolerance: 4 world units (~1mm) — packed verts on shared edges match
+  // weld tolerance: 4 world units (~1mm)
   return {(s32)std::lround(v.x * 0.25f), (s32)std::lround(v.y * 0.25f),
           (s32)std::lround(v.z * 0.25f)};
 }
@@ -452,15 +459,11 @@ void TfragTree::unpack() {
                             draw.plain_indices.end());
   }
 
-  // PC-REMAKE: tfrag subdivision is invoked by the Loader after unpack (kept
-  // symmetric with TIE).
+  // tfrag subdivision is invoked by the Loader after unpack (kept symmetric with TIE)
 }
 
 namespace {
-// shared implementation for tfrag and tie trees (same vertex/draw formats).
-// skip_draw: caller-provided predicate — draws it accepts keep their authored
-// geometry (de-stripped only). Used to protect foliage lamellas, which Phong
-// displacement tears apart (bugged palms report).
+// shared implementation for tfrag and tie trees (same vertex/draw formats)
 void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
                           std::vector<u32>& indices_ref,
                           std::vector<StripDraw>& draws,
@@ -470,8 +473,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
                           const std::vector<u8>* decor_classes = nullptr,
                           const std::vector<const PcSculptHeight*>* sculpt_maps = nullptr);
 
-// PC-REMAKE : prototypes du decor deja remodeles (nom suffixe " [remake]" par l'extracteur) : ni
-// subdivision ni affinage au chargement (pose par TieTree::subdivide_phong, par fil)
+// prototypes du decor deja remodeles (nom suffixe " [remake]" par l'extracteur)
 thread_local const std::vector<char>* t_proto_remplace = nullptr;
 inline bool proto_remplace(const StripDraw::VisGroup& g) {
   return t_proto_remplace && g.tie_proto_idx < t_proto_remplace->size() &&
@@ -491,14 +493,7 @@ bool tex_name_is_foliage(const std::string& n) {
 }  // namespace
 
 void TfragTree::subdivide_phong(const std::vector<Texture>* textures, bool sculpture) {
-  // PC-REMAKE 22/09 : TERRAIN = subdivision SANS deplacement (force 0). Le sol
-  // est fait de COUCHES COPLANAIRES (sable + decals d'herbe/chemin en alpha, arbre
-  // dirt) : deplacer les milieux le long des normales faisait se CROISER ces
-  // couches -> pans plats a bords droits, clairs ou sombres, partout au sol (bugs
-  // de textures et d'ombres au sol presents depuis le 16/08).
-  // La subdivision reste pour les vraies normales lisses du G-buffer.
-  // (original : g_tfrag_phong_strength)
-  // PC-REMAKE : affinage du decor (bois, paille) sur le terrain normal
+  // TERRAIN = subdivision SANS deplacement (force 0)
   std::vector<u8> classes;
   if (textures && kind == TFragmentTreeKind::NORMAL && !std::getenv("QA_NO_DECOR")) {
     classes.assign(draws.size(), 0);
@@ -510,12 +505,9 @@ void TfragTree::subdivide_phong(const std::vector<Texture>* textures, bool sculp
       }
     }
   }
-  // PC-REMAKE : SCULPTURE — dessins opaques dont la texture a une carte de hauteur : volume de la
-  // geometrie (classe 4 si le dessin n'etait pas deja affine)
+  // SCULPTURE — dessins opaques dont la texture a une carte de hauteur
   std::vector<const PcSculptHeight*> maps;
-  // PC-REMAKE : volume geometrique de la roche — ESSAYE puis coupe par defaut : a l'echelle d'un niveau
-  // entier, le budget impose un pas de deux metres et rien ne se voit (le relief au pixel fait
-  // l'essentiel) pour 0,7 s de chargement de plus au village. PC_SCULPT_GEO=1 le remet.
+  // volume geometrique de la roche
   if (sculpture && !classes.empty() && std::getenv("PC_SCULPT_GEO")) {
     maps.assign(draws.size(), nullptr);
     for (size_t i = 0; i < draws.size(); i++) {
@@ -523,8 +515,7 @@ void TfragTree::subdivide_phong(const std::vector<Texture>* textures, bool sculp
       if (d.tree_tex_id >= 0 && d.tree_tex_id < (int)textures->size() && !d.mode.get_ab_enable() &&
           !(d.mode.get_at_enable() && d.mode.get_aref() > 8)) {
         maps[i] = pc_sculpt_height((*textures)[d.tree_tex_id].debug_name);
-        // volume geometrique : la roche (falaises, rochers, murs de pierre) ; le reste a son relief
-        // au pixel
+        // volume geometrique
         if (maps[i] && maps[i]->famille != 2) {
           maps[i] = nullptr;
         }
@@ -539,10 +530,7 @@ void TfragTree::subdivide_phong(const std::vector<Texture>* textures, bool sculp
   use_strips = false;
 }
 
-// Wind-animated TIE draws (palm crowns, banners) are rendered with the TREE's
-// draw mode. De-stripping the static geometry flips that mode to GL_TRIANGLES,
-// so their strip streams must be converted too — otherwise the crowns shatter
-// into flying triangles (the "broken palms" bug).
+// Wind-animated TIE draws (palm crowns, banners) are rendered with the TREE's draw mode
 static void convert_wind_strips_to_tris(TieTree& tree) {
   for (auto& d : tree.instanced_wind_draws) {
     std::vector<u32> out;
@@ -601,8 +589,7 @@ void TieTree::subdivide_phong(const std::vector<Texture>& textures, bool sculptu
     }
     return false;
   };
-  // PC-REMAKE : affinage du decor (bois, paille) — prioritaire sur le classement feuillage par le
-  // nom (un tronc de palmier est du bois), jamais sur une decoupe
+  // affinage du decor (bois, paille)
   std::vector<u8> classes;
   if (!std::getenv("QA_NO_DECOR")) {
     classes.assign(static_draws.size(), 0);
@@ -619,9 +606,7 @@ void TieTree::subdivide_phong(const std::vector<Texture>& textures, bool sculptu
     }
   }
   std::vector<const PcSculptHeight*> maps;
-  // PC-REMAKE : volume geometrique de la roche — ESSAYE puis coupe par defaut : a l'echelle d'un niveau
-  // entier, le budget impose un pas de deux metres et rien ne se voit (le relief au pixel fait
-  // l'essentiel) pour 0,7 s de chargement de plus au village. PC_SCULPT_GEO=1 le remet.
+  // volume geometrique de la roche
   if (sculpture && !classes.empty() && std::getenv("PC_SCULPT_GEO")) {
     maps.assign(static_draws.size(), nullptr);
     for (size_t i = 0; i < static_draws.size(); i++) {
@@ -645,10 +630,7 @@ void TieTree::subdivide_phong(const std::vector<Texture>& textures, bool sculptu
   for (size_t i = 0; i < proto_names.size(); i++) {
     const auto& n = proto_names[i];
     remplace[i] = n.size() > 7 && n.compare(n.size() - 7, 7, " [remake]") == 0;
-    // 29/10 : rocher de falaise en partie ENTERRE sous l'herbe (village, sous la cabane de
-    // Samos) : arrondi, son dessus bombait et percait le terrain (une dalle orange sur
-    // l'herbe). Garde tel quel (pas d'arrondi ni d'affinage).
-    // (original : seuls les prototypes " [remake]" etaient exclus)
+    // rocher de falaise en partie ENTERRE sous l'herbe (village, sous la cabane de Samos)
     if (n.rfind("cliffsmall-bottomed", 0) == 0) {
       remplace[i] = 1;
     }
@@ -672,26 +654,11 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
                           const std::vector<u8>* decor_classes,
                           const std::vector<const PcSculptHeight*>* sculpt_maps) {
   const auto& old_indices = indices_ref;
-  // PC-REMAKE 22/09 : COULEUR DES MILIEUX. Les sommets du decor portent un INDEX
-  // dans la palette heure du jour ; un milieu d'arete prenait l'index de
-  // l'extremite A -> a chaque triangle subdivise, une moitie prenait la couleur
-  // de A, l'autre celle de B : les ombres/lumieres PEINTES par les artistes
-  // (degrades par sommet) devenaient des pans plats a bords droits (bugs de
-  // textures et d'ombres au sol presents depuis la subdivision).
-  // Remede : le milieu porte les DEUX indices (color_index, color_index2) et le
-  // shader moyenne les deux couleurs de palette (tfrag3/etie/tie_wind .vert).
+  // COULEUR DES MILIEUX
   (void)colors;
   auto is_skipped = [&](const StripDraw& d) { return skip_draw && skip_draw(d); };
 
-  // helper: iterate the triangles of an index range (strips + restarts),
-  // preserving original winding via strip parity
-  // 22/09 : parite corrigee — l'ancienne version emettait le PREMIER triangle
-  // deja retourne (parite basculee des le 2e sommet), donc TOUS les triangles a
-  // l'envers de la convention GL (k pair = (a,b,c), k impair = (b,a,c)). Sans
-  // culling ca ne se voyait pas a l'affichage, mais les normales de la passe 1
-  // (produits vectoriels) pointaient vers le BAS ; le post les retournait par
-  // son garde-fou face a la camera sauf en incidence rasante -> plaques de
-  // normales fausses au sol (vue QA : polygones bleu nuit).
+  // helper: iterate the triangles of an index range (strips + restarts)
   auto for_each_tri = [&](size_t begin, size_t count, auto&& fn) {
     size_t end = begin + count;
     u32 a = UINT32_MAX, b = UINT32_MAX;
@@ -716,14 +683,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     }
   };
 
-  // pass 1 (22/09, reecrite) : FACES par position soudee, puis normale lissee
-  // PAR COIN avec ANGLE DE LISSAGE. L'ancienne somme aveugle de toutes les
-  // faces d'une position melangeait falaise et sable, dessus et dessous : de
-  // grands triangles du sol heritaient d'une normale penchee/inversee (pans
-  // sombres de la plage, a toute heure). Ici un coin ne lisse qu'avec les faces
-  // a moins de ~60 degres de la sienne (cos > 0.5) ; aux plis, le sommet est
-  // DUPLIQUE (positions identiques -> pas de fissure, juste une arete vive,
-  // comme dans tout outil de modelisation).
+  // pass 1 (reecrite)
   std::unordered_map<QuantPos, std::vector<math::Vector3f>, QuantPosHash> faces_at;
   faces_at.reserve(verts.size());
   for (auto& draw : draws) {
@@ -747,8 +707,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
       faces_at[quant(p2)].push_back(n);
     });
   }
-  // normale d'un coin : faces de la position dont l'orientation est proche de
-  // celle de la face courante (angle de lissage 60 deg)
+  // normale d'un coin
   auto corner_normal = [&](const PreloadedVertex& v, const math::Vector3f& face_n) -> math::Vector3f {
     auto it = faces_at.find(quant(v));
     if (it == faces_at.end()) {
@@ -772,8 +731,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     float l = acc.length();
     return l > 1e-6f ? acc / l : fn;
   };
-  // normale (moyenne de toutes les faces) d'une position : repli pour les
-  // sommets qui ne passent par aucun triangle (jamais en pratique)
+  // normale (moyenne de toutes les faces) d'une position
   auto normal_of = [&](const PreloadedVertex& v) -> math::Vector3f {
     auto it = faces_at.find(quant(v));
     if (it == faces_at.end()) {
@@ -798,15 +756,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     float l = n.length();
     return l > 1e-6f ? n / l : math::Vector3f(0.f, 0.f, 0.f);
   };
-  // PC-REMAKE 21/09 : les normales lissees sont STOCKEES dans les sommets
-  // (`nor`, 10 bits signes par axe, attribut 3 des shaders du decor). Avant,
-  // elles ne servaient qu'a courber les milieux d'aretes : le terrain arrivait
-  // au GPU avec nor = 0 et tout l'eclairage moderne devait reconstruire une
-  // normale depuis la profondeur (facettes, lignes de niveau au loin). Les
-  // sommets des draws feuillage (skip) recoivent une normale VERTICALE : des
-  // lamelles fines n'ont pas de normale de surface qui ait un sens, et le
-  // vers le haut eclaire un feuillage comme une canopee. On ne touche pas
-  // aux normales deja presentes (TIE envmap : les vraies normales des artistes).
+  // les normales lissees sont STOCKEES dans les sommets
   auto pack_unit = [](const math::Vector3f& n) -> u32 {
     return pack_to_gl_normal((s16)std::lround(n.x() * 511.f), (s16)std::lround(n.y() * 511.f),
                              (s16)std::lround(n.z() * 511.f));
@@ -831,7 +781,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
       }
     }
     const u32 up = pack_unit(math::Vector3f(0.f, 1.f, 0.f));
-    // normales deja presentes (TIE envmap : celles des artistes) : figees
+    // normales deja presentes
     nor_fixed.assign(verts.size(), 0);
     for (size_t i = 0; i < verts.size(); i++) {
       auto& v = verts[i];
@@ -844,17 +794,14 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
         nor_fixed[i] = 1;
         continue;
       }
-      // repli (sommets hors triangles) : moyenne de toutes les faces ; les
-      // triangles reassignent leurs coins ci-dessous
+      // repli (sommets hors triangles)
       math::Vector3f n = normal_of(v);
       if (n.length() > 0.5f) {
         v.nor = pack_unit(n);
       }
     }
   }
-  // coin d'un triangle : le sommet `ic` avec la normale lissee `nc` — le sommet
-  // lui-meme si sa normale est libre ou identique, sinon un DUPLIQUE (par
-  // (sommet, normale)) ; les duplicats partagent position/uv/couleurs
+  // coin d'un triangle
   std::vector<u8> corner_assigned(verts.size(), 0);
   std::unordered_map<u64, u32> corner_dup;
   auto corner_vertex = [&](u32 ic, const math::Vector3f& nc) -> u32 {
@@ -886,8 +833,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     return ni;
   };
 
-  // pass 2: rebuild indices, splitting each triangle into four with Phong
-  // midpoints (deduped per welded edge so neighbors stay crack-free)
+  // pass 2: rebuild indices, splitting each triangle into four with Phong midpoints
   std::unordered_map<u64, u32> edge_mid;
   edge_mid.reserve(old_indices.size());
   auto midpoint = [&](u32 ia, u32 ib) -> u32 {
@@ -906,28 +852,15 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     m.t = 0.5f * (va.t + vb.t);
     m.color_index = va.color_index;
     m.color_index2 = vb.color_index;
-    // 13/10 (POINTS sur les objets precurseurs) : la teinte de
-    // REFLET (r g b a = force de l'environnement, objets precurseurs) restait a 0
-    // sur les milieux -> le reflet ne brillait qu'aux sommets d'origine : une
-    // grille de points et de losanges. Moyenne des deux extremites.
+    // (POINTS sur les objets precurseurs)
     m.r = (u8)(((u32)va.r + vb.r + 1) / 2);
     m.g = (u8)(((u32)va.g + vb.g + 1) / 2);
     m.b = (u8)(((u32)va.b + vb.b + 1) / 2);
     m.a = (u8)(((u32)va.a + vb.a + 1) / 2);
-    // Phong: project the flat midpoint onto both endpoint tangent planes and
-    // pull toward their average — rounds silhouettes without shrinking flats
-    // (22/09 : normales des COINS, deja lissees avec angle)
+    // Phong: project the flat midpoint onto both endpoint tangent planes and pull toward their average
     math::Vector3f na = unpack_unit(va.nor);
     math::Vector3f nb = unpack_unit(vb.nor);
-    // 17/10 (FISSURES dans les rochers) : le deplacement se calcule avec la normale
-    // SOUDEE de chaque position (moyenne de toutes ses faces), pas avec celle du coin.
-    // Aux aretes vives, les deux cotes d'une arete portent des sommets DUPLIQUES
-    // (meme position, normales differentes) : chacun bombait son milieu dans sa
-    // propre direction -> deux milieux a deux endroits, un jour entre les faces ou
-    // l'on voyait le fond. Avec la normale soudee, les deux milieux coincident ; la
-    // normale d'eclairage du milieu reste celle du coin (arete vive a l'ombrage).
-    // (original : deplacement avec na / nb ci-dessus)
-    // QA_FISSURES_AVANT=1 : ancien calcul (A/B de controle)
+    // (FISSURES dans les rochers)
     static const bool qa_old_crease = getenv("QA_FISSURES_AVANT") != nullptr;
     const math::Vector3f wa = qa_old_crease ? na : normal_of(va);
     const math::Vector3f wb = qa_old_crease ? nb : normal_of(vb);
@@ -949,7 +882,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
       m.y += disp.y();
       m.z += disp.z();
     }
-    // PC-REMAKE 21/09 : normale du milieu = moyenne des deux extremites
+    // normale du milieu = moyenne des deux extremites
     {
       math::Vector3f nm = na + nb;
       float l = nm.length();
@@ -975,8 +908,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
     size_t base = draw.unpacked.idx_of_first_idx_in_full_buffer;
     size_t group_start = base;
     u32 new_first = (u32)new_indices.size();
-    // PC-REMAKE : dessin de bois / paille (decor affine) : triangle d'origine garde, coins lisses ;
-    // l'affinage (pc_refine_decor_impl) le redecoupe ensuite
+    // dessin de bois / paille (decor affine)
     const bool decor = decor_classes && draw_i < decor_classes->size() && (*decor_classes)[draw_i];
     const bool skip = !decor && is_skipped(draw);
     for (auto& g : draw.vis_groups) {
@@ -985,14 +917,13 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
       const bool skip_g = skip || proto_remplace(g);
       for_each_tri(group_start, g.num_inds, [&](u32 i0, u32 i1, u32 i2) {
         if (skip_g) {
-          // foliage cutouts: de-strip only (whole tree becomes GL_TRIANGLES),
-          // geometry untouched so lamellas keep their authored shape
+          // foliage cutouts: de-strip only (whole tree becomes GL_TRIANGLES)
           const u32 out[3] = {i0, i1, i2};
           new_indices.insert(new_indices.end(), out, out + 3);
           tris += 1;
           return;
         }
-        // 22/09 : coins avec normale lissee par angle (duplicats aux plis)
+        // coins avec normale lissee par angle (duplicats aux plis)
         static const bool qa_no_corner = [] {
           const char* e = getenv("QA_NO_CORNER");
           return e && e[0] == '1';
@@ -1030,9 +961,7 @@ void phong_subdivide_impl(std::vector<PreloadedVertex>& verts,
   }
 
   indices_ref = std::move(new_indices);
-  // PC-REMAKE : DECOR AFFINE — normales soudees puis redecoupage des dessins de bois et de paille. Aux
-  // aretes partagees avec un dessin subdivise, on reprend EXACTEMENT son milieu (midpoint) : rien
-  // ne s'ouvre entre les deux.
+  // DECOR AFFINE
   if (decor_classes) {
     pc_prepare_decor_weld(verts, indices_ref, draws);
     pc_refine_decor_impl(verts, indices_ref, draws, *decor_classes,
@@ -1245,8 +1174,7 @@ void MercModelGroup::serialize(Serializer& ser) {
   ser.from_pod_vector(&indices);
   ser.from_pod_vector(&vertices);
 
-  // PC-REMAKE : objets remodeles = remplaces par un glTF (tous les dessins hors yeux en liste des
-  // l'extraction). Releve AVANT le decoupage de chargement, qui met aussi les autres en liste.
+  // objets remodeles = remplaces par un glTF (tous les dessins hors yeux en liste des l'extraction)
   if (!ser.is_saving()) {
     for (auto& model : models) {
       bool liste = false, strip = false;
@@ -1262,8 +1190,7 @@ void MercModelGroup::serialize(Serializer& ser) {
     }
   }
 
-  // PC-REMAKE: round actor/prop models right after the level file is read
-  // (game side only — the extractor never deserializes fr3s).
+  // round actor/prop models right after the level file is read
   if (!ser.is_saving() && g_tfrag_phong_subdiv) {
     subdivide_phong();
     replace_demo_models();
@@ -1273,11 +1200,7 @@ void MercModelGroup::serialize(Serializer& ser) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PC-REMAKE 21/10 : PERSONNAGES REMODELES
-// Groupes d'animation des etres vivants du jeu : Jak et ses variantes, Daxter, les PNJ, les
-// animaux et tous les ennemis et boss. Le nom d'un modele est <groupe>-lod0, <groupe>-lod1,
-// <groupe>-<variante>-lod0... : un groupe correspond s'il est suivi d'un tiret.
+// PERSONNAGES REMODELES Groupes d'animation des etres vivants du jeu
 namespace {
 const char* const kPcCharacterGroups[] = {
     // Jak et Daxter
@@ -1298,8 +1221,7 @@ const char* const kPcCharacterGroups[] = {
 };
 }  // namespace
 
-// PC-REMAKE : objets ranges sous le nom d'un personnage (plates-formes du flutflut, rochers de l'ogre,
-// nids de rats, cage brisee) : ils sont remodeles et rendus comme les autres objets
+// objets ranges sous le nom d'un personnage
 const char* const kPcObjetsDePersonnages[] = {
     "flutflut-plat-", "ogreboss-bounce-boulder-", "ogreboss-column-", "ogreboss-shoot-boulder-",
     "ogreboss-super-boulder-", "swamp-rat-nest-", "bully-broken-cage-",
@@ -1338,16 +1260,7 @@ u32 pc_pack_weld_normal(float x, float y, float z, bool sharp) {
   return 1u | (sharp ? 2u : 0u) | (q(px) << 2) | (q(py) << 17);
 }
 
-// ---- PC-REMAKE : NORMALES SOUDEES DU DECOR (decoupage tfrag3_tess) ----------------------------
-// Pour que la surface courbe (triangles PN) ne s'ouvre jamais, tous les sommets a une meme
-// position doivent utiliser la MEME normale de forme. Regles :
-//  - une seule famille de normales a cette position (surface lisse) : leur moyenne ;
-//  - plusieurs familles (arete vive : rebord d'un rondin, coin d'une caisse) : on garde la
-//    famille qui se COURBE le long de la surface (la face laterale d'un rondin, dont la normale
-//    tourne d'un sommet voisin a l'autre) — le bord du rondin s'arrondit et son disque reste
-//    plat. Si aucune famille ne se courbe (coin d'une boite), l'arete reste droite (bit 1).
-//  - bord (bit 2) : position partagee par plusieurs dessins (deux textures) : l'arete y reste
-//    droite et reprend le milieu du dessin voisin (pc_refine_decor_impl), sans fissure.
+// --- PC-REMAKE
 namespace {
 struct DecorKey {
   int32_t x, y, z;
@@ -1412,7 +1325,7 @@ void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
   for (size_t i = 0; i < nv; i++) {
     nrm[i] = decor_unpack_nor(verts[i].nor);
   }
-  // courbure de chaque sommet dans sa famille (angle max avec ses voisins de triangle)
+  // courbure de chaque sommet dans sa famille
   std::vector<float> curv(nv, 0.f);
   std::vector<int32_t> pos_draw(np, -1);
   std::vector<u8> pos_border(np, 0);
@@ -1443,7 +1356,7 @@ void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
       }
     }
   }
-  // par position : somme des normales, meilleure famille courbe, ecart des familles
+  // par position
   std::vector<math::Vector3f> sum(np, math::Vector3f(0.f, 0.f, 0.f));
   std::vector<int64_t> best(np, -1);
   std::vector<float> best_curv(np, -1.f);
@@ -1451,7 +1364,7 @@ void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
   std::vector<u8> spread(np, 0);
   std::vector<float> mindot(np, 1.f);  // plus grand ecart entre familles (cosinus)
   const float cos_same = std::cos(20.f * 3.14159265f / 180.f);
-  // pans d'un objet rond dessine en huit faces (45 degres) : surface lisse, pas un coin de boite
+  // pans d'un objet rond dessine en huit faces (45 degres)
   const float cos_pans = std::cos(50.f * 3.14159265f / 180.f);
   for (size_t i = 0; i < nv; i++) {
     const u32 p = pos_id[i];
@@ -1480,7 +1393,7 @@ void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
     bool vif = false;
     if (spread[p]) {
       if (mindot[p] > cos_pans) {
-        // faces planes d'un objet a pans (cerclage octogonal) : moyenne, l'arete s'arrondit
+        // faces planes d'un objet a pans (cerclage octogonal)
       } else if (best_curv[p] < flat || best[p] < 0) {
         vif = true;
       } else {
@@ -1504,9 +1417,8 @@ void pc_prepare_decor_weld(std::vector<PreloadedVertex>& verts,
 int pc_decor_class_for_texture(const std::string& name) {
   std::string n = name;
   std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-  // cerclages et anneaux (pied des poteaux de cabane, tonneaux) : des cercles dessines en huit
-  // pans ; le decoupage par courbure les arrondit, une plaque plate n'en est pas changee
-  if (n.find("precursor") == std::string::npos) {
+  // cerclages et anneaux (pied des poteaux de cabane, tonneaux)
+  if (n.find("precursor") == std::string::npos && n.find("fringe") == std::string::npos) {
     static const char* kCercle[] = {"band", "hoop", "ring", "collar", "brass"};
     for (auto* k : kCercle) {
       if (n.find(k) != std::string::npos) {
@@ -1548,22 +1460,7 @@ int pc_decor_class_for_texture(const std::string& name) {
   return 0;
 }
 
-// ---- PC-REMAKE : AFFINAGE DU DECOR AU CHARGEMENT -------------------------------------------------
-// Le decor est fixe : on le redecoupe une fois (le decoupage par la carte graphique, emule sur Mac,
-// coutait 34 images par seconde a lui seul). Dessins de bois, de cordes et de paille seulement (la
-// roche garde ses facettes d'artiste ; son relief reste dans l'eclairage, tfrag3.frag). Appele
-// par phong_subdivide_impl sur les triangles D'ORIGINE de ces dessins (couleurs peintes exactes).
-//  - chaque arete est coupee selon sa COURBURE (angle entre les normales soudees de ses deux
-//    bouts, un morceau tous les ~12 degres) : une longue arete droite (le long d'un rondin) ne se
-//    decoupe pas, le tour d'un rondin a huit pans s'arrondit. Ne depend que de l'arete : les deux
-//    triangles qui la partagent la coupent pareil ;
-//  - surface courbe PN tiree de la normale SOUDEE (pc_prepare_decor_weld) ; aretes vives droites ;
-//  - arete partagee avec un autre dessin : droite, avec EXACTEMENT le milieu que ce dessin calcule
-//    (phong_mid) : aucune fente entre une piece affinee et ses voisines ;
-//  - les points d'une arete moins decoupee que l'interieur sont poses sur sa ligne brisee ;
-//  - couleur peinte : melange des trois coins (PreloadedVertex::color_index3, cw0, cw1).
-// (v1 : apres la subdivision, decoupage selon la longueur + relief geometrique — 172 millions de
-//  triangles au village, plaques de couleur sur les bouts de rondins)
+// --- PC-REMAKE
 namespace {
 struct DecorCorner {
   math::Vector3f p, n, g;  // position, normale d'eclairage, normale soudee
@@ -1604,14 +1501,11 @@ math::Vector3f decor_ctrl(const DecorCorner& i, const DecorCorner& j, bool strai
   return r / 3.f;
 }
 
-// PC-REMAKE : SCULPTURE — decoupage d'un triangle d'origine avec un niveau PAR ARETE (ne[e]) et un
-// niveau interieur N, raccordes par une couronne en fermeture eclair : aucune jointure en T, donc
-// aucune fente entre deux triangles qui partagent une arete. Points en barycentriques (u, v, w)
-// des coins c0, c1, c2 ; aretes 0 = c0->c1, 1 = c1->c2, 2 = c2->c0.
+// SCULPTURE — decoupage d'un triangle d'origine avec un niveau PAR ARETE (ne[e]) et un niveau
 struct PatchPoint {
   float u, v, w;
-  int arete;  // -1 interieur ou coin ; 0..2 point d'arete
-  int k;      // rang sur l'arete (0..ne)
+  int arete;  // 1 interieur ou coin ; 0..2 point d'arete
+  int k;  // rang sur l'arete (0..ne)
 };
 void sculpt_patch_topology(int N,
                            const int ne[3],
@@ -1645,11 +1539,11 @@ void sculpt_patch_topology(int N,
     return edge_first[e] + k;
   };
   if (N < 3) {
-    // pas d'interieur : eventail depuis le premier point (ne vaut 1 partout ici)
+    // pas d'interieur
     tris.push_back({corner[0], corner[1], corner[2]});
     return;
   }
-  // points interieurs (a = indice v, b = indice w ; a, b >= 1, a + b <= N - 1)
+  // points interieurs
   std::vector<int> inner((size_t)(N + 1) * (N + 1), -1);
   auto in_at = [&](int a, int b) -> int& { return inner[(size_t)a * (N + 1) + b]; };
   for (int a = 1; a <= N - 2; a++) {
@@ -1741,8 +1635,7 @@ const PcSculptHeight* pc_sculpt_height(const std::string& debug_name) {
         m->amp = amp;
         m->famille = b[12];
         m->data.assign(b.begin() + 16, b.begin() + 16 + (size_t)w * h);
-        // version adoucie (flou en boite repete, rayon ~ 1/20 de la texture) : le volume de la
-        // geometrie suit les pieces et les pierres, pas le grain (le grain reste au pixel)
+        // version adoucie (flou en boite repete, rayon ~ de la texture)
         std::vector<float> f(m->data.size());
         for (size_t i = 0; i < f.size(); i++) {
           f[i] = m->data[i] / 127.5f - 1.f;
@@ -1802,12 +1695,7 @@ inline std::array<s32, 3> qkey(const math::Vector3f& p) {
 }
 }  // namespace
 
-// PC-REMAKE : SCULPTURE d'un triangle d'origine du decor. Les coins restent a leur place ; les points
-// nouveaux suivent la surface (plate, ou courbe PN pour le bois et la paille) puis la carte de
-// hauteur adoucie, le long de la normale, a l'echelle reelle de la texture. Les aretes vives,
-// les coutures de texture et les aretes partagees avec un autre dessin restent droites et sans
-// relief ; les points d'une arete sont calcules une fois (cache) : les deux triangles qui la
-// partagent ont exactement les memes.
+// SCULPTURE d'un triangle d'origine du decor
 u32 pc_sculpt_triangle(std::vector<PreloadedVertex>& verts,
                        std::vector<u32>& out,
                        const u32 t3[3],
@@ -1998,10 +1886,7 @@ size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
   size_t added = 0;
   const size_t nv0 = verts.size();
 
-  // ---- PC-REMAKE : SCULPTURE, preparation (si des dessins ont une carte de hauteur) ----
-  // echelle reelle par sommet (unites du jeu par unite de texture), coutures de texture (memes
-  // positions, coordonnees differentes : l'arete y reste droite, sans relief) et pas du
-  // decoupage, regle pour tenir un budget de triangles
+  // --- PC-REMAKE
   std::vector<float> rep_v;
   std::unordered_set<SculptEdgeKey, SculptEdgeKeyHash> coutures;
   std::unordered_map<SculptEdgeKey, math::Vector3f, SculptEdgeKeyHash> edge_cache;
@@ -2079,8 +1964,7 @@ size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
         rep_v[k] /= rep_n[k];
       }
     }
-    // budget : environ N^2 - 1 triangles AJOUTES par triangle d'origine, N = longueur / pas (16 au
-    // plus) ; part du budget du niveau qui reste
+    // budget : environ N^2 - 1 triangles AJOUTES par triangle d'origine, N = longueur / pas (16 au plus)
     const double budget = std::max(0.0, g_pc_sculpt_budget);
     for (int iter = 0; iter < 8; iter++) {
       tris_estimes = 0;
@@ -2159,7 +2043,7 @@ size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
           any_curve |= !shared[e] && ne[e] > 1;
         }
         if (!any_curve) {
-          // rien a arrondir : decoupage d'origine (milieux du voisinage aux aretes partagees)
+          // rien a arrondir
           N = 2;
           ne[0] = ne[1] = ne[2] = 2;
         }
@@ -2263,7 +2147,7 @@ size_t pc_refine_decor_impl(std::vector<PreloadedVertex>& verts,
             nvx.cw0 = (u8)std::clamp((int)std::lround(u * 255.f), 0, 255);
             nvx.cw1 = (u8)std::clamp((int)std::lround(v * 255.f), 0, 255 - nvx.cw0);
             if (nvx.cw0 == 0 && nvx.cw1 == 0) {
-              // tout le poids sur le 3e coin : (0, 0) est le code du melange d'origine
+              // tout le poids sur le 3e coin
               nvx.color_index = c[2].col;
               nvx.color_index2 = c[2].col;
             }
@@ -2360,10 +2244,7 @@ void MercModelGroup::pc_prepare_characters() {
       }
     }
 
-    // NORMALE SOUDEE : moyenne, par position, des normales de toutes les pieces du modele
-    // (sommets fixes et sommets des visages animes). Le decoupage courbe les aretes avec elle :
-    // deux pieces qui se touchent suivent la meme courbe, sans jour. Une position dont les
-    // normales divergent de plus de 50 degres est une arete vive : elle reste droite.
+    // NORMALE SOUDEE
     std::vector<u32> used;
     for (auto& effect : model.effects) {
       for (auto* list : {&effect.all_draws, &effect.mod.fix_draw}) {
@@ -2440,17 +2321,7 @@ void MercModelGroup::pc_prepare_characters() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PC-REMAKE: parametric prop remodeling (Sandover Village pass).
-//
-// Every listed prop is rebuilt from scratch with modern geometry, auto-fitted
-// to the original model's bounding box. UVs are transferred from the original
-// mesh by nearest-neighbour lookup, so each new surface inherits the texture
-// atlas region the artists authored for that part of the object — the prop
-// keeps its identity while gaining real volume, bevels and roundness.
-//
-// Materials: metal props get the merc envmap pass (they reflect the sky).
-// ---------------------------------------------------------------------------
+// parametric prop remodeling (Sandover Village pass)
 namespace {
 
 struct MeshBuild {
@@ -2484,7 +2355,6 @@ struct MeshBuild {
     tri(a, b, c);
     tri(a, c, d);
   }
-  // revolve a profile (radius, height) around Y; profile[i] = {r, y}
   void revolve(const std::vector<std::array<float, 2>>& profile,
                float cx,
                float cz,
@@ -2584,7 +2454,7 @@ struct MeshBuild {
     edge_strip(0, 1, 0, 3, 0, 1);
     edge_strip(0, 2, 1, 4, 1, 2);
     edge_strip(0, 0, 3, 5, 3, 0);
-    // -X face (1)
+    // X face (1)
     edge_strip(1, 2, 3, 2, 3, 2);
     edge_strip(1, 0, 1, 3, 2, 3);
     edge_strip(1, 1, 2, 4, 0, 3);
@@ -2625,7 +2495,7 @@ struct MeshBuild {
   }
 };
 
-// ---- individual prop generators -------------------------------------------
+// --- individual prop generators
 
 // wooden barrel: bulged staves, three iron hoops, recessed lids
 void gen_barrel(MeshBuild& mb, float cx, float y0, float cz, float radius, float height, bool detail) {
@@ -2645,8 +2515,7 @@ void gen_barrel(MeshBuild& mb, float cx, float y0, float cz, float radius, float
   }
 }
 
-// metal crate: the original box silhouette (so the painted texture still maps
-// 1:1) with chamfered edges, corner armour and rivetted straps added as relief
+// metal crate: the original box silhouette (so the painted texture still maps 1:1) with chamfered
 void gen_metal_crate(MeshBuild& mb, float cx, float y0, float cz, float half, float height, bool detail) {
   float cy = y0 + height * 0.5f;
   float hh = height * 0.5f;
@@ -2669,18 +2538,13 @@ void gen_metal_crate(MeshBuild& mb, float cx, float y0, float cz, float half, fl
   }
 }
 
-// scout-fly cage: an open welded frame — thin mesh panels on the faces plus a
-// real bar skeleton, so the creature inside stays visible (the original is a
-// see-through cage; a solid box reads as a block of glass).
-// IMPORTANT: this prop renders alpha-blended, so NOTHING may overlap — every
-// stacked layer would add up and wash the cage out to solid white. All pieces
-// below tile the volume exactly once.
+// scout-fly cage: an open welded frame
 void gen_cage(MeshBuild& mb, float cx, float y0, float cz, float half, float height, bool detail) {
   float cy = y0 + height * 0.5f;
   float hh = height * 0.5f;
-  float bar = half * 0.09f;      // frame bar half-thickness
-  float panel = half * 0.010f;   // mesh panel half-thickness
-  float inner = half - 2.f * bar;      // free span between the uprights
+  float bar = half * 0.09f;  // frame bar half-thickness
+  float panel = half * 0.010f;  // mesh panel half-thickness
+  float inner = half - 2.f * bar;  // free span between the uprights
   float inner_y = hh - 2.f * bar;
 
   // 4 uprights at the corners
@@ -3003,7 +2867,7 @@ void gen_rock(MeshBuild& mb, float cx, float y0, float cz, float radius, float h
   }
 }
 
-// ---- prop registry ---------------------------------------------------------
+// --- prop registry
 
 enum class PropShape {
   Barrel,
@@ -3024,11 +2888,7 @@ enum class PropShape {
   Cage,
 };
 
-// Replace  : the original is a crude primitive — the rebuilt shape is strictly
-//            better (spheres instead of faceted blobs, staved barrels…).
-// Augment  : the original already carries modelled detail (rivets, trims). We
-//            KEEP all of it and add the new geometry on top, so the prop can
-//            never come out poorer than it started.
+// Replace : the original is a crude primitive
 enum class PropMode { Replace, Augment };
 
 struct PropRule {
@@ -3038,7 +2898,7 @@ struct PropRule {
   PropMode mode;
 };
 
-// Sandover Village (village1) + its shared props. Order matters: first match.
+// Sandover Village (village1) + its shared props
 const PropRule kPropRules[] = {
     // crude primitives → rebuilt outright
     {"money", PropShape::Orb, true, PropMode::Replace},
@@ -3075,8 +2935,7 @@ const PropRule* find_prop_rule(const std::string& name) {
   return nullptr;
 }
 
-// closest point on a triangle to p, returned with its barycentric weights.
-// (Ericson, Real-Time Collision Detection §5.1.5)
+// closest point on a triangle to p, returned with its barycentric weights
 struct ClosestHit {
   float dist2;
   float w0, w1, w2;
@@ -3127,9 +2986,7 @@ ClosestHit closest_on_tri(const math::Vector3f& p,
 }  // namespace
 
 void MercModelGroup::replace_demo_models() {
-  // OFF BY DEFAULT: the rebuilt crates did not match the original art.
-  // The original props ship as-is; set PC_REMAKE_PROPS=1 to
-  // switch the parametric versions back on for experimentation.
+  // OFF BY DEFAULT: the rebuilt crates did not match the original art
   {
     const char* env = getenv("PC_REMAKE_PROPS");
     if (!env || env[0] != '1') {
@@ -3161,10 +3018,7 @@ void MercModelGroup::replace_demo_models() {
       continue;
     }
 
-    // Gather EVERY eligible sub-mesh. Props are multi-material (metal frame +
-    // glass panel + painted trim); rebuilding into a single draw would paint
-    // the whole object with one texture, so we keep them all and re-assign the
-    // new geometry to whichever original material it sits closest to.
+    // Gather EVERY eligible sub-mesh
     struct SrcVert {
       float x, y, z, u, v;
     };
@@ -3178,7 +3032,7 @@ void MercModelGroup::replace_demo_models() {
     };
     std::vector<Slot> slots;
     std::vector<SrcVert> src;
-    std::vector<u32> src_vi;  // original vertex index behind each src entry
+    std::vector<u32> src_vi;
     std::vector<SrcTri> src_tris;
     const bool augment = (rule->mode == PropMode::Augment);
     float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
@@ -3307,9 +3161,7 @@ void MercModelGroup::replace_demo_models() {
       continue;
     }
 
-    // MATERIAL + UV TRANSFER: project each new vertex onto the closest point of
-    // the ORIGINAL mesh; take its interpolated texture coordinates AND remember
-    // which sub-mesh (material) it landed on.
+    // MATERIAL + UV TRANSFER: project each new vertex onto the closest point of the ORIGINAL mesh; take
     std::vector<u32> vert_slot(mb.verts.size(), 0);
     for (size_t vi = 0; vi < mb.verts.size(); vi++) {
       auto& nv = mb.verts[vi];
@@ -3348,9 +3200,7 @@ void MercModelGroup::replace_demo_models() {
       per_slot[s].push_back(c);
     }
 
-    // In Augment mode the original triangles are re-emitted first (converted
-    // from strips to a plain list) and the new relief is appended after them,
-    // so nothing the artists modelled is ever lost.
+    // In Augment mode the original triangles are re-emitted first (converted from strips to a plain list)
     std::vector<std::vector<u32>> orig_per_slot(slots.size());
     if (augment) {
       for (const auto& t : src_tris) {
@@ -3408,17 +3258,7 @@ void MercModelGroup::replace_demo_models() {
   }
 }
 
-// PC-REMAKE: split every merc triangle in four, curving midpoints along the
-// authored vertex normals. Skips eye draws (dedicated texture system) and any
-// effect with modifiable draws (blendshape faces stream vertices at runtime).
-// Rounds jars, baskets, machines, NPCs — every prop in the level.
-// 17/10 : les logos de l'ecran titre (Naughty Dog, Jak and Daxter : modeles
-// logo-* et ndi-* du niveau title) gardent leur forme d'origine. Ce sont des
-// lettres extrudees a aretes vives : l'arrondi bombait les parois creuses du
-// logo Naughty Dog, qui passaient devant les lettres (trainees bleues).
-// 21/10 : les plateformes a eco bleu (plat-eco, citb-plat-eco, plat-eco-finalboss...) aussi : leur
-// symbole bleu est une piece posee juste au-dessus du plateau ; arrondi, le plateau bombait et
-// passait par-dessus le symbole (symbole a moitie masque)
+// split every merc triangle in four, curving midpoints along the authored vertex normals
 static bool merc_model_keeps_original_shape(const std::string& name) {
   return name.rfind("logo-", 0) == 0 || name.rfind("ndi-", 0) == 0 ||
          name.find("plat-eco") != std::string::npos;
@@ -3430,10 +3270,7 @@ void MercModelGroup::subdivide_phong() {
 
   std::unordered_map<u64, u32> edge_mid;
 
-  // 17/10 (FISSURES) : normale SOUDEE par position (somme des normales des sommets qui
-  // partagent la position). Aux aretes vives, les sommets sont dupliques avec des normales
-  // differentes : chaque cote bombait son milieu dans sa direction -> jour entre les faces.
-  // Le deplacement utilise la normale soudee, identique des deux cotes.
+  // (FISSURES)
   static const bool qa_old_crease = getenv("QA_FISSURES_AVANT") != nullptr;
   auto qpos = [](const MercVertex& v) -> u64 {
     auto q = [](float f) -> u64 { return (u64)(u32)(s32)std::lround(f * 64.f) & 0x1fffff; };
@@ -3474,7 +3311,6 @@ void MercModelGroup::subdivide_phong() {
     m.y = 0.5f * (va.y + vb.y);
     m.z = 0.5f * (va.z + vb.z);
     // Phong displacement using the authored normals
-    // (17/10 : soudees par position ; original : na(va.nx, ...), nb(vb.nx, ...))
     {
       math::Vector3f na = welded_normal(va);
       math::Vector3f nb = welded_normal(vb);
@@ -3528,9 +3364,7 @@ void MercModelGroup::subdivide_phong() {
     if (merc_model_keeps_original_shape(model.name)) {
       continue;
     }
-    // PC-REMAKE : un modele remplace par un glTF remodele (tous ses dessins en liste) est deja au
-    // detail voulu ; le redecouper quadruplerait ses triangles pour rien. Ses dessins sont
-    // recales a la fin avec les autres dessins non touches.
+    // un modele remplace par un glTF remodele (tous ses dessins en liste) est deja au detail voulu
     if (model.pc_remodele) {
       continue;
     }
@@ -3610,8 +3444,7 @@ void MercModelGroup::subdivide_phong() {
     lg::info("PC-REMAKE merc models: {}", names);
   }
 
-  // untouched draws (eyes, mod effects) still reference the OLD index buffer:
-  // append it wholesale and shift those draws' offsets.
+  // untouched draws (eyes, mod effects) still reference the OLD index buffer: append it wholesale and
   u32 old_base = (u32)new_indices.size();
   new_indices.insert(new_indices.end(), indices.begin(), indices.end());
   for (auto& model : models) {

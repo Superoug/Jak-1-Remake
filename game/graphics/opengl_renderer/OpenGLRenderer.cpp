@@ -46,7 +46,7 @@
 #endif
 #include "common/util/string_util.h"
 
-// 25/10 : Jak dans l'eau (kmachine.cpp pc_set_jak_wet) : 0 / 1 patauge / 2 nage, surface
+// Jak dans l'eau (kmachine.cpp pc_set_jak_wet)
 float g_jak_eau[2] = {0.f, 0.f};
 namespace {
 std::string g_current_renderer;
@@ -173,9 +173,7 @@ OpenGLRenderer::OpenGLRenderer(std::shared_ptr<TexturePool> texture_pool,
       ASSERT(false);
   }
 
-  // [QA-TEST 25/08] interrupteur d'enquete : QA_DISABLE="motif1,motif2" eteint
-  // tout renderer dont le nom contient un des motifs (chasse au dessinateur du
-  // decor lointain). Sans la variable, aucun effet.
+  // [QA] interrupteur d'enquete
   if (const char* dis = getenv("QA_DISABLE")) {
     std::string spec(dis);
     for (auto& br : m_bucket_renderers) {
@@ -959,11 +957,7 @@ Fbo make_fbo(int w, int h, int msaa, bool make_zbuf_and_stencil) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
   }
 
-  // PC-REMAKE 21/09 : G-buffer de normales sur l'attachement 1 du framebuffer
-  // principal. Il n'est PAS dans la liste de dessin par defaut (glDrawBuffers(1)) :
-  // les renderers PS2 emules n'ecrivent que la sortie 0, et une sortie non
-  // ecrite serait indefinie. Les renderers qui ont une normale (tfrag, tie,
-  // merc) l'activent le temps de leurs draws (pc_normal_target).
+  // G-buffer de normales sur l'attachement 1 du framebuffer principal
   if (make_zbuf_and_stencil) {
     GLuint ntex;
     glGenTextures(1, &ntex);
@@ -1037,7 +1031,7 @@ void OpenGLRenderer::blit_display(ScopedProfilerNode& prof) {
  * Main render function. This is called from the gfx loop with the chain passed from the game.
  */
 namespace {
-// PC-REMAKE: colour target used to replay the post pass for screenshots.
+// colour target used to replay the post pass for screenshots
 struct PostCapture {
   GLuint fbo = 0;
   GLuint tex = 0;
@@ -1068,10 +1062,7 @@ struct PostCapture {
 PostCapture g_post_capture;
 }  // namespace
 
-// PC-REMAKE 14/10 : SONDE [QA-PROF] (passe d'optimisation). `touch /tmp/qa_prof`
-// -> glFinish apres chaque bucket (temps GPU reel de chaque etape) et, toutes les
-// 240 images, le cout moyen des 30 noeuds les plus chers dans le journal. Inerte
-// sans le fichier (un stat() toutes les 60 images).
+// SONDE [QA] (passe d'optimisation)
 namespace {
 bool g_qa_prof = false;
 int g_qa_prof_poll = 0;
@@ -1087,9 +1078,7 @@ void qa_prof_walk(const ProfilerNode& n, const std::string& path, int depth) {
     }
   }
 }
-// PC-REMAKE 14/10 : SONDE [QA-GPU] — temps GPU REEL de chaque bucket et du post par
-// requetes GL_TIME_ELAPSED (lues 4 images plus tard : aucun blocage, aucune
-// serialisation, contrairement a [QA-PROF]). `touch /tmp/qa_gpu`.
+// SONDE [QA]
 struct QaGpuTimer {
   static constexpr int kRing = 4;
   static constexpr int kSlots = 96;
@@ -1171,8 +1160,7 @@ struct QaGpuTimer {
 };
 QaGpuTimer g_qa_gpu;
 }  // namespace
-// [QA-GPU] 14/10 : decoupe le temps du bucket en cours en segments nommes (appelable
-// depuis les renderers : la requete ouverte est fermee, une nouvelle commence)
+// [QA] decoupe le temps du bucket en cours en segments nommes
 void qa_gpu_split(int slot, const char* name) {
   if (!g_qa_gpu.active || !g_qa_gpu.open) {
     return;
@@ -1180,8 +1168,7 @@ void qa_gpu_split(int slot, const char* name) {
   g_qa_gpu.end();
   g_qa_gpu.begin(slot, name);
 }
-// [QA-GLERR] 14/10 : glGetError apres chaque grande etape de l'image (appelable aussi
-// depuis les renderers : qa_glerr_check("...") ne coute rien sans /tmp/qa_glerr)
+// [QA] glGetError apres chaque grande etape de l'image
 bool g_qa_glerr = false;
 int g_qa_glerr_logged = 0;
 void qa_glerr_check(const char* where) {
@@ -1195,8 +1182,7 @@ void qa_glerr_check(const char* where) {
   }
 }
 namespace {
-// PC-REMAKE : CARTES DU RIVAGE (outils/rivages.py) : distance signee au trait de cote (m, > 0 en
-// mer), une par niveau cotier, chargee quand le niveau sert. Le post en tire les vagues.
+// CARTES DU RIVAGE (outils/rivages.py)
 struct Rivage {
   GLuint tex = 0;
   float box[4] = {0, 0, 0, 0};  // x0, z0 (m), 1 / largeur, 1 / profondeur (1/m)
@@ -1249,13 +1235,12 @@ Rivage pc_rivage_load(const std::string& level) {
 }
 
 }  // namespace
-// cartes liees a la derniere image (lues par l'eau, voir CommonOceanRenderer)
+// cartes liees a la derniere image
 unsigned int g_rivage_tex[2] = {0, 0};
 float g_rivage_box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 int g_rivage_n = 0;
 namespace {
-// garde les cartes des niveaux en cours d'utilisation, lie les deux premieres aux unites
-// `unite` et `unite + 1` ; rend leur nombre et leurs boites
+// garde les cartes des niveaux en cours d'utilisation
 int pc_rivage_bind(Loader* loader, int unite, float* boites) {
   if (loader && (g_rivage_poll++ % 30) == 0) {
     std::vector<std::string> noms;
@@ -1310,7 +1295,7 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings_in) {
   }
   qa_glerr_check("hors rendu (image precedente : ImGui, swap, capture...)");
   g_qa_gpu.begin_frame();
-  // /tmp/qa_prof_cpu : meme releve SANS glFinish = temps PROCESSEUR de soumission
+  // /tmp/qa_prof_cpu
   static bool qa_prof_cpu = false;
   if ((g_qa_prof_poll++ % 60) == 0) {
     qa_prof_cpu = fs::exists("/tmp/qa_prof_cpu");
@@ -1324,7 +1309,7 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings_in) {
     settings_ptr = &settings_copy;
   }
   const RenderOptions& settings = *settings_ptr;
-  pc_remake_lamps_begin_frame();  // PC-REMAKE: publish the lamps GOAL registered
+  pc_remake_lamps_begin_frame();  // publish the lamps GOAL registered
   m_profiler.clear();
   m_render_state.reset();
   m_render_state.ee_main_memory = g_ee_main_mem;
@@ -1359,8 +1344,7 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings_in) {
   {
     auto prof = m_profiler.root()->make_scoped_child("buckets");
     dispatch_buckets(dma, prof, settings.gpu_sync);
-    // 14/10 : passe d'ombres du soleil DIFFEREE, en une seule bascule (voir
-    // SunShadowMap::flush_deferred) — avant le post, apres tous les casteurs
+    // passe d'ombres du soleil DIFFEREE, en une seule bascule (voir SunShadowMap::flush_deferred)
     {
       auto sp = prof.make_scoped_child("ombres-differees");
       g_sun_shadow.flush_deferred(&m_render_state.shaders, m_render_state.frame_idx);
@@ -1418,10 +1402,7 @@ void OpenGLRenderer::render(DmaFollower dma, const RenderOptions& settings_in) {
       x = 0;
       y = 0;
       fbo_id = screenshot_src->fbo_id;
-      // PC-REMAKE: that buffer holds the raw scene, BEFORE the post pass — so a
-      // screenshot taken from it shows none of the lighting, bloom, fog or
-      // tonemap the player actually sees. Replay the post pass into an
-      // offscreen colour buffer and capture that instead.
+      // that buffer holds the raw scene, BEFORE the post pass
       g_post_capture.ensure(w, h);
       do_pcrtc_effects(settings.pmode_alp_register, settings.brightness_contrast_color,
                        settings.brightness_contrast_alpha, &m_render_state, prof,
@@ -1643,8 +1624,7 @@ void OpenGLRenderer::setup_frame(const RenderOptions& settings) {
     // Note: could rely on sky renderer to clear depth and color, but this causes problems with
     // letterboxing
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    // PC-REMAKE 21/09 : le G-buffer de normales s'efface a 0 (alpha 0 = pas de
-    // normale ici, le post retombe alors sur sa reconstruction par profondeur)
+    // le G-buffer de normales s'efface a 0
     g_pc_normal_target_ok = m_fbo_state.render_fbo->normal_tex_id.has_value();
     if (g_pc_normal_target_ok) {
       const GLenum both[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
@@ -1684,12 +1664,10 @@ void OpenGLRenderer::setup_frame(const RenderOptions& settings) {
   glViewport(0, 0, settings.game_res_w, settings.game_res_h);
 }
 
-// PC-REMAKE 22/09 : instantane de la scene AVANT les sprites 2D / HUD / textes
-// (voir pc_prehud_snapshot) — le post (reflets d'eau, rayons) lit cette copie
-// pour ne pas refleter les informations a l'ecran.
+// instantane de la scene AVANT les sprites 2D / HUD / textes (voir pc_prehud_snapshot)
 void pc_prehud_snapshot(GLuint src_fbo, int w, int h, bool multisampled);
 GLuint pc_prehud_texture();
-// PC-REMAKE 12/10 : bloom large (source prise par Sprite3 avant le HUD)
+// bloom large (source prise par Sprite3 avant le HUD)
 GLuint pc_bloom_run(GameVersion version,
                     bool has_depth,
                     bool has_normals,
@@ -1705,9 +1683,7 @@ void OpenGLRenderer::dispatch_buckets_jak1(DmaFollower dma,
   // this chain resets the state of the GS. After this is buckets
   m_category_times.fill(0);
 
-  // [QA] 13/10 : meme interrupteur que QA_DISABLE, mais A CHAUD — le contenu de
-  // /tmp/qa_disable (motifs separes par des virgules) eteint les renderers dont le
-  // nom contient un motif ; fichier absent = tous allumes. Inerte sans le fichier.
+  // [QA] meme interrupteur que QA_DISABLE, mais A CHAUD
   {
     static int qa_dis_poll = 0;
     static std::string qa_dis_spec = "\x01";
@@ -1788,8 +1764,7 @@ void OpenGLRenderer::dispatch_buckets_jak1(DmaFollower dma,
     auto& renderer = m_bucket_renderers[bucket_id];
     auto bucket_prof = prof.make_scoped_child(renderer->name_and_id());
     g_current_renderer = renderer->name_and_id();
-    // PC-REMAKE 22/09 : juste avant le bucket des sprites (particules 3D + HUD 2D,
-    // suivi des textes), on copie la scene pour le post (reflets sans HUD)
+    // juste avant le bucket des sprites (particules 3D + HUD 2D, suivi des textes)
     if (!prehud_done && m_bucket_categories[bucket_id] == BucketCategory::SPRITE &&
         m_fbo_state.render_fbo) {
       prehud_done = true;
@@ -1797,8 +1772,7 @@ void OpenGLRenderer::dispatch_buckets_jak1(DmaFollower dma,
                          m_fbo_state.render_fbo->height, m_fbo_state.render_fbo->multisampled);
     }
     // lg::info("Render: {} start", g_current_renderer);
-    // [QA-GLERR] 14/10 : `touch /tmp/qa_glerr` -> glGetError apres chaque bucket ; les
-    // 40 premieres erreurs sont journalisees avec le bucket fautif (inerte sinon).
+    // [QA] `touch /tmp/qa_glerr` -> glGetError apres chaque bucket
     static bool qa_glerr = false;
     static int qa_glerr_poll = 0, qa_glerr_logged = 0;
     if (bucket_id == 0 && (qa_glerr_poll++ % 60) == 0) {
@@ -2106,7 +2080,7 @@ void OpenGLRenderer::finish_screenshot(const std::string& output_name,
   glBindFramebuffer(GL_READ_FRAMEBUFFER, oldbuf);
 }
 
-// PC-REMAKE: defined in background/background_common.cpp
+// defined in background/background_common.cpp
 extern float g_post_fx[4];
 extern float g_toon_fx[4];
 extern float g_depth_fx[4];
@@ -2118,10 +2092,9 @@ extern float g_ground_color[4];
 extern float g_sun_shadow_params[4];
 extern float g_night_fx[4];
 
-// PC-REMAKE: lazily-created FBO holding a resolved (non-MSAA) copy of the
-// scene depth, sampled by the post shader for SSAO / aerial fog / DOF.
+// lazily-created FBO holding a resolved (non-MSAA) copy of the scene depth
 namespace {
-// PC-REMAKE 21/09 : resolution (MSAA -> simple) du G-buffer de normales pour le post
+// resolution (MSAA -> simple) du G-buffer de normales pour le post
 struct NormalResolve {
   GLuint fbo = 0;
   GLuint tex = 0;
@@ -2150,11 +2123,11 @@ struct NormalResolve {
   }
 };
 NormalResolve g_normal_resolve;
-// PC-REMAKE 22/09 : copie de la scene avant HUD (meme mecanique que les normales)
+// copie de la scene avant HUD (meme mecanique que les normales)
 NormalResolve g_prehud_resolve;
 bool g_prehud_valid = false;
 }  // namespace
-// [QA-COPIES] 14/10 : temps PROCESSEUR des copies d'image de l'etape des sprites
+// [QA] temps PROCESSEUR des copies d'image de l'etape des sprites
 struct QaCopies {
   double t[3] = {};
   int n = 0;
@@ -2189,16 +2162,7 @@ GLuint pc_prehud_texture() {
   return g_prehud_valid ? g_prehud_resolve.tex : 0;
 }
 
-// ===================================================================
-// PC-REMAKE 12/10 : BLOOM LARGE (rendu remake — dans les rendus modernes,
-// le portail, les spirales vertes, la lave rayonnent d'un grand halo
-// doux ; notre bloom d'origine ne portait qu'a 6-14 pixels). Chaine de mips
-// 1/2 -> 1/32 : reduction 13 points (tri de ce qui rayonne + Karis au premier
-// niveau), remontee en tente additive. Source : la scene APRES les particules du
-// monde et AVANT les sprites du HUD (Sprite3::render_jak1) — le HUD et les textes
-// ne rayonnent jamais. Dose = curseur Bloom du menu Remake (0 = coupe).
-// A/B : `touch /tmp/qa_no_widebloom` le coupe a chaud.
-// ===================================================================
+// BLOOM LARGE
 namespace {
 struct BloomTarget {
   GLuint fbo = 0;
@@ -2211,11 +2175,11 @@ BloomTarget g_bloom_src;
 BloomTarget g_bloom_lv[kBloomLevels];
 bool g_bloom_src_fresh = false;
 int g_bloom_age = 1000;  // images depuis le dernier resultat calcule
-// 27/10 : stabilisation dans le temps (voir bloom_stab.frag) — historique en va-et-vient
+// stabilisation dans le temps (voir bloom_stab.frag)
 BloomTarget g_bloom_hist[2];
 int g_bloom_hist_cur = 0;
 bool g_bloom_hist_ok = false;
-GLuint g_bloom_out = 0;  // texture rendue au post (historique stabilise, ou le niveau 1/2)
+GLuint g_bloom_out = 0;  // texture rendue au post (historique stabilise, ou le niveau )
 float g_bloom_prev_clip[16];
 float g_bloom_prev_cam[3];
 u64 g_bloom_frame = ~0ull;  // image du dernier calcul (la capture d'ecran rejoue le post)
@@ -2255,10 +2219,9 @@ bool bloom_off_by_file() {
 }
 }  // namespace
 
-// Appele par Sprite3 juste avant les sprites du HUD : copie de la scene (resout le
-// MSAA). Etat GL rendu tel quel (FBO, texture liee, ciseaux).
+// Appele par Sprite3 juste avant les sprites du HUD
 extern bool g_pc_normal_target_ok;
-// 13/10 : profondeur + normales de la scene SANS le HUD (defini plus bas)
+// profondeur + normales de la scene SANS le HUD (defini plus bas)
 void pc_hud_gbuffer_capture(GLuint src_fbo, int w, int h);
 
 void pc_bloom_snapshot(GLuint src_fbo, int w, int h) {
@@ -2293,16 +2256,66 @@ void pc_bloom_snapshot(GLuint src_fbo, int w, int h) {
   g_qa_copies.t[2] += qa_t.getMs();
 }
 
-// Scene sans HUD de CETTE image (0 si les sprites n'ont pas tourne : menu pause,
-// chargement — une reference perimee ferait passer tout le decor pour du HUD).
+// rend au canal alpha de l'image (fbo) l'alpha de la copie d'avant les particules (pc_prehud_snapshot)
+void pc_restaure_alpha(GLuint fbo, int w, int h) {
+  GLuint src = pc_prehud_texture();
+  if (!src || w <= 0 || h <= 0) {
+    return;
+  }
+  static Shader* s_alpha = nullptr;
+  static GLuint vao = 0;
+  if (!s_alpha) {
+    s_alpha = new Shader("alpha_restaure", GameVersion::Jak1);
+    glGenVertexArrays(1, &vao);
+  }
+  if (!s_alpha->okay()) {
+    return;
+  }
+  GLint prev_fbo = 0, prev_prog = 0, prev_vao = 0, prev_tex = 0, prev_unit = 0;
+  GLint vp[4];
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_unit);
+  glGetIntegerv(GL_VIEWPORT, vp);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  GLboolean dmask = GL_TRUE;
+  glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+  glViewport(0, 0, w, h);
+  glDisable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_SCISSOR_TEST);
+  glDepthMask(GL_FALSE);
+  glColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+  s_alpha->activate();
+  glActiveTexture(GL_TEXTURE0);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+  glBindTexture(GL_TEXTURE_2D, src);
+  glUniform1i(pc_uniform_loc(s_alpha->id(), "scene_avant"), 0);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glBindTexture(GL_TEXTURE_2D, prev_tex);
+  glActiveTexture(prev_unit);
+  glBindVertexArray(prev_vao);
+  glUseProgram(prev_prog);
+  glViewport(vp[0], vp[1], vp[2], vp[3]);
+  glDepthMask(dmask);
+  if (blend) glEnable(GL_BLEND);
+  if (depth) glEnable(GL_DEPTH_TEST);
+  if (scissor) glEnable(GL_SCISSOR_TEST);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_fbo);
+}
+
+// Scene sans HUD de CETTE image
 GLuint pc_hud_ref_texture() {
   return (g_bloom_age == 0 && g_bloom_src.tex) ? g_bloom_src.tex : 0;
 }
 
-// Calcule la chaine et rend la texture du bloom (niveau 1/2), ou 0. A appeler dans
-// le post, profondeur deja liee sur l'unite 15 et normales sur la 13, VAO plein
-// ecran lie. Programme, FBO, viewport, ciseaux et melange sont restaures ; la
-// texture liee a l'unite 0 ne l'est PAS (l'appelant la relie).
+// Calcule la chaine et rend la texture du bloom (niveau ), ou 0
 GLuint pc_bloom_run(GameVersion version,
                     bool has_depth,
                     bool has_normals,
@@ -2326,11 +2339,11 @@ GLuint pc_bloom_run(GameVersion version,
     return 0;
   }
   if (!g_bloom_src_fresh) {
-    // meme image rejouee (capture d'ecran) : resultat ET reference HUD valides
+    // meme image rejouee (capture d'ecran)
     if (g_bloom_frame == frame_idx && g_bloom_age == 0 && g_bloom_out) {
       return g_bloom_out;
     }
-    // image sans sprites (chargement...) : on garde le dernier resultat un instant
+    // image sans sprites (chargement...)
     g_bloom_age++;
     g_bloom_hist_ok = false;
     return (g_bloom_age < 8 && g_bloom_out) ? g_bloom_out : 0;
@@ -2379,13 +2392,13 @@ GLuint pc_bloom_run(GameVersion version,
     glUniform4f(glGetUniformLocation(pd, "bloom_p"), i == 0 ? 1.f : 0.f, has_depth ? 1.f : 0.f,
                 has_normals ? 1.f : 0.f, has_pre);
     glUniform2f(glGetUniformLocation(pd, "src_texel"), 1.f / src->w, 1.f / src->h);
-    // 20/10 : part de nuit (0..1) — la nuit, les lumieres rayonnent davantage
+    // part de nuit (0..1)
     glUniform1f(pc_uniform_loc(pd, "bloom_night"), std::clamp(g_night_fx[0], 0.f, 1.f));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     src = &dst;
   }
 
-  // 2. remontee : chaque niveau s'ajoute au niveau plus grand
+  // 2. remontee
   s_up->activate();
   const GLuint pu = s_up->id();
   glUniform1i(glGetUniformLocation(pu, "src_tex"), 0);
@@ -2403,12 +2416,7 @@ GLuint pc_bloom_run(GameVersion version,
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
   }
 
-  // 3. 27/10 : STABILISATION dans le temps (bloom_stab.frag). Un eclair d'une seule image
-  // (soudure de Keira, etincelles) ou une petite lampe qui gagne ou perd un pixel en tournant
-  // faisait pulser tout son halo. Poids de l'image actuelle selon le temps ecoule (constante de
-  // 40 ms : ~0.34 a 60 i/s) ; historique oublie apres une coupure (camera deplacee de plus de
-  // 4 m, image sautee, taille changee).
-  // (original : le post lisait directement g_bloom_lv[0])
+  // 3. STABILISATION dans le temps (bloom_stab.frag)
   g_bloom_out = g_bloom_lv[0].tex;
   {
     static auto t_prev = std::chrono::steady_clock::now();
@@ -2481,10 +2489,7 @@ GLuint pc_bloom_run(GameVersion version,
   return g_bloom_out;
 }
 
-// PC-REMAKE 20/10 : RAYONS DE SOLEIL (jungle) au quart de la resolution + flou separable —
-// le calcul par pixel du post (16 pas, gigue) donnait une image granuleuse. A appeler dans
-// le post, profondeur liee sur l'unite 15 et VAO plein ecran lie. Rend la texture (R = dose
-// avant epaule) ou 0. Etat restaure comme pc_bloom_run (unite 0 a relier par l'appelant).
+// RAYONS DE SOLEIL (jungle) au quart de la resolution + flou separable
 BloomTarget g_shaft_a, g_shaft_b;
 GLuint pc_shaft_run(GameVersion version,
                     bool reload,
@@ -2550,7 +2555,7 @@ GLuint pc_shaft_run(GameVersion version,
   glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
   glUniform4fv(pc_uniform_loc(pr, "sun_dir"), 1, sd);
   glUniform1f(pc_uniform_loc(pr, "shaft_indoor"), std::clamp(g_grade_amt2[3], 0.f, 1.f));
-  // 22/10 : faisceaux de canopee (mouvement du feuillage)
+  // faisceaux de canopee (mouvement du feuillage)
   glUniform1f(pc_uniform_loc(pr, "shaft_time"), time_s);
   glBindFramebuffer(GL_FRAMEBUFFER, g_shaft_a.fbo);
   glViewport(0, 0, w, h);
@@ -2581,13 +2586,7 @@ GLuint pc_shaft_run(GameVersion version,
   return g_shaft_a.tex;
 }
 
-// PC-REMAKE : CARTE D'ENVIRONNEMENT DES REFLETS (metal, verre). Panorama 512 x 256 autour de la
-// camera, rempli a chaque image par ce que l'ecran montre (reflet_env.frag), avec pour chaque
-// direction la position de la camera quand elle a ete vue (une direction vue de loin est
-// perimee : sa confiance tombe) ; plus la clarte moyenne de l'image (reflet_moy.frag, 1 x 1). Lus
-// par le post (unites 3 : panorama, 1 : moyenne) et par le verre du decor a l'image suivante (24).
-// Lit la scene sans HUD (unite 12) et la profondeur (unite 15), deja liees pour le post.
-// (v1 : 256 x 128, melange par le GPU, remise a zero sur un saut de 30 m seulement)
+// CARTE D'ENVIRONNEMENT DES REFLETS (metal, verre)
 namespace {
 constexpr int kEnvW = 512, kEnvH = 256;
 GLuint g_env_pano[2] = {0, 0}, g_env_pos[2] = {0, 0}, g_env_fbo[2] = {0, 0};
@@ -2661,7 +2660,7 @@ GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos)
   }
   glDisable(GL_BLEND);
 
-  // 1. panorama : lit l'image precedente (prev), ecrit la nouvelle (next)
+  // 1. panorama
   const int prev = g_env_cur, next = 1 - g_env_cur;
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, g_env_pano[prev]);
@@ -2693,7 +2692,7 @@ GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos)
   glUniform1i(pc_uniform_loc(s_moy->id(), "scene_tex"), 12);
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-  // post : 3 panorama, 1 moyenne ; verre du decor (image suivante) : 24
+  // post : 3 panorama, 1 moyenne
   glActiveTexture(GL_TEXTURE3);
   glBindTexture(GL_TEXTURE_2D, g_env_pano[next]);
   glActiveTexture(GL_TEXTURE1);
@@ -2714,10 +2713,7 @@ GLuint pc_reflet_env_run(GameVersion version, bool reload, const float* cam_pos)
   return g_env_tex;
 }
 
-// PC-REMAKE : MOTIF DES CAUSTIQUES (post_processing.frag), calcule une fois : 512 x 512, sans
-// couture, 8 x 8 cellules d'un pavage de Voronoi, ligne nette sur les aretes et halo doux ; le post
-// en lit deux couches qui glissent l'une sur l'autre (au lieu de recalculer le pavage pour chaque
-// pixel : 1,3 ms sur une vue de lagon).
+// MOTIF DES CAUSTIQUES (post_processing.frag), calcule une fois
 GLuint pc_caustique_tex() {
   static GLuint tex = 0;
   if (tex) {
@@ -2777,11 +2773,377 @@ GLuint pc_caustique_tex() {
   return tex;
 }
 
-// PC-REMAKE : VIE DANS L'AIR (vie_air.vert / vie_air.frag) — poussieres, pollen, embruns, lucioles
-// et feuilles de la jungle, dessinees en points dans la cible de la passe 1 du post (avant le
-// bloom et l'etalonnage de la passe 2). Lit la profondeur (15), la scene sans HUD (12), la carte
-// d'ombre du soleil (14) et les cartes du rivage (5, 6), deja liees pour le post.
-// (v1 : calcul par pixel dans le post, 6 ms — abandonne)
+// CIEL VIVANT
+extern float g_cloud_light[8];
+extern float g_moon[4];
+namespace {
+float nu_hache(int x, int y, int z, int k) {
+  u32 h = (u32)(x * 73856093) ^ (u32)(y * 19349663) ^ (u32)(z * 83492791) ^ (u32)(k * 2654435761u);
+  h ^= h >> 13;
+  h *= 0x5bd1e995u;
+  h ^= h >> 15;
+  return (h & 0xffffff) / 16777216.f;
+}
+int nu_mod(int a, int m) {
+  return ((a % m) + m) % m;
+}
+// Worley sans couture
+float nu_worley(float x, float y, float z, int n, int k) {
+  const int ix = (int)std::floor(x), iy = (int)std::floor(y), iz = (int)std::floor(z);
+  float best = 9.f;
+  for (int dz = -1; dz <= 1; dz++) {
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        const int cx = ix + dx, cy = iy + dy, cz = iz + dz;
+        const int wx = nu_mod(cx, n), wy = nu_mod(cy, n), wz = nu_mod(cz, n);
+        const float px = cx + nu_hache(wx, wy, wz, k * 3 + 0) - x;
+        const float py = cy + nu_hache(wx, wy, wz, k * 3 + 1) - y;
+        const float pz = cz + nu_hache(wx, wy, wz, k * 3 + 2) - z;
+        best = std::min(best, px * px + py * py + pz * pz);
+      }
+    }
+  }
+  return 1.f - std::clamp(std::sqrt(best), 0.f, 1.f);
+}
+// bruit de gradient (valeur lissee) sans couture, periode n
+float nu_valeur(float x, float y, float z, int n, int k) {
+  const int ix = (int)std::floor(x), iy = (int)std::floor(y), iz = (int)std::floor(z);
+  float fx = x - ix, fy = y - iy, fz = z - iz;
+  fx = fx * fx * (3.f - 2.f * fx);
+  fy = fy * fy * (3.f - 2.f * fy);
+  fz = fz * fz * (3.f - 2.f * fz);
+  auto v = [&](int a, int b, int c) {
+    return nu_hache(nu_mod(a, n), nu_mod(b, n), nu_mod(c, n), k);
+  };
+  auto l = [](float a, float b, float t) { return a + (b - a) * t; };
+  return l(l(l(v(ix, iy, iz), v(ix + 1, iy, iz), fx), l(v(ix, iy + 1, iz), v(ix + 1, iy + 1, iz), fx), fy),
+           l(l(v(ix, iy, iz + 1), v(ix + 1, iy, iz + 1), fx),
+             l(v(ix, iy + 1, iz + 1), v(ix + 1, iy + 1, iz + 1), fx), fy),
+           fz);
+}
+GLuint nu_bruit3d() {
+  static GLuint tex = 0;
+  if (tex) {
+    return tex;
+  }
+  constexpr int N = 64;
+  std::vector<u8> px(N * N * N * 4);
+  for (int z = 0; z < N; z++) {
+    for (int y = 0; y < N; y++) {
+      for (int x = 0; x < N; x++) {
+        const float u = (x + 0.5f) / N, v = (y + 0.5f) / N, w = (z + 0.5f) / N;
+        // forme : bruit de valeur a 3 octaves, creuse par un Worley
+        float pv = nu_valeur(u * 4, v * 4, w * 4, 4, 1) * 0.55f + nu_valeur(u * 8, v * 8, w * 8, 8, 2) * 0.3f +
+                   nu_valeur(u * 16, v * 16, w * 16, 16, 3) * 0.15f;
+        const float w4 = nu_worley(u * 4, v * 4, w * 4, 4, 4);
+        const float w8 = nu_worley(u * 8, v * 8, w * 8, 8, 5);
+        const float w16 = nu_worley(u * 16, v * 16, w * 16, 16, 6);
+        const float wf = w4 * 0.625f + w8 * 0.25f + w16 * 0.125f;
+        const float pw = std::clamp((pv - (wf - 1.f)) / (1.f - (wf - 1.f)), 0.f, 1.f);
+        u8* o = &px[((z * N + y) * N + x) * 4];
+        o[0] = (u8)(pw * 255.f + 0.5f);
+        o[1] = (u8)(w4 * 255.f + 0.5f);
+        o[2] = (u8)(w8 * 255.f + 0.5f);
+        o[3] = (u8)(w16 * 255.f + 0.5f);
+      }
+    }
+  }
+  glGenTextures(1, &tex);
+  glBindTexture(GL_TEXTURE_3D, tex);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, N, N, N, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glGenerateMipmap(GL_TEXTURE_3D);
+  return tex;
+}
+GLuint nu_meteo() {
+  static GLuint tex = 0;
+  if (tex) {
+    return tex;
+  }
+  constexpr int N = 256;
+  std::vector<u8> px(N * N * 2);
+  for (int y = 0; y < N; y++) {
+    for (int x = 0; x < N; x++) {
+      const float u = (x + 0.5f) / N, v = (y + 0.5f) / N;
+      const float c = nu_valeur(u * 6, v * 6, 0.5f, 6, 11) * 0.6f + nu_valeur(u * 12, v * 12, 0.5f, 12, 12) * 0.28f +
+                      nu_valeur(u * 24, v * 24, 0.5f, 24, 13) * 0.12f;
+      const float h = nu_valeur(u * 5, v * 5, 1.5f, 5, 14) * 0.7f + nu_valeur(u * 10, v * 10, 1.5f, 10, 15) * 0.3f;
+      px[(y * N + x) * 2] = (u8)(std::clamp(c, 0.f, 1.f) * 255.f + 0.5f);
+      px[(y * N + x) * 2 + 1] = (u8)(std::clamp(h, 0.f, 1.f) * 255.f + 0.5f);
+    }
+  }
+  glGenTextures(1, &tex);
+  glBindTexture(GL_TEXTURE_2D, tex);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, N, N, 0, GL_RG, GL_UNSIGNED_BYTE, px.data());
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  return tex;
+}
+BloomTarget g_nuages_hist[2];
+int g_nuages_cur = 0;
+bool g_nuages_ok = false;
+float g_nuages_prev_clip[16];
+}  // namespace
+
+void pc_nuages_run(GameVersion version, bool reload, const float* cam_pos, int w, int h,
+                   u64 frame_idx) {
+  static Shader* s_nu = nullptr;
+  static Shader* s_compo = nullptr;
+  static Shader* s_ombre = nullptr;
+  static Shader* s_ombre_app = nullptr;
+  static Shader* s_nuit = nullptr;
+  if (reload || !s_nu) {
+    delete s_nu;
+    delete s_compo;
+    delete s_ombre;
+    delete s_ombre_app;
+    delete s_nuit;
+    s_nuit = new Shader("ciel_nuit", version);
+    s_nu = new Shader("nuages", version);
+    s_compo = new Shader("nuages_compo", version);
+    s_ombre = new Shader("nuages_ombre", version);
+    s_ombre_app = new Shader("nuages_ombre_app", version);
+  }
+  const bool interieur = g_ground_color[3] > 0.5f;
+  if (g_cloud_light[3] < 0.5f || interieur || !g_world_from_clip_ok || !s_nu->okay() ||
+      !s_compo->okay()) {
+    g_nuages_ok = false;
+    return;
+  }
+  GLint fbo_lit = 0, prog = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fbo_lit);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  const int qw = std::max(1, w / 4), qh = std::max(1, h / 4);
+  bloom_ensure(g_nuages_hist[0], qw, qh, true);
+  bloom_ensure(g_nuages_hist[1], qw, qh, true);
+
+  // lumiere : le soleil de l'heure
+  float L[4] = {0.3f, 0.8f, 0.5f, 0.f};
+  float soleil_k = 0.f;
+  const float nuit = std::clamp(g_night_fx[0], 0.f, 1.f);
+  {
+    // derniere direction connue du soleil
+    static float az[2] = {0.f, -1.f};
+    const float sx = -g_sun_shadow_params[0], sy = -g_sun_shadow_params[1],
+                sz = -g_sun_shadow_params[2];
+    const float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    float y = -1.f;
+    if (len > 1e-4f && g_sun_shadow_params[3] > 0.001f) {
+      y = sy / len;
+      const float h = std::sqrt(sx * sx + sz * sz);
+      if (h > 1e-4f) {
+        az[0] = sx / h;
+        az[1] = sz / h;
+      }
+    } else if (nuit < 0.75f) {
+      y = -0.04f - 0.2f * (nuit / 0.75f);  // soleil couche, de plus en plus bas
+    }
+    // jusqu'a 14 degres sous l'horizon, lumiere venant d'en dessous
+    soleil_k = std::clamp((y + 0.25f) / 0.27f, 0.f, 1.f);
+    // la nuit, les nuages sont eclaires depuis la LUNE (sa vraie direction) si elle est levee
+    if (soleil_k <= 0.f && g_moon[1] > 0.05f) {
+      L[0] = g_moon[0];
+      L[1] = g_moon[1];
+      L[2] = g_moon[2];
+    }
+    if (soleil_k > 0.f) {
+      const float h = std::sqrt(std::max(0.f, 1.f - y * y));
+      L[0] = az[0] * h;
+      L[1] = std::max(y, -0.2f);
+      L[2] = az[1] * h;
+      L[3] = 1.f;
+    }
+  }
+  // couleurs du jeu en unites PS2
+  float sol[3], amb[3];
+  for (int k = 0; k < 3; k++) {
+    amb[k] = g_cloud_light[4 + k] / 128.f;
+    // soleil bas
+    const float rose[3] = {1.0f, 0.42f, 0.36f};
+    const float bas = std::clamp((0.06f - L[1]) / 0.2f, 0.f, 1.f);
+    const float c_sol = g_cloud_light[k] / 255.f * (1.f - bas) + rose[k] * 1.25f * bas;
+    sol[k] = L[3] > 0.5f ? c_sol * soleil_k + amb[k] * 0.7f * (1.f - soleil_k) : amb[k] * 0.7f;
+  }
+  static auto t_prev = std::chrono::steady_clock::now();
+  const auto t_now = std::chrono::steady_clock::now();
+  const float dt = std::chrono::duration<float>(t_now - t_prev).count();
+  t_prev = t_now;
+  // couverture de la region (pc-set-nuages!), atteinte en douceur (une dizaine de secondes)
+  static float couverture = -1.f;
+  {
+    const float cible = std::clamp(g_cloud_light[7], 0.05f, 1.f);
+    couverture = couverture < 0.f ? cible
+                                  : couverture + (cible - couverture) *
+                                                     std::clamp(dt / 10.f, 0.f, 1.f);
+  }
+  static int prev_qw = 0, prev_qh = 0;
+  const bool suite = g_nuages_ok && dt < 0.25f && qw == prev_qw && qh == prev_qh;
+  prev_qw = qw;
+  prev_qh = qh;
+  const float poids = suite ? 1.f - std::exp(-std::max(dt, 0.004f) / 0.15f) : 1.f;
+
+  // 1. nuages au quart de la resolution
+  s_nu->activate();
+  const GLuint pr = s_nu->id();
+  glActiveTexture(GL_TEXTURE25);
+  glBindTexture(GL_TEXTURE_3D, nu_bruit3d());
+  glActiveTexture(GL_TEXTURE26);
+  glBindTexture(GL_TEXTURE_2D, nu_meteo());
+  glActiveTexture(GL_TEXTURE0);
+  glUniform1i(pc_uniform_loc(pr, "bruit3d"), 25);
+  glUniform1i(pc_uniform_loc(pr, "meteo"), 26);
+  glUniform1i(pc_uniform_loc(pr, "hist_tex"), 27);
+  glUniform1i(pc_uniform_loc(pr, "scene_tex"), 12);
+  glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
+  glUniformMatrix4fv(pc_uniform_loc(pr, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+  glUniform4f(pc_uniform_loc(pr, "cam_m"), cam_pos[0] / 4096.f, cam_pos[1] / 4096.f,
+              cam_pos[2] / 4096.f, (float)(frame_idx % 216000) / 60.f);
+  glUniform4fv(pc_uniform_loc(pr, "lum_dir"), 1, L);
+  glUniform3f(pc_uniform_loc(pr, "lum_soleil"), sol[0], sol[1], sol[2]);
+  glUniform3f(pc_uniform_loc(pr, "lum_ciel"), amb[0], amb[1], amb[2]);
+  glDisable(GL_BLEND);
+  glViewport(0, 0, qw, qh);
+  if (!suite) {
+    // l'historique recale pointe sur l'image actuelle
+    for (int k = 0; k < 16; k++) {
+      g_nuages_prev_clip[k] = g_clip_from_world[k];
+    }
+  }
+  const int passes = suite ? 1 : 8;
+  for (int ps = 0; ps < passes; ps++) {
+    const int nxt = g_nuages_cur ^ 1;
+    glActiveTexture(GL_TEXTURE27);
+    glBindTexture(GL_TEXTURE_2D, g_nuages_hist[g_nuages_cur].tex);
+    glActiveTexture(GL_TEXTURE0);
+    glUniformMatrix4fv(pc_uniform_loc(pr, "prev_clip_from_world"), 1, GL_FALSE, g_nuages_prev_clip);
+    glUniform4f(pc_uniform_loc(pr, "nuage_p"), couverture, suite ? poids : 1.f / (float)(ps + 1),
+                std::fmod((float)(frame_idx * 8 + ps) * 0.618034f, 1.f), nuit);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_nuages_hist[nxt].fbo);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    g_nuages_cur = nxt;
+  }
+  g_nuages_ok = true;
+  for (int k = 0; k < 16; k++) {
+    g_nuages_prev_clip[k] = g_clip_from_world[k];
+  }
+
+  // 2. CIEL DE NUIT (ciel_nuit.frag)
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo_lit);
+  glViewport(0, 0, w, h);
+  if (nuit > 0.02f && s_nuit->okay()) {
+    s_nuit->activate();
+    const GLuint pn = s_nuit->id();
+    glUniform1i(pc_uniform_loc(pn, "depth_tex"), 15);
+    // couverture des particules
+    glUniform1i(pc_uniform_loc(pn, "scene_tex"), 12);
+    glUniform1i(pc_uniform_loc(pn, "hud_ref_tex"), 10);
+    glUniform1f(pc_uniform_loc(pn, "has_part"),
+                (pc_prehud_texture() && pc_hud_ref_texture()) ? 1.f : 0.f);
+    glUniformMatrix4fv(pc_uniform_loc(pn, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+    const float pres_lune = nuit * std::clamp((g_moon[1] + 0.02f) / 0.1f, 0.f, 1.f);
+    glUniform4f(pc_uniform_loc(pn, "lune"), g_moon[0], g_moon[1], g_moon[2], pres_lune);
+    // taille angulaire d'un pixel
+    const float px = 1.f / std::max(1.f, std::fabs(g_clip_from_world[5]) * 0.5f * (float)h);
+    glUniform4f(pc_uniform_loc(pn, "nuit_p"), nuit, g_moon[3],
+                (float)(frame_idx % 216000) / 60.f, px);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  }
+  // 3. pose des nuages sur le ciel de la passe 1
+  s_compo->activate();
+  const GLuint pc = s_compo->id();
+  glActiveTexture(GL_TEXTURE28);
+  glBindTexture(GL_TEXTURE_2D, g_nuages_hist[g_nuages_cur].tex);
+  glActiveTexture(GL_TEXTURE0);
+  glUniform1i(pc_uniform_loc(pc, "nuages_tex"), 28);
+  glUniform1i(pc_uniform_loc(pc, "depth_tex"), 15);
+  // couverture des particules (voir nuages_compo.frag)
+  glUniform1i(pc_uniform_loc(pc, "scene_tex"), 12);
+  glUniform1i(pc_uniform_loc(pc, "hud_ref_tex"), 10);
+  glUniform1f(pc_uniform_loc(pc, "has_part"),
+              (pc_prehud_texture() && pc_hud_ref_texture()) ? 1.f : 0.f);
+  glEnable(GL_BLEND);
+  glBlendEquation(GL_FUNC_ADD);
+  glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  // 4. OMBRES DES NUAGES au sol et sur la mer (nuages_ombre.frag)
+  {
+    const float sx = -g_sun_shadow_params[0], sy = -g_sun_shadow_params[1],
+                sz = -g_sun_shadow_params[2];
+    const float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    const float elev = len > 1e-4f ? sy / len : -1.f;
+    const float force = (g_sun_shadow_params[3] > 0.001f ? 1.f : 0.f) * (1.f - nuit) *
+                        std::clamp((elev - 0.035f) / 0.14f, 0.f, 1.f);
+    if (force > 0.001f && s_ombre->okay() && s_ombre_app->okay()) {
+      // a. ombre au quart de la resolution (meme taille que les nuages)
+      static BloomTarget ombre_tgt;
+      bloom_ensure(ombre_tgt, qw, qh, false);
+      glDisable(GL_BLEND);
+      glBindFramebuffer(GL_FRAMEBUFFER, ombre_tgt.fbo);
+      glViewport(0, 0, qw, qh);
+      s_ombre->activate();
+      const GLuint po = s_ombre->id();
+      glUniform1i(pc_uniform_loc(po, "bruit3d"), 25);
+      glUniform1i(pc_uniform_loc(po, "meteo"), 26);
+      glUniform1i(pc_uniform_loc(po, "depth_tex"), 15);
+      glUniform1i(pc_uniform_loc(po, "normal_tex"), 13);
+      glUniform1f(pc_uniform_loc(po, "has_normal_tex"), g_pc_normal_target_ok ? 1.f : 0.f);
+      glUniformMatrix4fv(pc_uniform_loc(po, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+      glUniform4f(pc_uniform_loc(po, "cam_m"), cam_pos[0] / 4096.f, cam_pos[1] / 4096.f,
+                  cam_pos[2] / 4096.f, (float)(frame_idx % 216000) / 60.f);
+      glUniform4f(pc_uniform_loc(po, "lum_dir"), sx / len, sy / len, sz / len, 1.f);
+      glUniform4f(pc_uniform_loc(po, "nuage_p"), couverture, force, 0.f, 0.f);
+      glUniform4f(pc_uniform_loc(po, "mer"), g_water_glitter[0] / 4096.f,
+                  (g_water_glitter[1] > 0.001f || g_water_glitter[2] > 0.001f) ? 1.f : 0.f, 0.f, 0.f);
+      glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+      // b. pose a pleine resolution, adoucie, multipliee sur la passe 1
+      glBindFramebuffer(GL_FRAMEBUFFER, fbo_lit);
+      glViewport(0, 0, w, h);
+      s_ombre_app->activate();
+      const GLuint pa = s_ombre_app->id();
+      const bool carte = g_sun_shadow.ready && g_sun_shadow.enabled();
+      glActiveTexture(GL_TEXTURE28);
+      glBindTexture(GL_TEXTURE_2D, ombre_tgt.tex);
+      glActiveTexture(GL_TEXTURE0);
+      glUniform1i(pc_uniform_loc(pa, "ombre_tex"), 28);
+      glUniform1i(pc_uniform_loc(pa, "depth_tex"), 15);
+      glUniform1i(pc_uniform_loc(pa, "normal_tex"), 13);
+      glUniform1f(pc_uniform_loc(pa, "has_normal_tex"), g_pc_normal_target_ok ? 1.f : 0.f);
+      glUniform1i(pc_uniform_loc(pa, "sun_shadow_tex"), 14);
+      glUniform1f(pc_uniform_loc(pa, "sun_map_ok"), carte ? 1.f : 0.f);
+      if (carte) {
+        glUniformMatrix4fv(pc_uniform_loc(pa, "sun_light_vp"), 1, GL_FALSE, g_sun_shadow.read_vp());
+      }
+      glUniformMatrix4fv(pc_uniform_loc(pa, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+      glUniform4f(pc_uniform_loc(pa, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
+      glEnable(GL_BLEND);
+      glBlendEquation(GL_FUNC_ADD);
+      glBlendFuncSeparate(GL_DST_COLOR, GL_ZERO, GL_ZERO, GL_ONE);
+      glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+  }
+  if (!blend) {
+    glDisable(GL_BLEND);
+  }
+  glUseProgram(prog);
+}
+
+// VIE DANS L'AIR (vie_air.vert / vie_air.frag)
 void pc_vie_run(GameVersion version, bool reload, const float* cam_pos, int w, int h,
                 u64 frame_idx) {
   static Shader* s_vie = nullptr;
@@ -2848,17 +3210,14 @@ void pc_vie_run(GameVersion version, bool reload, const float* cam_pos, int w, i
   glEnable(GL_BLEND);
   glEnable(GL_PROGRAM_POINT_SIZE);
   glBindVertexArray(vao);
-  // 1. points lumineux (additifs ; l'alpha de la cible — aretes / ciel — n'est pas touche)
+  // 1. points lumineux
   glBlendEquation(GL_FUNC_ADD);
   glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
-  // (27/10 : poussieres, pollen et embruns de jour retires — des points gris comme de la
-  //  poussiere ; original : glDrawArrays(GL_POINTS, 0, 3600) avec vie_sorte 0)
-  // lucioles (la nuit, en foret et au village : g_vie_zone, pose par time-of-day.gc)
+  // poussieres, pollen et embruns de jour retires
   extern int g_vie_zone;
-  if (nuit > 0.4f && g_vie_zone > 0) {
-    // les lampes a moins de 26 m de la camera, les plus proches d'abord (pas les ecos) : une
-    // lampe qui entre ou sort de la liste est hors de la boite des lucioles (18 m) — pas de
-    // lucioles qui apparaissent d'un coup en marchant (27/10 ; v1 : les 16 plus proches)
+  // zones 3 et 4 = meteo du marais et de la neige, pas de lucioles
+  if (nuit > 0.4f && (g_vie_zone == 1 || g_vie_zone == 2)) {
+    // les lampes a moins de 26 m de la camera, les plus proches d'abord (pas les ecos)
     float lampes[32 * 4] = {};
     int nl = 0;
     {
@@ -2912,12 +3271,118 @@ void pc_vie_run(GameVersion version, bool reload, const float* cam_pos, int w, i
   }
 }
 
-// PC-REMAKE : LUMIERE REBONDIE (illumination globale a l'ecran, gi_rebond.frag) au quart de la
-// resolution, adoucie par un flou qui respecte la profondeur (gi_flou.frag) ; le post l'ajoute
-// (unite 2). Lit la profondeur (15), les normales (13) et la scene sans HUD (12), deja liees.
+// METEO ENRICHIE (meteo.vert / meteo.frag)
+void pc_meteo_run(GameVersion version, bool reload, const float* cam_pos, int w, int h,
+                  u64 frame_idx) {
+  static Shader* s_meteo = nullptr;
+  static GLuint vao = 0;
+  static u64 der = UINT64_MAX;
+  static double t_meteo = 0.0;
+  extern int g_meteo_kind;
+  extern int g_meteo_pause;
+  extern float g_meteo_amt[2];
+  {
+    const float dt =
+        der == UINT64_MAX ? 0.f : std::clamp((float)(frame_idx - der) / 60.f, 0.f, 0.1f);
+    der = frame_idx;
+    if (!g_meteo_pause) {
+      t_meteo += dt;
+      if (t_meteo > 3600.0) {
+        t_meteo -= 3600.0;
+      }
+      for (int k = 0; k < 2; k++) {
+        const float cible = g_meteo_kind == k + 1 ? 1.f : 0.f;
+        const float pas = dt / 1.5f;
+        g_meteo_amt[k] += std::clamp(cible - g_meteo_amt[k], -pas, pas);
+      }
+    }
+  }
+  if ((g_meteo_amt[0] < 0.002f && g_meteo_amt[1] < 0.002f) || !g_world_from_clip_ok) {
+    return;
+  }
+  if (reload || !s_meteo) {
+    delete s_meteo;
+    s_meteo = new Shader("meteo", version);
+  }
+  if (!s_meteo->okay()) {
+    return;
+  }
+  if (!vao) {
+    glGenVertexArrays(1, &vao);
+  }
+  const GLuint pr = s_meteo->id();
+  s_meteo->activate();
+  const float nuit = std::clamp(g_night_fx[0], 0.f, 1.f);
+  float sd[4] = {0.f, 1.f, 0.f, 0.f};
+  {
+    float sx = g_sun_shadow_params[0], sy = g_sun_shadow_params[1], sz = g_sun_shadow_params[2];
+    float len = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (len > 1e-4f) {
+      sd[0] = -sx / len;
+      sd[1] = -sy / len;
+      sd[2] = -sz / len;
+      sd[3] = (sd[1] > 0.02f && g_sun_shadow_params[3] > 0.001f) ? 1.f : 0.f;
+    }
+  }
+  const bool carte = g_sun_shadow.ready && g_sun_shadow.enabled();
+  glUniformMatrix4fv(pc_uniform_loc(pr, "clip_from_world"), 1, GL_FALSE, g_clip_from_world);
+  glUniformMatrix4fv(pc_uniform_loc(pr, "inv_camera"), 1, GL_FALSE, g_world_from_clip);
+  glUniform4f(pc_uniform_loc(pr, "cam_trans"), cam_pos[0], cam_pos[1], cam_pos[2], 0.f);
+  glUniform4f(pc_uniform_loc(pr, "meteo_ciel"), 1.f - nuit, nuit, sd[3], 0.f);
+  glUniform4fv(pc_uniform_loc(pr, "sun_dir"), 1, sd);
+  glUniform1i(pc_uniform_loc(pr, "sun_shadow_tex"), 14);
+  glUniform1f(pc_uniform_loc(pr, "sun_map_ok"), carte ? 1.f : 0.f);
+  if (carte) {
+    glUniformMatrix4fv(pc_uniform_loc(pr, "sun_light_vp"), 1, GL_FALSE, g_sun_shadow.read_vp());
+  }
+  glUniform1i(pc_uniform_loc(pr, "depth_tex"), 15);
+  glUniform1i(pc_uniform_loc(pr, "scene_tex"), 12);
+  glUniform2f(pc_uniform_loc(pr, "meteo_ecran"), (float)w, (float)h);
+
+  const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  const GLboolean cull = glIsEnabled(GL_CULL_FACE);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendEquation(GL_FUNC_ADD);
+  // melange ; l'alpha de la cible (aretes / ciel) n'est pas touche
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+  glBindVertexArray(vao);
+  if (g_meteo_amt[0] > 0.002f) {
+    glUniform4f(pc_uniform_loc(pr, "meteo_fx"), g_meteo_amt[0], (float)t_meteo,
+                1.25f / (float)std::max(h, 1), 0.f);
+    glUniform1i(pc_uniform_loc(pr, "meteo_sorte"), 0);
+    glDrawArrays(GL_TRIANGLES, 0, 6 * 3000);
+  }
+  if (g_meteo_amt[1] > 0.002f) {
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glUniform4f(pc_uniform_loc(pr, "meteo_fx"), g_meteo_amt[1], (float)t_meteo,
+                1.25f / (float)std::max(h, 1), 0.f);
+    glUniform1i(pc_uniform_loc(pr, "meteo_sorte"), 1);
+    glDrawArrays(GL_POINTS, 0, 7000);
+    glDisable(GL_PROGRAM_POINT_SIZE);
+  }
+  if (!blend) {
+    glDisable(GL_BLEND);
+  }
+  if (depth) {
+    glEnable(GL_DEPTH_TEST);
+  }
+  if (scissor) {
+    glEnable(GL_SCISSOR_TEST);
+  }
+  if (cull) {
+    glEnable(GL_CULL_FACE);
+  }
+}
+
+// LUMIERE REBONDIE (illumination globale a l'ecran, gi_rebond.frag) au quart de la resolution
 BloomTarget g_gi_a, g_gi_b;
 float g_gi_fx[4] = {1.f, 1.f, 0.f, 0.f};  // x = rebond a l'ecran, y = ambiance du panorama
-// 27/10 : historique de la stabilisation dans le temps (gi_stab.frag), en va-et-vient
+// historique de la stabilisation dans le temps (gi_stab.frag), en va-et-vient
 BloomTarget g_gi_hist[2];
 int g_gi_hist_cur = 0;
 bool g_gi_hist_ok = false;
@@ -2989,10 +3454,7 @@ GLuint pc_gi_run(GameVersion version,
   glUniform2f(pc_uniform_loc(pr, "blur_step"), 0.f, 1.f / h);
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-  // 3. 27/10 : STABILISATION dans le temps (gi_stab.frag) : le motif d'echantillonnage est fixe
-  // a l'ecran, le rebond fourmillait autour des lampes quand la camera tournait. Constante de
-  // 60 ms (~0.24 de l'image actuelle a 60 i/s) ; historique oublie apres une coupure.
-  // (original : le post lisait directement g_gi_a)
+  // 3. STABILISATION dans le temps (gi_stab.frag)
   GLuint out = g_gi_a.tex;
   {
     static auto t_prev = std::chrono::steady_clock::now();
@@ -3076,9 +3538,7 @@ struct DepthResolve {
     h = height;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    // MUST match the render FBO's depth format exactly (GL_DEPTH24_STENCIL8):
-    // glBlitFramebuffer refuses a depth blit between different depth formats,
-    // and it fails silently, leaving this texture cleared to zero.
+    // MUST match the render FBO's depth format exactly (GL_DEPTH24_STENCIL8): glBlitFramebuffer refuses a
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL,
                  GL_UNSIGNED_INT_24_8, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -3094,13 +3554,7 @@ struct DepthResolve {
   }
 };
 DepthResolve g_depth_resolve;
-// 13/10 (textes affiches dans un rectangle transparent) : les
-// quads des textes et du HUD ecrivent la PROFONDEUR (et laissent les normales du
-// G-buffer indefinies) sur tout leur rectangle. Le post, qui lit profondeur et
-// normales APRES le HUD, traitait ce rectangle comme une surface collee a la
-// camera : autre eclairage, autre brume -> un cadre visible autour de chaque
-// texte. Copie prise JUSTE AVANT les sprites du HUD (Sprite3), utilisee par le
-// post a la place.
+// (textes affiches dans un rectangle transparent)
 DepthResolve g_hud_depth;
 NormalResolve g_hud_normal;
 bool g_hud_gbuf_pending = false;
@@ -3123,11 +3577,7 @@ void pc_hud_gbuffer_capture(GLuint src_fbo, int w, int h) {
   glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_hud_depth.fbo);
   {
-    // PERF 14/10 : PROFONDEUR SEULE — le post ne lit jamais le stencil de cette copie,
-    // et le pilote Apple fait la copie profondeur+stencil d'un tampon MSAA par un
-    // chemin lent (0,88 ms de processeur par image contre 0,25 ms, mesure au village).
-    // (original : GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
-    // `touch /tmp/qa_depth_stencil` = ancien chemin (A/B).
+    // PERF PROFONDEUR SEULE
     static bool depth_only = true;
     static int poll = 0;
     if ((poll++ % 64) == 0) {
@@ -3161,10 +3611,7 @@ void pc_hud_gbuffer_capture(GLuint src_fbo, int w, int h) {
   g_qa_copies.t[1] += qa_t.getMs();
 }
 
-// PERF 14/10 : POST EN DEUX PASSES (voir post_processing.frag, POST_PASS1/2). Chaque
-// reglage du post est envoye au programme courant ET, en mode scinde, au programme de
-// la 2e passe (glProgramUniform, GL 4.1). `touch /tmp/qa_post_single` = passe unique
-// d'origine (A/B).
+// PERF POST EN DEUX PASSES (voir post_processing.frag, POST_PASS1/2)
 namespace {
 GLuint g_post_prog_a = 0;  // programme qui recoit les reglages (passe unique ou passe 1)
 GLuint g_post_prog_b = 0;  // passe 2 (0 = pas de passe 2)
@@ -3219,7 +3666,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
                                       int vp_w,
                                       int vp_h) {
   Fbo* window_blit_src = nullptr;
-  // [QA-GPU] 14/10 : sous-passes du post (seulement la passe ecran, pas la capture)
+  // [QA] sous-passes du post (seulement la passe ecran, pas la capture)
   const bool qa_gpu_here = dst_fbo == 0;
   if (qa_gpu_here) {
     g_qa_gpu.begin(84, "post: setup + resolution MSAA couleur");
@@ -3245,11 +3692,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
 
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_BLEND);
-  // PERF 25/08 : le post rendait TOUJOURS a la resolution de la FENETRE (8,4
-  // Mpx retina) — la resolution interne n'y changeait rien. Quand le jeu rend
-  // plus petit que la zone d'affichage, le post rend desormais dans un FBO a la
-  // resolution du JEU puis un blit lineaire (quasi gratuit) monte vers la
-  // fenetre. A resolution native : chemin d'origine strictement inchange.
+  // PERF le post rendait TOUJOURS a la resolution de la FENETRE (8,4 Mpx retina)
   static Fbo s_post_fbo;
   const int post_game_w = m_fbo_state.render_fbo->width;
   const int post_game_h = m_fbo_state.render_fbo->height;
@@ -3276,10 +3719,8 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
 
   float color = (float)brightness_contrast_color / 128.0f;
   float alpha = (float)brightness_contrast_alpha / 128.0f;
-  // [QA] 12/10 (outillage) : rechargement a chaud du post — `touch /tmp/pc_reload_post`
-  // recompile post_processing.frag sans relancer le jeu. Inerte sans le fichier ; un
-  // shader qui ne compile pas laisse l'ancien en place (erreur dans le journal).
-  bool post_reloaded = false;  // 12/10 : les shaders du bloom large suivent
+  // [QA] (outillage)
+  bool post_reloaded = false;  // les shaders du bloom large suivent
   {
     static int s_reload_poll = 0;
     if (++s_reload_poll >= 30) {
@@ -3296,7 +3737,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           lg::error("[QA] post_processing : echec de compilation, ancien shader garde");
         }
       }
-      // [QA] 20/10 : sol de neige deformable — `touch /tmp/pc_reload_snow`
+      // [QA] sol de neige deformable
       if (FILE* rf = fopen("/tmp/pc_reload_snow", "r")) {
         fclose(rf);
         remove("/tmp/pc_reload_snow");
@@ -3308,7 +3749,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           lg::error("[QA] tfrag3_snow : echec de compilation, ancien shader garde");
         }
       }
-      // [QA] 21/10 : personnages remodeles — `touch /tmp/pc_reload_perso`
+      // [QA] personnages remodeles
       if (FILE* rf = fopen("/tmp/pc_reload_perso", "r")) {
         fclose(rf);
         remove("/tmp/pc_reload_perso");
@@ -3329,8 +3770,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           lg::error("[QA] shaders des personnages : echec de compilation, anciens gardes");
         }
       }
-      // [QA] 17/10 : meme chose pour la couleur de l'eau — `touch /tmp/pc_reload_ocean`
-      // (l'ocean relit ses uniformes a chaque image, aucun etat a reconstruire).
+      // [QA] meme chose pour la couleur de l'eau
       if (FILE* rf = fopen("/tmp/pc_reload_ocean", "r")) {
         fclose(rf);
         remove("/tmp/pc_reload_ocean");
@@ -3344,8 +3784,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       }
     }
   }
-  // 14/10 : programmes de la version en DEUX PASSES (construits une fois, et a chaque
-  // rechargement a chaud du post). Echec de compilation = passe unique d'origine.
+  // programmes de la version en DEUX PASSES
   static bool post_single = false;
   {
     static int poll = 0;
@@ -3367,7 +3806,6 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     }
   }
   const bool post_split = !post_single && g_post_p1.okay() && g_post_p2.okay();
-  // (original : auto& shader = render_state->shaders[ShaderId::POST_PROCESSING];)
   auto& shader = post_split ? g_post_p1 : render_state->shaders[ShaderId::POST_PROCESSING];
   g_post_prog_a = shader.id();
   g_post_prog_b = post_split ? g_post_p2.id() : 0;
@@ -3384,14 +3822,12 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     POST_U(4f, "color_mult", 1.0f, 1.0f, 1.0f, alpha);
     POST_U(4f, "color_add", color, color, color, 0.0f);
   }
-  // PC-REMAKE: bloom / saturation / warmth, driven from GOAL via pc-set-post-fx!
-  // (storage in background_common.cpp; all values neutral at zero).
+  // bloom / saturation / warmth, driven from GOAL via pc-set-post-fx!
   POST_U(4fv, "post_fx", 1, g_post_fx);
   POST_U(4fv, "fx_quality", 1, g_fx_quality);
   POST_U(4fv, "toon_fx", 1, g_toon_fx);
 
-  // PC-REMAKE rebuilt lighting rig: feed the sun's on-screen position (needed
-  // for god rays and for the directional relight) plus the ambient palette.
+  // rebuilt lighting rig: feed the sun's on-screen position
   {
     float sun_screen[4] = {0.5f, 1.2f, 0.f, 0.f};
     float sx = g_sun_shadow_params[0], sy = g_sun_shadow_params[1],
@@ -3401,12 +3837,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       // direction TO the sun (the parameters describe where its light travels)
       float ux = -sx / len, uy = -sy / len, uz = -sz / len;
       sun_screen[3] = std::max(0.f, uy);  // altitude: 0 at the horizon, 1 overhead
-      // project a point far along that direction, with the SAME matrix the post
-      // uses to unproject the depth buffer (g_clip_from_world = the PC shaders'
-      // camera). 22/09 : the old code used m_render_state.camera_matrix (the
-      // game's own matrix, not the one the shaders draw with) — sun_screen came
-      // out at (1110, 1122) and the post's sun disc, god rays and flares were
-      // NEVER drawn (sun_screen.z stayed 0).
+      // project a point far along that direction, with the SAME matrix the post uses to unproject the depth
       const float kFar = 4096.f * 4000.f;
       float vx = ux * kFar, vy = uy * kFar, vz = uz * kFar;
       const float* G = g_clip_from_world;
@@ -3431,8 +3862,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
         sd[2] = -sz / len;
         sd[3] = sd[1] > 0.02f ? 1.f : 0.f;  // light must travel downwards
       }
-      // 20/10 : soleil transmis POUR LES RAYONS SEULEMENT (cabane, force d'ombre 0) : ni
-      // relumiere, ni disque, ni rayons d'ecran — comme avant dans la cabane
+      // soleil transmis POUR LES RAYONS SEULEMENT (cabane, force d'ombre 0)
       {
         extern float g_shaft_amt;
         if (g_sun_shadow_params[3] <= 0.001f && g_shaft_amt > 0.001f) {
@@ -3444,7 +3874,15 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       POST_U(4fv, "sun_dir", 1, sd);
     }
     POST_U(4fv, "light_fx", 1, g_light_fx);
-    // PC-REMAKE : translucidite du feuillage — /tmp/qa_no_transl = coupee (A/B)
+    // lune (direction, presence) pour son reflet sur la mer la nuit
+    {
+      extern float g_moon[4];
+      const float nuit_l = std::clamp(g_night_fx[0], 0.f, 1.f);
+      const float pres = nuit_l * std::clamp((g_moon[1] + 0.02f) / 0.1f, 0.f, 1.f) *
+                         (g_cloud_light[3] > 0.5f ? 1.f : 0.f);
+      POST_U(4f, "lune", g_moon[0], g_moon[1], g_moon[2], pres);
+    }
+    // translucidite du feuillage
     {
       static int poll = 0;
       static bool transl_off = false;
@@ -3457,8 +3895,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       }
       POST_U(1f, "foliage_transl", transl_off ? 0.f : 1.f);
     }
-    // reflets du metal et du verre — /tmp/qa_no_reflet = coupes (A/B), /tmp/qa_reflet_dose =
-    // dose (un nombre), /tmp/qa_reflet_debug = drapeaux en couleur
+    // reflets du metal et du verre
     {
       static int poll = 0;
       static float reflet[4] = {1.f, 0.f, 0.f, 0.f};
@@ -3482,9 +3919,14 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
         }
       }
       POST_U(4fv, "reflet_fx", 1, reflet);
-      // verre du decor (image suivante) : dose, panorama present, soleil (jour, pas a l'interieur)
+      // verre du decor (image suivante)
       g_reflet_fwd[0] = reflet[0];
       g_reflet_fwd[1] = g_env_tex ? 1.f : 0.f;
+      // pluie (marais)
+      {
+        extern float g_meteo_amt[2];
+        g_reflet_fwd[3] = g_meteo_amt[0] > 0.5f ? 1.f : 0.f;
+      }
       g_reflet_fwd[2] = (g_sun_shadow_params[3] > 0.001f ? 1.f : 0.f) *
                         std::clamp(1.f - g_night_fx[0], 0.f, 1.f) *
                         std::clamp(1.f - g_grade_amt2[3], 0.f, 1.f);
@@ -3495,8 +3937,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     POST_U(4fv, "sky_color", 1, g_sky_color);
     POST_U(4fv, "ground_color", 1, g_ground_color);
 
-    // Inverse of the exact background vertex transform, so the post pass can
-    // rebuild a world position per pixel — what makes local lamps possible.
+    // Inverse of the exact background vertex transform
     float Ainv[16];
     if (g_world_from_clip_ok) {
       for (int i = 0; i < 16; i++) {
@@ -3516,13 +3957,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     // lamps collected this frame, narrowed down to the ones nearest the camera
     pc_remake_select_lamps(m_render_state.camera_pos.data());
     int lamp_n_all = pc_remake_lamp_count();
-    // PERF 14/10 : TRI DES LAMPES pour le post (image identique). Le shader testait
-    // les 48 lampes pour CHAQUE pixel (1,15 ms de GPU en plein jour au village, ou
-    // presque aucune n'eclaire). On ne lui envoie que les lampes qui peuvent toucher
-    // un pixel visible : eclairage possible (presence * intensite >= 0,001, memes
-    // regles que le shader) ET sphere de portee dans le champ, OU halo possible
-    // (memes portes que le shader). Le rang d'origine suit (lamp_orig) : le
-    // vacillement des feux depend de lui. /tmp/qa_no_lamp_cull = toutes (A/B).
+    // PERF TRI DES LAMPES pour le post (image identique)
     static float c_pos[48 * 4], c_col[48 * 4], c_scr[48 * 4], c_orig[48], c_rect[48 * 4];
     int lamp_n = 0;
     {
@@ -3542,8 +3977,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       const float hut = std::clamp(g_grade_amt2[3], 0.f, 1.f);
       const float lamp_hour = std::max(night, interior);
       const float glow_gate = std::max(night, hut) * std::clamp(g_night_fx[2], 0.f, 2.f);
-      // plans du champ (lignes de clip_from_world, colonne majeure) : w+x, w-x, w+y,
-      // w-y, et w (devant la camera)
+      // plans du champ (lignes de clip_from_world, colonne majeure)
       float planes[5][4];
       for (int k = 0; k < 4; k++) {
         const float r0 = G[k * 4 + 0], r1 = G[k * 4 + 1], r3 = G[k * 4 + 3];
@@ -3564,7 +3998,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           reach = reach + (1.f - reach) * hut;
         }
         const float r = std::max(lp[i * 4 + 3] * reach, 1.f);
-        // presence * intensite (pour le feu : toujours > 0)
+        // presence * intensite
         float pi;
         if (fixture) {
           pi = (-inten - 64.f) * (0.30f + 0.70f * lamp_hour);
@@ -3588,8 +4022,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
             }
           }
         }
-        // halo : projection ecran de la lampe, memes formules que l'ancien code du
-        // shader (cadre elargi -0,3..1,3, rayon angulaire, fondu 30-85 m)
+        // halo : projection ecran de la lampe, memes formules que l'ancien code du shader
         float scr[4];
         {
           const float vx = lp[i * 4 + 0] - camx, vy = lp[i * 4 + 1] - camy,
@@ -3626,10 +4059,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
           c_scr[lamp_n * 4 + k] = scr[k];
         }
         c_orig[lamp_n] = (float)i;
-        // 14/10 : rectangle ECRAN (uv) ou la lampe peut agir — eclairage (projection
-        // de la boite de sa sphere de portee) + halo et reflets fantomes. Sert aux
-        // tuiles (lamp_tiles, plus bas). Conservateur : un coin derriere la camera
-        // = tout l'ecran.
+        // rectangle ECRAN (uv) ou la lampe peut agir
         {
           float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
           auto add = [&](float ax, float ay, float bx, float by) {
@@ -3695,7 +4125,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     }
     float night_fx[4] = {g_night_fx[0], g_night_fx[1], g_night_fx[2], (float)lamp_n};
     POST_U(4fv, "night_fx", 1, night_fx);
-    // 20/10 : faisceaux d'eco (lumiere en tube, voir post_processing.frag)
+    // faisceaux d'eco (lumiere en tube, voir post_processing.frag)
     {
       const int nb = std::min(pc_remake_beam_count(), kMaxRemakeBeams);
       if (nb > 0) {
@@ -3703,17 +4133,14 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       }
       POST_U(1f, "beam_n", (float)nb);
     }
-    // 20/10 : rayons de soleil volumetriques (jungle) — la carte d'ombres du soleil est lue par
-    // le post (unite 14, sampler2DShadow toujours pose sur 14 : jamais deux types sur une unite)
+    // rayons de soleil volumetriques (jungle)
     {
       extern float g_shaft_amt;
-      // (cabane : force d'ombre 0 mais carte rendue pour les rayons — voir enabled())
+      // cabane : force d'ombre 0 mais carte rendue pour les rayons
       const bool shafts = g_shaft_amt > 0.001f && g_sun_shadow.ready && g_sun_shadow.enabled();
       POST_U(1i, "sun_shadow_tex", 14);
       POST_U(1f, "shaft_amt", shafts ? g_shaft_amt : 0.f);
-      // 27/10 : la carte est aussi lue hors de la jungle (ombres de nuages, caustiques, eclat du
-      // soleil sur le metal) : liee des qu'elle existe, sun_map_ok le dit au post
-      // (original : liee seulement avec les rayons — ailleurs le post lisait une matrice perimee)
+      // la carte est aussi lue hors de la jungle
       const bool carte = g_sun_shadow.ready && g_sun_shadow.enabled();
       POST_U(1f, "sun_map_ok", carte ? 1.f : 0.f);
       if (carte) {
@@ -3723,12 +4150,18 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
         POST_U(Matrix4fv, "sun_light_vp", 1, GL_FALSE, g_sun_shadow.read_vp());
       }
     }
-    // scintillement de l'eau : niveau de la mer + forces jour/nuit + temps
+    // scintillement de l'eau
     float wg[4] = {g_water_glitter[0], g_water_glitter[1], g_water_glitter[2],
                    (float)(m_render_state.frame_idx % 216000) / 60.f};
     POST_U(4fv, "water_glitter", 1, wg);
-    // 25/10 : ONDES AUTOUR DE JAK dans l'eau (post_processing.frag) — un point d'emission tous
-    // les 35 cm parcourus dans l'eau, ou toutes les 1,2 s a l'arret ; 12 anneaux au plus
+    // eau vivante (CommonOceanRenderer.cpp)
+    {
+      extern float g_eau_temps;
+      extern float g_eau_dose[2];
+      extern bool g_eau_active;
+      POST_U(4f, "eau_houle_p", g_eau_temps, g_eau_dose[0], 110.f, g_eau_active ? 1.f : 0.f);
+    }
+    // ONDES AUTOUR DE JAK dans l'eau (post_processing.frag)
     {
       static float s_ondes[12 * 4] = {};
       static int s_ondes_tete = 0;
@@ -3748,7 +4181,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
             o[0] = x;
             o[1] = z;
             o[2] = t;
-            // nage : anneaux plus francs ; a l'arret : de petites ondes
+            // nage : anneaux plus francs
             o[3] = (g_jak_eau[0] > 1.5f ? 1.0f : 0.75f) * (d > 0.35f ? 1.f : 0.45f);
             s_ondes_tete = (s_ondes_tete + 1) % 12;
             s_lx = x;
@@ -3759,15 +4192,12 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       }
       POST_U(4fv, "ondes[0]", 12, s_ondes);
     }
-    // 17/10 : la surface de l'eau a deja pose sa brume cette image (CommonOceanRenderer)
+    // la surface de l'eau a deja pose sa brume cette image
     {
       extern u64 g_water_murk_frame;
       POST_U(1f, "water_murk_ocean", g_water_murk_frame == m_render_state.frame_idx ? 1.f : 0.f);
     }
-    // [QA-GLITTER] 25/08 : preuve de la COURSE entre threads — main.gc desarme
-    // chaque frame GOAL, draw-ocean re-arme ; si le rendu lit ENTRE les deux,
-    // la frame se peint sans aucun effet d'eau (l'eau disparaissait). Compte
-    // ce que le rendu LIT reellement. A retirer une fois l'eau reglee.
+    // [QA] preuve de la COURSE entre threads
     {
       static int qa_wg_arm = 0, qa_wg_dis = 0, qa_wg_n = 0;
       if (wg[1] > 0.001f || wg[2] > 0.001f) {
@@ -3782,17 +4212,11 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       }
     }
     if (lamp_n > 0) {
-      // note: name the first element explicitly — safer across drivers than
-      // relying on the bare array name resolving to element 0
-      // 14/10 : listes TRIEES (voir plus haut) — original : pc_remake_lamp_pos() /
-      // pc_remake_lamp_color() en entier
+      // note: name the first element explicitly
       POST_U(4fv, "lamp_pos[0]", lamp_n, c_pos);
       POST_U(4fv, "lamp_color[0]", lamp_n, c_col);
       POST_U(1fv, "lamp_orig[0]", lamp_n, c_orig);
-      // PERF 14/10 : TUILES DE LAMPES — 16 x 9 tuiles d'ecran, chacune avec le masque
-      // (48 bits) des lampes dont le rectangle d'action la touche. Le shader ne
-      // parcourt que ces lampes : ailleurs leur contribution valait exactement 0.
-      // /tmp/qa_no_lamp_cull = toutes les lampes partout (A/B).
+      // PERF TUILES DE LAMPES
       {
         constexpr int TX = 16, TY = 9;
         static GLuint tiles[TX * TY * 2];
@@ -3824,17 +4248,13 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
         }
         POST_U(2uiv, "lamp_tiles[0]", TX * TY, tiles);
       }
-      // PERF 14/10 : position ECRAN de chaque lampe (uv, rayon du halo, fondu ; w < 0 =
-      // sautee) calculee une fois par image dans le tri ci-dessus (c_scr) — le post la
-      // recalculait pour chacun des 2 millions de pixels.
+      // PERF position ECRAN de chaque lampe
       POST_U(4fv, "lamp_scr[0]", lamp_n, c_scr);
     }
   }
-  // PC-REMAKE: depth-aware post (SSAO / aerial fog / DOF). Resolve the scene
-  // depth (possibly MSAA) into a texture and bind it on unit 15.
+  // depth-aware post (SSAO / aerial fog / DOF)
   POST_U(4fv, "depth_fx", 1, g_depth_fx);
-  // 13/10 : G-buffer d'avant le HUD (voir g_hud_depth) valable pour CETTE image —
-  // la capture d'ecran rejoue le post dans la meme image : meme copie
+  // G-buffer d'avant le HUD (voir g_hud_depth) valable pour CETTE image
   if (g_hud_gbuf_pending) {
     g_hud_gbuf_pending = false;
     g_hud_gbuf_frame = render_state->frame_idx;
@@ -3854,8 +4274,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       g_depth_resolve.ensure(src_w, src_h);
       glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_state.render_fbo->fbo_id);
       glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_depth_resolve.fbo);
-      // 14/10 : profondeur seule (voir pc_hud_gbuffer_capture) —
-      // original : GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT
+      // profondeur seule (voir pc_hud_gbuffer_capture)
       glBlitFramebuffer(0, 0, src_w, src_h, 0, 0, src_w, src_h, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
       glBindFramebuffer(GL_FRAMEBUFFER, post_target);  // back to OUR target, not always the window
       dtex = g_depth_resolve.tex;
@@ -3865,9 +4284,8 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glActiveTexture(GL_TEXTURE0);
     POST_U(1i, "depth_tex", 15);
   }
-  // PC-REMAKE 21/09 : G-buffer de normales -> unite 13 (normal_tex). Avec MSAA la
-  // texture est multi-echantillons : on la resout par blit de l'attachement 1.
-  float bloom_has_normals = 0.f;  // 12/10 : le bloom large lit aussi les drapeaux
+  // G-buffer de normales -> unite 13 (normal_tex)
+  float bloom_has_normals = 0.f;  // le bloom large lit aussi les drapeaux
   {
     float has_normals = 0.f;
     if (m_fbo_state.render_fbo->normal_tex_id.has_value()) {
@@ -3875,7 +4293,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       int src_h = m_fbo_state.render_fbo->height;
       GLuint ntex = 0;
       if (hud_gbuf && g_hud_gbuf_has_normals) {
-        ntex = g_hud_normal.tex;  // 13/10 : normales d'avant le HUD
+        ntex = g_hud_normal.tex;  // normales d'avant le HUD
       } else if (m_fbo_state.render_fbo->multisampled) {
         g_normal_resolve.ensure(src_w, src_h);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_state.render_fbo->fbo_id);
@@ -3895,7 +4313,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       POST_U(1i, "normal_tex", 13);
       has_normals = 1.f;
     }
-    // PC-REMAKE 22/09 : scene sans HUD pour les reflets d'eau et les rayons
+    // scene sans HUD pour les reflets d'eau et les rayons
     {
       GLuint pt = pc_prehud_texture();
       glActiveTexture(GL_TEXTURE12);
@@ -3904,7 +4322,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       POST_U(1i, "scene_tex", 12);
       POST_U(1f, "has_scene_tex", pt ? 1.f : 0.f);
     }
-    // [QA] QA_NO_GBUFFER=1 : le post ignore le G-buffer (A/B contre la reconstruction)
+    // [QA] QA_NO_GBUFFER=1
     static const bool qa_no_gb = [] {
       const char* e = getenv("QA_NO_GBUFFER");
       return e && e[0] == '1';
@@ -3918,8 +4336,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       const char* e = getenv("QA_SHOW_NORMALS");
       return (e && e[0] == '1') ? 1.f : 0.f;
     }();
-    // 21/09 : bascule A CHAUD par fichier (touch /tmp/qa_show_normals), scrutee
-    // toutes les 32 images — evite une relance du jeu pour un controle visuel
+    // bascule A CHAUD par fichier (touch /tmp/qa_show_normals), scrutee toutes les 32 images
     static int qa_show_poll = 0;
     static float qa_show_file = 0.f;
     if ((qa_show_poll++ & 31) == 0) {
@@ -3928,7 +4345,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     POST_U(1f, "qa_show_normals",
                 std::max(qa_show_env, qa_show_file));
   }
-  // PC-REMAKE 12/10 : BLOOM LARGE (voir pc_bloom_run) -> unite 11 (bloom_tex)
+  // BLOOM LARGE (voir pc_bloom_run) -> unite 11 (bloom_tex)
   {
     const bool bloom_has_depth =
         g_depth_fx[0] > 0.001f || g_depth_fx[1] > 0.001f || g_depth_fx[2] > 0.001f;
@@ -3948,14 +4365,14 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);  // la chaine a pris l'unite 0
     POST_U(1i, "bloom_tex", 11);
     POST_U(1f, "has_bloom_tex", btex ? 1.f : 0.f);
-    // HUD intact : la scene sans HUD de cette image -> unite 10
+    // HUD intact
     GLuint href = pc_hud_ref_texture();
     glActiveTexture(GL_TEXTURE10);
     glBindTexture(GL_TEXTURE_2D, href);
     glActiveTexture(GL_TEXTURE0);
     POST_U(1i, "hud_ref_tex", 10);
     POST_U(1f, "has_hud_ref", href ? 1.f : 0.f);
-    // 20/10 : rayons de soleil au quart de resolution, adoucis -> unite 8
+    // rayons de soleil au quart de resolution, adoucis -> unite 8
     GLuint stex = bloom_has_depth
                       ? pc_shaft_run(render_state->version, post_reloaded,
                                      m_render_state.camera_pos.data(),
@@ -3968,8 +4385,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
     POST_U(1i, "shaft_tex", 8);
     POST_U(1f, "has_shaft_tex", stex ? 1.f : 0.f);
-    // carte d'environnement des reflets (metal, verre) -> unites 3 (panorama), 1 (clarte moyenne
-    // de l'image), liees par pc_reflet_env_run
+    // carte d'environnement des reflets (metal, verre) -> unites 3 (panorama)
     {
       GLuint etex = pc_reflet_env_run(render_state->version, post_reloaded,
                                       m_render_state.camera_pos.data());
@@ -3992,7 +4408,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       POST_U(1f, "has_gi_tex", gtex ? 1.f : 0.f);
       POST_U(4fv, "gi_fx", 1, g_gi_fx);
     }
-    // caustiques (y) et temps en secondes (z) ; x et w libres
+    // caustiques (y) et temps en secondes (z)
     {
       POST_U(4f, "modern_fx", 0.f, 1.f, (float)(render_state->frame_idx % 216000) / 60.f, 0.f);
       // motif des caustiques -> unite 16
@@ -4003,7 +4419,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
       glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
       POST_U(1i, "caustique_tex", 16);
     }
-    // 20/10 : traces dans la neige -> unite 7
+    // traces dans la neige -> unite 7
     pc_snow_trail_frame(render_state->frame_idx);
     GLuint snow_tex = pc_snow_trail_tex();
     glActiveTexture(GL_TEXTURE7);
@@ -4011,7 +4427,7 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, *window_blit_src->tex_id);
     POST_U(1i, "snow_trail_tex", 7);
-    // 25/10 : empreintes dans le sable -> unite 4
+    // empreintes dans le sable -> unite 4
     {
       GLuint sand_tex = pc_sand_tex();
       glActiveTexture(GL_TEXTURE4);
@@ -4024,11 +4440,10 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     }
     POST_U(4f, "snow_trail", snow_tex ? 1.f : 0.f, g_snow_step[0], g_snow_step[2],
            (float)(render_state->frame_idx % 216000) / 60.f);
-    // (original : g_snow_geom_drawn ? 1.f : 0.f)
     POST_U(1f, "snow_geom",
            (g_snow_geom_drawn || g_snow_geom_frame == render_state->frame_idx) ? 1.f : 0.f);
     g_snow_geom_drawn = false;
-    // PC-REMAKE : cartes du rivage -> unites 5 et 6
+    // cartes du rivage -> unites 5 et 6
     {
       float boites[8];
       int nriv = pc_rivage_bind(m_render_state.loader.get(), 5, boites);
@@ -4057,12 +4472,18 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
     glViewport(0, 0, vp[2], vp[3]);
     shader.activate();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // ciel vivant
+    pc_nuages_run(render_state->version, post_reloaded, m_render_state.camera_pos.data(), vp[2],
+                  vp[3], render_state->frame_idx);
     // vie dans l'air, par-dessus la passe 1 (voir pc_vie_run)
     {
       GLint vao_post = 0;
       glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao_post);
       pc_vie_run(render_state->version, post_reloaded, m_render_state.camera_pos.data(), vp[2], vp[3],
                  render_state->frame_idx);
+      // pluie et neige (voir pc_meteo_run)
+      pc_meteo_run(render_state->version, post_reloaded, m_render_state.camera_pos.data(), vp[2],
+                   vp[3], render_state->frame_idx);
       glBindVertexArray(vao_post);
     }
     // passe 2 -> cible d'origine
@@ -4085,15 +4506,51 @@ void OpenGLRenderer::do_pcrtc_effects(float alp,
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindVertexArray(0);
 
-  // PERF 25/08 : remontee du FBO post (resolution jeu) vers la fenetre
+  // PERF remontee du FBO post (resolution jeu) vers la fenetre avec ANTICRENELAGE (anticrenelage.frag)
   if (use_post_fbo) {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_post_fbo.fbo_id);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
-    glBlitFramebuffer(0, 0, post_game_w, post_game_h, render_state->draw_offset_x,
-                      render_state->draw_offset_y,
-                      render_state->draw_offset_x + render_state->draw_region_w,
-                      render_state->draw_offset_y + render_state->draw_region_h,
-                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    static Shader* s_aa = nullptr;
+    static GLuint aa_vao = 0;
+    if (post_reloaded || !s_aa) {
+      delete s_aa;
+      s_aa = new Shader("anticrenelage", render_state->version);
+    }
+    if (s_aa->okay() && s_post_fbo.tex_id) {
+      if (!aa_vao) {
+        glGenVertexArrays(1, &aa_vao);
+      }
+      glBindFramebuffer(GL_FRAMEBUFFER, dst_fbo);
+      glViewport(render_state->draw_offset_x, render_state->draw_offset_y,
+                 render_state->draw_region_w, render_state->draw_region_h);
+      const GLboolean depth_on = glIsEnabled(GL_DEPTH_TEST);
+      const GLboolean scissor_on = glIsEnabled(GL_SCISSOR_TEST);
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_SCISSOR_TEST);
+      glDisable(GL_BLEND);
+      s_aa->activate();
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, *s_post_fbo.tex_id);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glUniform1i(pc_uniform_loc(s_aa->id(), "src_tex"), 0);
+      glUniform2f(pc_uniform_loc(s_aa->id(), "texel"), 1.f / post_game_w, 1.f / post_game_h);
+      glBindVertexArray(aa_vao);
+      glDrawArrays(GL_TRIANGLES, 0, 3);
+      glBindVertexArray(0);
+      if (depth_on) {
+        glEnable(GL_DEPTH_TEST);
+      }
+      if (scissor_on) {
+        glEnable(GL_SCISSOR_TEST);
+      }
+    } else {
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, s_post_fbo.fbo_id);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
+      glBlitFramebuffer(0, 0, post_game_w, post_game_h, render_state->draw_offset_x,
+                        render_state->draw_offset_y,
+                        render_state->draw_offset_x + render_state->draw_region_w,
+                        render_state->draw_offset_y + render_state->draw_region_h,
+                        GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, dst_fbo);
     glViewport(render_state->draw_offset_x, render_state->draw_offset_y,
                render_state->draw_region_w, render_state->draw_region_h);

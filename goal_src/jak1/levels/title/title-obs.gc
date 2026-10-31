@@ -350,7 +350,7 @@
       (set-blackout-frames (seconds 0.035)))
   :trans
     (behavior ()
-      ;; PC-REMAKE 17/10 : intro en cours → post neutre (time-of-day.gc)
+      ;; intro en cours → post neutre (time-of-day.gc)
       (set! *remake-intro-frame* (-> *display* base-frame-counter))
       ((-> (method-of-type logo startup) trans))
       ;; og:preserve-this

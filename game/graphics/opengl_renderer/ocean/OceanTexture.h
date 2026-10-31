@@ -16,13 +16,9 @@ class OceanTexture {
                                  ScopedProfilerNode& prof);
   void init_textures(TexturePool& pool, GameVersion version);
   void draw_debug_window();
-  // PC-REMAKE : l'instance near désactive la publication à l'adresse VRAM
-  // partagée pour laisser la variante du large seule visible (parité de rendu)
+  // l'instance near désactive la publication à l'adresse VRAM partagée pour laisser la variante du
   void set_move_to_vram(bool v) { m_move_to_vram = v; }
-  // PC-REMAKE 14/10 : lit les paquets DMA de la texture d'ocean SANS rien dessiner
-  // (instance proche : sa texture n'est plus publiee depuis le 17/08 — voir
-  // handle_ocean_texture_jak1 — la generer etait du travail perdu en plein milieu
-  // de l'image)
+  // lit les paquets DMA de la texture d'ocean SANS rien dessiner
   void skip_ocean_texture_jak1(DmaFollower& dma);
   ~OceanTexture();
 

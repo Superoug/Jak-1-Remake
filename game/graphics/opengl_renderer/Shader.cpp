@@ -20,7 +20,7 @@ Shader::Shader(const std::string& shader_name,
       file_util::read_text_file(file_util::get_file_path({shader_folder, shader_name + ".vert"}));
   auto frag_src = file_util::read_text_file(file_util::get_file_path(
       {shader_folder, (frag_name.empty() ? shader_name : frag_name) + ".frag"}));
-  // 20/10 : etapes de decoupage optionnelles
+  // etapes de decoupage optionnelles
   const auto tesc_path = file_util::get_file_path({shader_folder, shader_name + ".tesc"});
   const auto tese_path = file_util::get_file_path({shader_folder, shader_name + ".tese"});
   const bool has_tess = file_util::file_exists(tesc_path) && file_util::file_exists(tese_path);
@@ -174,8 +174,8 @@ ShaderLibrary::ShaderLibrary(GameVersion version) {
   at(ShaderId::ETIE_BASE) = {"etie_base", version};
   at(ShaderId::ETIE) = {"etie", version};
   at(ShaderId::SHADOW2) = {"shadow2", version};
-  at(ShaderId::SHADOW_DEPTH) = {"shadow_depth", version};  // PC-REMAKE
-  at(ShaderId::MERC_SHADOW) = {"merc_shadow", version};    // PC-REMAKE
+  at(ShaderId::SHADOW_DEPTH) = {"shadow_depth", version};
+  at(ShaderId::MERC_SHADOW) = {"merc_shadow", version};
   at(ShaderId::TEX_ANIM) = {"tex_anim", version};
   at(ShaderId::GLOW_DEPTH_COPY) = {"glow_depth_copy", version};
   at(ShaderId::GLOW_PROBE_ON_GRID) = {"glow_probe_on_grid", version};
@@ -187,15 +187,13 @@ ShaderLibrary::ShaderLibrary(GameVersion version) {
   at(ShaderId::SLOW_TIME) = {"slow_time", version};
   at(ShaderId::OCEAN_ENVMAP) = {"ocean_envmap", version};
   at(ShaderId::OCEAN_ENVMAP_HAZE) = {"ocean_envmap_haze", version};
-  // 20/10 : sol de neige deformable — pixel de tfrag3.frag. Facultatif : si la carte graphique
-  // refuse le decoupage, la neige garde le rendu sans deformation (voir TFragment)
+  // sol de neige deformable
   at(ShaderId::TFRAG3_SNOW) = {"tfrag3_snow", version, "", "tfrag3"};
   if (!at(ShaderId::TFRAG3_SNOW).okay()) {
     lg::warn("PC-REMAKE : sol de neige deformable indisponible (decoupage refuse)");
   }
 
-  // 21/10 : personnages remodeles — facultatifs aussi : sans eux, le rendu actuel des
-  // personnages (Merc2 retombe sur MERC2 / EMERC)
+  // personnages remodeles
   at(ShaderId::MERC2_TESS) = {"merc2_tess", version, "", "merc2"};
   at(ShaderId::EMERC_TESS) = {"emerc_tess", version, "", "emerc"};
   at(ShaderId::MERC2_FUR) = {"merc2_fur", version, "FUR", "merc2"};

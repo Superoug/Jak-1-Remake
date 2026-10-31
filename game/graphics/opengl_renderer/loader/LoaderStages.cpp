@@ -22,9 +22,7 @@ u64 add_texture(TexturePool& pool, const tfrag3::Texture& tex, bool is_common) {
   float aniso = 0.0f;
   glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &aniso);
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, aniso);
-  // PC-REMAKE 25/08 : biais de mip LEGER. Le -1.2 essaye plus tot aggravait le
-  // moire du lointain (il force un mip trop net) ; -0.35 garde un peu de
-  // croquant sans reveiller l'aliasing.
+  // biais de mip LEGER
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.8f);
   if (tex.load_to_pool) {
     TextureInput in;
@@ -55,9 +53,9 @@ class TextureLoaderStage : public LoaderStage {
       while (data.lev_data->textures.size() < data.lev_data->level->textures.size()) {
         auto& tex = data.lev_data->level->textures[data.lev_data->textures.size()];
         data.lev_data->textures.push_back(add_texture(*data.tex_pool, tex, false));
-        // PC-REMAKE : carte de hauteur sculptee du decor (si l'outil en a fait une pour cette texture)
+        // carte de hauteur sculptee du decor
         pc_sculpt_register_texture(data.lev_data->textures.back(), tex.debug_name);
-        // PC-REMAKE : carte de normales des sols
+        // carte de normales des sols
         pc_normal_register_texture(data.lev_data->textures.back(), tex.debug_name);
         pc_det_register_texture(data.lev_data->textures.back(), tex.debug_name);
         bytes_this_run += tex.w * tex.h * 4;

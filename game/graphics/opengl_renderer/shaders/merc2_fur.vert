@@ -1,7 +1,5 @@
 #version 410 core
-// PC-REMAKE 21/10 — FOURRURE EN COUCHES des personnages (copie de merc2.vert) : chaque instance
-// est une couche posee au-dessus de la peau, le long de la normale, legerement couchee vers le
-// bas ; merc2.frag (FUR) y dessine des brins.
+// FOURRURE EN COUCHES des personnages (copie de merc2.vert)
 
 // merc vertex definition
 layout (location = 0) in vec3 position_in;
@@ -26,9 +24,9 @@ uniform vec4 fog_constants;
 
 uniform mat4 perspective_matrix;
 
-// PC-REMAKE: view-space -> sun shadow clip space (see background_common.cpp)
+// view-space -> sun shadow clip space (see background_common.cpp)
 uniform mat4 sun_light_from_cam;
-// PC-REMAKE 21/09 : normale merc (espace des os) -> monde pour le G-buffer
+// normale merc (espace des os) -> monde pour le G-buffer
 uniform mat3 world_nrm_from_merc;
 uniform float write_normals;
 out vec3 w_nor;
@@ -37,17 +35,13 @@ out vec3 w_nor;
 out vec4 vtx_color;
 out vec2 vtx_st;
 out vec4 sun_light_pos;
-// PC-REMAKE 22/09 : ECLAIRAGE PAR PIXEL (Phong) — la normale interpolee et la
-// couleur brute du sommet partent au fragment, qui refait le calcul de lumiere
-// exact de la VU1 par pixel. Le Gouraud d'origine (lumiere calculee aux sommets
-// puis interpolee) dessinait les aretes des polygones sur les visages en
-// cinematique (lignes des polygones trop visibles, 21/09).
+// ECLAIRAGE PAR PIXEL (Phong)
 out vec3 v_nrm;
 out vec4 v_rgba;
-out vec3 v_pos;  // 21/10 : position (espace camera du moteur) — matieres des personnages
-out vec3 v_ref;  // 21/10 : position de reference du modele (detail fin des matieres)
-out vec3 v_refn;  // 21/10 v3 : normale de reference (projection des cartes de detail)
-out vec3 v_lava_w;  // 26/10 : lave (merc2.frag), sans objet ici
+out vec3 v_pos;  // position (espace camera du moteur)
+out vec3 v_ref;  // position de reference du modele (detail fin des matieres)
+out vec3 v_refn;  // normale de reference (projection des cartes de detail)
+out vec3 v_lava_w;  // lave (merc2.frag), sans objet ici
 out float v_couche;
 out vec3 v_racine;
 uniform vec4 fourrure;  // x = longueur, y = taille d'un brin, z = nombre de couches
@@ -85,7 +79,7 @@ void main() {
   vec4 vtx_pos = -bones[mats[0]].X * p * weights_in[0];
   vec3 rotated_nrm = bones[mats[0]].R * normal_in * weights_in[0];
 
-  // game may send garbage bones if the weight is 0, don't let NaNs sneak in.
+  // game may send garbage bones if the weight is 0, don't let NaNs sneak in
   if (weights_in[1] > 0) {
     vtx_pos += -bones[mats[1]].X * p * weights_in[1];
     rotated_nrm += bones[mats[1]].R * normal_in * weights_in[1];
@@ -100,8 +94,7 @@ void main() {
     float c = float(gl_InstanceID + 1) / max(fourrure.z, 1.0);
     vec3 nn = normalize(rotated_nrm);
     vec3 bas = transpose(world_nrm_from_merc) * vec3(0.0, -1.0, 0.0);
-    // dans l'espace du moteur, la normale des personnages pointe a l'inverse des positions : la
-    // couche part vers -n (vers +n, elle s'enfoncait dans le corps : fourrure invisible)
+    // dans l'espace du moteur, la normale des personnages pointe a l'inverse des positions
     vtx_pos.xyz += -nn * (c * fourrure.x) + bas * (c * c * fourrure.x * 0.45);
     v_couche = c;
     v_racine = position_in;
@@ -109,7 +102,7 @@ void main() {
 
   vec4 transformed = perspective_matrix * vtx_pos;
 
-  // PC-REMAKE: sun shadow lookup for characters
+  // sun shadow lookup for characters
   sun_light_pos = sun_light_from_cam * vtx_pos;
 
   rotated_nrm = normalize(rotated_nrm);
@@ -139,7 +132,7 @@ void main() {
   gl_Position = transformed;
 
 
-  vtx_color = rgba * light_color;  // (Gouraud d'origine, garde pour reference / repli)
+  vtx_color = rgba * light_color;  // Gouraud d'origine, garde pour reference / repli
   v_nrm = rotated_nrm;
   v_rgba = rgba;
   v_pos = vtx_pos.xyz;

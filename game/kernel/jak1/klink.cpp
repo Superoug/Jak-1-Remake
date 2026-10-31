@@ -22,16 +22,7 @@
 static constexpr bool link_debug_printfs = false;
 
 namespace {
-// PC-REMAKE 14/10 : isolation code / donnees sous Rosetta (Mac Apple Silicon qui fait tourner le
-// jeu Intel). Chaque objet GOAL du moteur cree ses donnees de travail (manettes, decompression
-// d'animation, cache de collision...) juste derriere son propre code, dans la meme page memoire.
-// Or une ecriture dans une page qui contient du code deja traduit oblige Rosetta a jeter puis
-// retraduire ce code : ecrites a chaque image, ces donnees coutaient jusqu'a 8 ms par image et la
-// logique ne chevauchait plus le rendu. On aligne donc, dans le tas global uniquement, le debut et
-// la fin des donnees creees par le code de premier niveau sur une page de 4 Ko (Rosetta suit le
-// code a cette granularite : mesure 14/10, meme gain qu'avec 16 Ko pour ~1,3 Mo de marge au lieu
-// de 5,6 Mo). Sans effet hors Rosetta ; marge annulee si l'objet n'alloue rien, et plus de marge
-// si le tas global devient trop plein.
+// isolation code / donnees sous Rosetta (Mac Apple Silicon qui fait tourner le jeu Intel)
 constexpr u32 kRosettaPage = 0x1000;
 constexpr u32 kRosettaMinFreeHeap = 3 * 1024 * 1024;
 u32 rosetta_page_align(u32 x) {
@@ -601,7 +592,7 @@ void link_control::jak1_finish(bool jump_from_c_to_goal) {
 
     // execute top level!
     if (m_entry.offset && (m_flags & LINK_FLAG_EXECUTE)) {
-      // PC-REMAKE 14/10 : voir rosetta_page_align (isolation code / donnees sous Rosetta).
+      // voir rosetta_page_align (isolation code / donnees sous Rosetta)
       const bool isolate = running_under_rosetta() && m_heap.offset == kglobalheap.offset &&
                            m_heap->top.offset - m_heap->current.offset > kRosettaMinFreeHeap;
       const u32 code_end = m_heap->current.offset;
@@ -616,7 +607,7 @@ void link_control::jak1_finish(bool jump_from_c_to_goal) {
       }
       if (isolate) {
         if (m_heap->current.offset == rosetta_page_align(code_end)) {
-          // rien d'alloue : on rend la marge
+          // rien d'alloue
           m_heap->current.offset = code_end;
         } else {
           const u32 data_end = m_heap->current.offset;

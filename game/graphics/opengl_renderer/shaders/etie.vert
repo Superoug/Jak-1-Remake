@@ -18,11 +18,10 @@ uniform int decal;
 out vec4 fragment_color;
 out vec3 tex_coord;
 out float fogginess;
-// PC-REMAKE 13/10 : reflet calcule PAR PIXEL (voir etie.frag) — normale et position
-// en repere camera, interpolees
+// reflet calcule PAR PIXEL (voir etie.frag)
 out vec3 v_env_nrm;
 out vec3 v_env_pos;
-// 13/10 : ombre du soleil sur le reflet (le reflet n'eclaire pas sous un palmier)
+// ombre du soleil sur le reflet
 uniform mat4 sun_light_vp;
 out vec4 sun_light_pos;
 

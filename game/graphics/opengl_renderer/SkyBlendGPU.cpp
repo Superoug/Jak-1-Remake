@@ -74,8 +74,7 @@ void SkyBlendGPU::init_textures(TexturePool& tex_pool, GameVersion version) {
   }
 }
 
-// [QA-SKY] 14/10 : chronometrage CPU des appels du melange du ciel (4,5 ms CPU
-// par image mesures au village pour 2 draws) — a retirer apres la passe.
+// [QA] chronometrage CPU des appels du melange du ciel
 namespace {
 struct QaSky {
   double t[8] = {};

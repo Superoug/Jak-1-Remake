@@ -571,8 +571,7 @@
               (when (ocean-mid-camera-masks-bit? s5-1 s3-1)
                 (let ((v1-43 (-> *ocean-map* ocean-trans-indices data (+ (* (the-as uint 48) s5-1) s3-1))))
                   (when (>= (-> v1-43 parent) 0)
-                    ;; PC-REMAKE DEBUG : valeurs parent/enfant des cellules camera
-                    ;; 14/10 : traces coupees (original : (when (zero? (logand ... 255))
+                    ;; DEBUG : valeurs parent/enfant des cellules camera traces coupees
                     (when #f
                       (format 0 "PCDBG trans cellule z ~d x ~d parent ~d enfant ~d~%"
                               s5-1

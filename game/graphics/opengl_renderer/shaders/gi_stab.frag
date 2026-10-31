@@ -1,21 +1,16 @@
 #version 410 core
-// PC-REMAKE 27/10 — LUMIERE REBONDIE, STABILISATION dans le temps. Le motif d'echantillonnage
-// de gi_rebond.frag est fixe a l'ecran : en tournant la camera, le decor glisse dessous et la
-// lumiere rebondie fourmillait autour des lampes. Chaque image est melangee a la precedente,
-// recalee sur le mouvement de la camera (profondeur) ; un point qui vient d'etre decouvert (sa
-// distance ne correspond pas a celle retenue) repart de l'image actuelle. Alpha = distance a la
-// camera (m) du point retenu.
+// LUMIERE REBONDIE, STABILISATION dans le temps
 
 in vec2 tex_coord;
 out vec4 color;
 
-uniform sampler2D src_tex;           // unite 0 : rebond de cette image (flou)
-uniform sampler2D hist_tex;          // unite 6 : rebond stabilise de l'image precedente
-uniform sampler2D depth_tex;         // unite 15 : profondeur resolue (inversee : 0 = ciel)
-uniform mat4 inv_camera;             // ecran -> monde relatif a la camera (cette image)
-uniform mat4 prev_clip_from_world;   // monde relatif a la camera -> ecran (image precedente)
-uniform vec3 cam_delta;              // camera de cette image - camera precedente
-uniform float stab_w;                // poids de cette image (1 = sans historique)
+uniform sampler2D src_tex;  // unite 0 : rebond de cette image (flou)
+uniform sampler2D hist_tex;  // unite 6 : rebond stabilise de l'image precedente
+uniform sampler2D depth_tex;  // unite 15 : profondeur resolue (inversee : 0 = ciel)
+uniform mat4 inv_camera;  // ecran -> monde relatif a la camera (cette image)
+uniform mat4 prev_clip_from_world;  // monde relatif a la camera -> ecran (image precedente)
+uniform vec3 cam_delta;  // camera de cette image - camera precedente
+uniform float stab_w;  // poids de cette image (1 = sans historique)
 
 void main() {
   vec3 cur = texture(src_tex, tex_coord).rgb;
@@ -48,7 +43,7 @@ void main() {
   }
   vec4 hist = texture(hist_tex, puv);
   float attendu = length(pp) / 4096.0;
-  // meme point ? (sinon : decouvert, ou bord d'objet)
+  // meme point ?
   float meme = 1.0 - smoothstep(0.03, 0.08, abs(hist.a - attendu) / max(attendu, 0.5));
   float w = mix(1.0, stab_w, meme);
   color = vec4(mix(hist.rgb, cur, w), dist);

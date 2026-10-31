@@ -201,10 +201,7 @@
    (memcard-volume-music             float)
    (memcard-volume-dialog            float)
    (memcard-vibration?               symbol)
-   ;; PC-REMAKE 21/09 : réglages du menu Remake (source de vérité : lus/écrits
-   ;; dans pc-settings.gc ici, recopiés chaque image dans *remake-gfx* par `update`).
-   ;; PIÈGE : pckernel.o se charge AVANT time-of-day.o (game.gd) — écrire dans
-   ;; *remake-gfx* pendant la lecture du fichier au boot = SIGBUS (plantage 21/09 17h32).
+   ;; réglages du menu Remake
    (remake-night                     float)
    (remake-lamp-power                float)
    (remake-lamp-range                float)
@@ -355,7 +352,7 @@
                (-> obj height)))))
   (format 0 "[PC Settings]: fullscreen resolution defaulted to ~D x ~D~%" (-> obj width) (-> obj height))
   (set! (-> obj gfx-msaa) PC_DEFAULT_MSAA) ;; default msaa
-  ;; PC-REMAKE 21/09 : défauts du menu Remake (mêmes valeurs que *remake-gfx* dans time-of-day.gc)
+  ;; défauts du menu Remake
   (set! (-> obj remake-night) 100.0)
   (set! (-> obj remake-lamp-power) 200.0)
   (set! (-> obj remake-lamp-range) 260.0)
@@ -365,10 +362,7 @@
   (set! (-> obj remake-godrays) 70.0)
   (set! (-> obj remake-bloom) 55.0)
   (set! (-> obj remake-sun-visible?) #t)
-;; 14/10 (texture du sol du village pas fidele) : le detail
-  ;; des sols (grain procedural + texture re-echantillonnee 4x) invente un motif
-  ;; absent de l'original -> coupe par defaut ; reglable dans le menu Remake.
-  ;; (original 21/09 : 140.0)
+;; (texture du sol du village pas fidele)
   (set! (-> obj remake-detail) 0.0)
   (set! (-> obj remake-grade) 100.0)
   0)
@@ -396,13 +390,13 @@
     (set! (-> obj controller-led-min-brightness) 0.25)
     (set! (-> obj controller-led-max-brightness) 1.0))
   (when (or (= device 'all) (= device 'input))
-    ;; PC-REMAKE : clavier + souris actifs par défaut (réglage par défaut)
+    ;; clavier + souris actifs par défaut (réglage par défaut)
     (set! (-> obj keyboard-enabled?) #t)
     (set! (-> obj pressure-sensitivity-enabled?) #f)
     (set! (-> obj mouse-enabled?) #t)
     (set! (-> obj auto-hide-cursor?) #t))
   (when (or (= device 'all) (= device 'mouse))
-    ;; PC-REMAKE : caméra à la souris par défaut
+    ;; caméra à la souris par défaut
     (set! (-> obj mouse-camera?) #t)
     (set! (-> obj mouse-xsens) -15.0)
     (set! (-> obj mouse-ysens) 10.0)
@@ -419,8 +413,7 @@
   (set! (-> obj ps2-shadow?) #f)
   (set! (-> obj ps2-lod-dist?) #f)
   (set! (-> obj force-envmap?) #t)
-  ;; PC-REMAKE : végétation dense — multiplicateur de distance d'affichage des
-  ;; shrubs, consommé par pc-extend-shrub-dists! (level.gc) à la fin du login.
+  ;; végétation dense
   (set! (-> obj shrub-dist-mod) 2.0)
   (set! (-> obj lod-dist-mod) 1.0)
   (set! (-> obj lod-force-tfrag) 0)

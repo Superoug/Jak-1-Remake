@@ -1,8 +1,7 @@
 #version 410 core
 
 out vec4 color;
-// PC-REMAKE 21/09 : G-buffer de normales (attachement 1) — rgb = normale monde
-// *0.5+0.5, a = 1 quand le fragment en porte une (0 = le post reconstruit)
+// G-buffer de normales (attachement 1)
 layout (location = 1) out vec4 out_normal;
 in vec3 w_nor;
 
@@ -17,14 +16,35 @@ uniform float alpha_max;
 uniform vec4 fog_color;
 
 uniform int gfx_hack_no_tex;
-// metal et verre (pc_reflect_texture_kind) : 0 rien, 0.5 metal, 1 metal poli, 2 verre
+// metal et verre (pc_reflect_texture_kind)
 uniform float reflet_kind;
 
-// PC-REMAKE 13/10 : ombre du soleil (memes reglages que le decor, tfrag3.frag)
+// ombre du soleil (memes reglages que le decor, tfrag3.frag)
 in vec4 sun_light_pos;
 uniform vec3 sun_dir_w;
 uniform sampler2DShadow sun_shadow_tex;
 uniform float sun_shadow_strength;
+// PENOMBRE CONTINUE
+float pc_ombre_douce(vec2 uv, float zref) {
+  vec2 px = 1.0 / vec2(textureSize(sun_shadow_tex, 0));
+  const float R = 2.6;
+  float e = texture(sun_shadow_tex, vec3(uv, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(-R, -R) * px, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(R, -R) * px, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(-R, R) * px, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(R, R) * px, zref));
+  if (e < 0.001 || e > 4.999) {
+    return e / 5.0;
+  }
+  float acc = 0.0;
+  for (int dy = -2; dy <= 2; dy++) {
+    for (int dx = -2; dx <= 2; dx++) {
+      acc += texture(sun_shadow_tex, vec3(uv + vec2(dx, dy) * (1.3 * px), zref));
+    }
+  }
+  return acc / 25.0;
+}
+
 float sun_shadow_factor() {
   if (sun_shadow_strength < 0.001) {
     return 0.0;
@@ -38,13 +58,10 @@ float sun_shadow_factor() {
   float bias = 0.0016 + 0.0060 * slope * slope;
   float acc = 0.0;
   vec2 px = 1.0 / vec2(textureSize(sun_shadow_tex, 0));
-  for (int dy = -1; dy <= 1; dy++) {
-    for (int dx = -1; dx <= 1; dx++) {
-      acc += texture(sun_shadow_tex, vec3(p.xy + vec2(dx, dy) * px * 3.0, p.z - bias));
-    }
-  }
-  vec2 edge = min(p.xy, 1.0 - p.xy);
-  float rim = smoothstep(0.0, 0.08, min(edge.x, edge.y));
+  // penombre continue (pc_ombre_douce)
+  acc = pc_ombre_douce(p.xy, p.z - bias) * 9.0;
+  // fondu en CERCLE sur le dernier quart du rayon
+  float rim = 1.0 - smoothstep(0.72, 0.97, length(p.xy - 0.5) * 2.0);
   return (1.0 - acc / 9.0) * sun_shadow_strength * rim;
 }
 
@@ -61,14 +78,9 @@ void main() {
   if (color.a < alpha_min || color.a > alpha_max) {
     discard;
   }
-  // QA 22/09 : draws a decoupe peints en couleur pleine (tfrag=rouge, tie_wind=bleu,
-  // etie=jaune) — si le decor se voit A TRAVERS cette couleur pleine, le melange
-  // ne vient pas de la couleur du fragment (couverture MSAA ou post)
+  // QA draws a decoupe peints en couleur pleine (tfrag=rouge, tie_wind=bleu, etie=jaune)
 
-  // PC-REMAKE 22/09 : ALPHA AFFUTE pour l'alpha-to-coverage (MSAA). Les alphas
-  // doux des textures (feuillage, herbe) devenaient une COUVERTURE partielle =
-  // feuilles et touffes semi-transparentes laissant voir le decor derriere
-  //. Interieur opaque, transition anti-aliasee sur ~1 px au seuil.
+  // ALPHA AFFUTE pour l'alpha-to-coverage (MSAA)
   if (alpha_min >= 0.45) {
     color.a = clamp((color.a - alpha_min) / max(fwidth(color.a), 0.0001) + 0.5, 0.0, 1.0);
   }
@@ -78,8 +90,7 @@ void main() {
 
   {
     float nl = length(w_nor);
-    // drapeau des reflets du post : 250/255 metal poli, 252/255 metal, 254/255 verre
-    // (original : vec4(w_nor / nl * 0.5 + 0.5, 1.0))
+    // drapeau des reflets du post
     float tag = reflet_kind > 1.5 ? 254.0 / 255.0 : reflet_kind > 0.75 ? 250.0 / 255.0 :
                 reflet_kind > 0.25 ? 252.0 / 255.0 : 1.0;
     out_normal = (nl > 0.05) ? vec4(w_nor / nl * 0.5 + 0.5, tag) : vec4(0.0);

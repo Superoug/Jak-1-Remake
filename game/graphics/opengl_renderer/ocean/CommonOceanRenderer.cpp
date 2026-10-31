@@ -1,5 +1,11 @@
 #include "CommonOceanRenderer.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include "common/util/FileUtil.h"
+
 #include "common/log/log.h"
 
 #include "game/graphics/opengl_renderer/background/background_common.h"
@@ -7,18 +13,15 @@
 constexpr int OCEAN_TEX_TBP_JAK1 = 8160;  // todo
 constexpr int OCEAN_TEX_TBP_JAK2 = 672;
 
-// PC-REMAKE 17/10 : EAU DU JEU DE BASE. La brume sous-marine etait posee par le post sur
-// TOUTE l'eau, surface comprise : un aplat bleu-vert qui effacait les vagues et la couleur
-// des artistes (qui suit l'heure : cyan le jour, bleu profond la nuit). Elle est maintenant
-// calculee au dessin de la surface (mid transparent, bucket shader 3) : seule la part vue A
-// TRAVERS l'eau (le fond) est voilee, selon l'epaisseur d'eau traversee, lue dans une copie
-// de la profondeur de la scene prise juste avant l'eau. La surface garde sa couleur, ses
-// vagues et son reflet d'origine ; les reflets du remake (post) restent par-dessus.
+// EAU DU JEU DE BASE
 u64 g_water_murk_frame = ~0ull;  // image ou l'eau a pose sa brume (le post saute la sienne)
-// PC-REMAKE : cartes du rivage (OpenGLRenderer.cpp) : la surface s'efface au-dessus de la terre
+// cartes du rivage (OpenGLRenderer.cpp)
 extern unsigned int g_rivage_tex[2];
 extern float g_rivage_box[8];
 extern int g_rivage_n;
+// Jak dans l'eau (OpenGLRenderer.cpp / Merc2.cpp)
+extern float g_jak_eau[2];
+extern float g_jak_mouille[4];
 namespace {
 struct WaterDepthCopy {
   GLuint fbo = 0;
@@ -36,7 +39,7 @@ struct WaterDepthCopy {
     h = height;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    // meme format que la profondeur du rendu (sinon la copie echoue sans bruit)
+    // meme format que la profondeur du rendu
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL,
                  GL_UNSIGNED_INT_24_8, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -52,7 +55,7 @@ struct WaterDepthCopy {
 };
 WaterDepthCopy g_water_depth;
 
-// copie la profondeur de la cible de rendu (sans l'eau, qui n'ecrit pas la profondeur)
+// copie la profondeur de la cible de rendu
 bool water_depth_capture(SharedRenderState* render_state) {
   const int w = render_state->render_fb_w, h = render_state->render_fb_h;
   if (!g_world_from_clip_ok || w <= 0 || h <= 0) {
@@ -80,10 +83,241 @@ bool water_depth_capture(SharedRenderState* render_state) {
 }
 }  // namespace
 
+// EAU VIVANTE (eau_vivante.vert)
+float g_eau_temps = 0.f;  // temps de la houle (s), lu par pc_eau_houle (Jak flotte dessus)
+float g_eau_dose[2] = {1.5f, 1.f};  // x = houle, y = ondes de la simulation
+bool g_eau_active = false;  // surface vivante dessinee cette image (post : eclairage)
+namespace {
+constexpr int kEauN = 256;  // sommets par cote de la grille
+constexpr float kEauRayon = 110.f;  // m
+constexpr int kCoulN = 160;  // carte des couleurs : cases
+constexpr float kCoulPas = 1.5f;  // m par case
+struct EauVivante {
+  Shader* prog = nullptr;
+  GLuint vao = 0, vbo = 0, ibo = 0;
+  GLsizei n_idx = 0;
+  GLuint tex_coul = 0;
+  std::vector<u8> coul;
+  std::vector<float> monde;  // x, y, z (m) par sommet de la mer d'origine
+  float coul_box[4] = {0, 0, 0, 0};
+  bool pret = false;
+  // simulation des ondes autour de Jak (eau_sim.frag)
+  Shader* prog_sim = nullptr;
+  GLuint sim_tex[2] = {0, 0}, sim_fbo[2] = {0, 0}, vao_vide = 0;
+  int sim_cur = 0;
+  float sim_x0 = 0.f, sim_z0 = 0.f;
+  bool sim_ok = false, sim_vierge = true;
+  // Jak a l'image precedente
+  float jx = 0.f, jy = 0.f, jz = 0.f, jpieds = 0.f, jetat = 0.f;
+  bool jvalide = false;
+};
+EauVivante g_eau;
+constexpr int kSimN = 512;
+constexpr float kSimCote = 51.2f;  // m (texel de 10 cm)
+
+void eau_init() {
+  if (g_eau.prog) {
+    return;
+  }
+  g_eau.prog = new Shader("eau_vivante", GameVersion::Jak1, "", "ocean_common");
+  std::vector<float> v;
+  v.reserve(kEauN * kEauN * 2);
+  for (int j = 0; j < kEauN; j++) {
+    for (int i = 0; i < kEauN; i++) {
+      v.push_back(-1.f + 2.f * i / (kEauN - 1));
+      v.push_back(-1.f + 2.f * j / (kEauN - 1));
+    }
+  }
+  std::vector<u32> idx;
+  idx.reserve((kEauN - 1) * (kEauN - 1) * 6);
+  for (int j = 0; j < kEauN - 1; j++) {
+    for (int i = 0; i < kEauN - 1; i++) {
+      u32 a = j * kEauN + i, b = a + 1, c = a + kEauN, d = c + 1;
+      idx.insert(idx.end(), {a, c, b, b, c, d});
+    }
+  }
+  g_eau.n_idx = (GLsizei)idx.size();
+  glGenVertexArrays(1, &g_eau.vao);
+  glBindVertexArray(g_eau.vao);
+  glGenBuffers(1, &g_eau.vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, g_eau.vbo);
+  glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+  glGenBuffers(1, &g_eau.ibo);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_eau.ibo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(u32), idx.data(), GL_STATIC_DRAW);
+  glBindVertexArray(0);
+  g_eau.coul.assign(kCoulN * kCoulN * 4, 0);
+  glGenTextures(1, &g_eau.tex_coul);
+  glBindTexture(GL_TEXTURE_2D, g_eau.tex_coul);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kCoulN, kCoulN, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               g_eau.coul.data());
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  // simulation
+  g_eau.prog_sim = new Shader("eau_sim", GameVersion::Jak1);
+  glGenVertexArrays(1, &g_eau.vao_vide);
+  std::vector<float> zero(kSimN * kSimN * 2, 0.f);
+  for (int i = 0; i < 2; i++) {
+    glGenTextures(1, &g_eau.sim_tex[i]);
+    glBindTexture(GL_TEXTURE_2D, g_eau.sim_tex[i]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, kSimN, kSimN, 0, GL_RG, GL_FLOAT, zero.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &g_eau.sim_fbo[i]);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_eau.sim_fbo[i]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_eau.sim_tex[i],
+                           0);
+  }
+  g_eau.sim_ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// un pas de la simulation des ondes (une image)
+void eau_sim_pas(const float* camp, float mer_m, float t) {
+  (void)t;
+  if (!g_eau.sim_ok || !g_eau.prog_sim || !g_eau.prog_sim->okay()) {
+    return;
+  }
+  const float jx = g_grass_push[0] / 4096.f, jy = g_grass_push[1] / 4096.f,
+              jz = g_grass_push[2] / 4096.f;
+  const float etat = g_jak_eau[0];
+  const float surf = etat > 0.5f ? g_jak_eau[1] / 4096.f : mer_m;
+  const float pieds = g_jak_mouille[3] / 4096.f;
+  const bool jak_pres = (jx != 0.f || jz != 0.f) && std::abs(jy - mer_m) < 12.f;
+  const float cx = jak_pres ? jx : camp[0] / 4096.f, cz = jak_pres ? jz : camp[2] / 4096.f;
+  const float pas = kSimCote / kSimN;
+  const float x0 = std::floor((cx - kSimCote * 0.5f) / pas) * pas;
+  const float z0 = std::floor((cz - kSimCote * 0.5f) / pas) * pas;
+  float du = (x0 - g_eau.sim_x0) / kSimCote, dv = (z0 - g_eau.sim_z0) / kSimCote;
+  if (g_eau.sim_vierge || std::abs(du) > 0.4f || std::abs(dv) > 0.4f) {
+    du = dv = 2.f;  // tout est hors de l'ancienne grille : eau calme
+    g_eau.sim_vierge = false;
+  }
+  g_eau.sim_x0 = x0;
+  g_eau.sim_z0 = z0;
+
+  // sources (uv, rayon uv, hauteur ajoutee en m)
+  float src[16];
+  int n = 0;
+  auto ajouter = [&](float x, float z, float rayon, float force) {
+    if (n >= 4) {
+      return;
+    }
+    src[n * 4 + 0] = (x - x0) / kSimCote;
+    src[n * 4 + 1] = (z - z0) / kSimCote;
+    src[n * 4 + 2] = rayon / kSimCote;
+    src[n * 4 + 3] = force;
+    n++;
+  };
+  if (jak_pres) {
+    float vx = 0.f, vz = 0.f, vy = 0.f;
+    if (g_eau.jvalide) {
+      vx = (jx - g_eau.jx) * 60.f;
+      vz = (jz - g_eau.jz) * 60.f;
+      vy = (jy - g_eau.jy) * 60.f;
+    }
+    const float vit = std::min(std::sqrt(vx * vx + vz * vz), 10.f);
+    if (vit > 25.f) {
+      // teleportation
+    } else if (etat > 0.5f) {
+      // il nage (ou patauge)
+      const float k = etat > 1.5f ? 1.f : 0.5f;
+      const float avance = std::min(vit, 6.f);
+      ajouter(jx, jz, 0.75f, -(0.0022f * avance) * k);
+      ajouter(jx, jz, 0.6f, -std::clamp(vy, -3.f, 3.f) * 0.0018f * k);
+      // entree dans l'eau (chute, plongeon)
+      const bool entre = g_eau.jvalide && (g_eau.jetat < 0.5f ||
+                                           (g_eau.jpieds > surf + 0.25f && pieds <= surf + 0.25f));
+      if (entre) {
+        const float f = std::clamp(0.06f + 0.022f * std::max(-vy, 0.f), 0.06f, 0.3f);
+        ajouter(jx, jz, 0.9f, -f);
+        ajouter(jx, jz, 2.2f, f * 0.25f);
+      }
+    } else if (g_eau.jvalide && g_eau.jetat > 0.5f) {
+      // il sort de l'eau (saut)
+      ajouter(jx, jz, 0.6f, 0.04f);
+    }
+  }
+  g_eau.jx = jx;
+  g_eau.jy = jy;
+  g_eau.jz = jz;
+  g_eau.jpieds = pieds;
+  g_eau.jetat = etat;
+  g_eau.jvalide = jak_pres;
+
+  GLint prev_fbo = 0, prev_prog = 0, prev_vao = 0, prev_unit = 0, prev_tex = 0;
+  GLint vp[4];
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+  glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_unit);
+  glGetIntegerv(GL_VIEWPORT, vp);
+  const GLboolean blend = glIsEnabled(GL_BLEND);
+  const GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+  const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+  const int nxt = g_eau.sim_cur ^ 1;
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_eau.sim_fbo[nxt]);
+  glViewport(0, 0, kSimN, kSimN);
+  glDisable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_SCISSOR_TEST);
+  g_eau.prog_sim->activate();
+  const GLuint id = g_eau.prog_sim->id();
+  glActiveTexture(GL_TEXTURE25);
+  glBindTexture(GL_TEXTURE_2D, g_eau.sim_tex[g_eau.sim_cur]);
+  glUniform1i(pc_uniform_loc(id, "sim_prec"), 25);
+  glUniform4f(pc_uniform_loc(id, "sim_decal"), du, dv, 0.f, 0.f);
+  glUniform4f(pc_uniform_loc(id, "sim_box"), x0, z0, kSimCote, 1.f / kSimN);
+  // c^2 = 0,14 (texels)
+  glUniform4f(pc_uniform_loc(id, "sim_param"), 0.14f, 0.993f, 1.f / 60.f, 0.12f);
+  glUniform4fv(pc_uniform_loc(id, "sim_src"), 4, src);
+  glUniform1i(pc_uniform_loc(id, "sim_n"), n);
+  glUniform1i(pc_uniform_loc(id, "riv_tex0"), 20);
+  glUniform1i(pc_uniform_loc(id, "riv_tex1"), 21);
+  glUniform4fv(pc_uniform_loc(id, "riv_box"), 2, g_rivage_box);
+  glUniform1i(pc_uniform_loc(id, "riv_n"), g_rivage_n);
+  glBindVertexArray(g_eau.vao_vide);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  g_eau.sim_cur = nxt;
+  glBindVertexArray(prev_vao);
+  glUseProgram(prev_prog);
+  glActiveTexture(prev_unit);
+  glViewport(vp[0], vp[1], vp[2], vp[3]);
+  if (blend) glEnable(GL_BLEND);
+  if (depth) glEnable(GL_DEPTH_TEST);
+  if (scissor) glEnable(GL_SCISSOR_TEST);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_fbo);
+  (void)prev_tex;
+}
+}  // namespace
+
+// hauteur de la houle (m) au point (x, z en m), sans les ondes
+float pc_eau_houle(float x, float z) {
+  if (!g_eau.pret) {
+    return 0.f;
+  }
+  static const float L[6] = {8.5f, 13.f, 19.f, 28.f, 41.f, 63.f};
+  static const float DIR[6] = {0.95f, 0.35f, 0.70f, 0.15f, 0.55f, 0.42f};
+  static const float AMP[6] = {0.035f, 0.05f, 0.07f, 0.09f, 0.11f, 0.13f};
+  static const float PHI[6] = {0.f, 1.7f, 4.1f, 2.6f, 5.3f, 3.4f};
+  float h = 0.f;
+  for (int i = 0; i < 6; i++) {
+    const float k = 6.2831853f / L[i];
+    const float w = std::sqrt(9.81f * k);
+    const float ph = k * (std::cos(DIR[i]) * x + std::sin(DIR[i]) * z) - w * g_eau_temps + PHI[i];
+    h += AMP[i] * std::sin(ph);
+  }
+  return h * g_eau_dose[0];
+}
+
 CommonOceanRenderer::CommonOceanRenderer() {
-  // PC-REMAKE : rayon du proche étendu de 34 m à ~220 m (le trou de transition
-  // complet) — l'ancien 4096*10 débordait dès le village (ASSERT add more
-  // vertices). ×16 : ~10 Mo, sans enjeu.
+  // rayon du proche étendu de 34 m à ~220 m (le trou de transition complet)
   m_vertices.resize(4096 * 160);
   for (auto& buf : m_indices) {
     buf.resize(4096 * 160);
@@ -161,7 +395,7 @@ void CommonOceanRenderer::init_for_near() {
 }
 
 void CommonOceanRenderer::kick_from_near(const u8* data) {
-  // PC-REMAKE QA : chaque xgkick du programme VU proche passe ici
+  // QA : chaque xgkick du programme VU proche passe ici
   {
     static int qa_kicks = 0;
     if ((qa_kicks++ % 2000) == 0) {
@@ -363,8 +597,7 @@ void CommonOceanRenderer::handle_near_adgif(const u8* data, u32 offset, u32 coun
 }
 
 void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProfilerNode& prof) {
-  // diagnostic de la zone plate autour du joueur : le rendu
-  // PROCHE tourne-t-il seulement ? — max de sommets vu sur l'intervalle
+  // diagnostic de la zone plate autour du joueur
   {
     static int qa_near = 0;
     static u32 qa_max_verts = 0;
@@ -384,7 +617,7 @@ void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProf
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "fog_color"),
               render_state->fog_color[0] / 255.f, render_state->fog_color[1] / 255.f,
               render_state->fog_color[2] / 255.f, render_state->fog_intensity / 255);
-  // PC-REMAKE "Spyro water": animated sea (time + strength)
+  // "Spyro water": animated sea (time + strength)
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "water_fx"),
               (float)(render_state->frame_idx % 100000) / 60.f, 1.f, 0.f, 0.f);
 
@@ -412,8 +645,7 @@ void CommonOceanRenderer::flush_near(SharedRenderState* render_state, ScopedProf
             glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "tex_T0"), 0);
         glUniform1i(
             glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"), 0);
-        // PC-REMAKE : même filtrage que le large (le proche couvre ~220 m
-        // maintenant) — GL_LINEAR seul aplatissait la texture au loin
+        // même filtrage que le large (le proche couvre ~220 m maintenant)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       }
@@ -458,18 +690,10 @@ void CommonOceanRenderer::capture_mid_textures(SharedRenderState* render_state) 
   m_mid_envmap_tex = render_state->texture_pool->lookup(m_envmap_tex);
 }
 
-// PC-REMAKE EAU TRANSPARENTE (25/08) : le mid dessiné APRÈS Jak, en vraie
-// transparence. Trois passes sur les mêmes sommets :
-//   A. surface (bucket shader 3) : blend alpha classique, RGB seulement —
-//      l'alpha du shader est une VRAIE transparence (rampe rivage × distance) ;
-//   B. dépôt d'alpha (bucket shader 5) : écrit UNIQUEMENT l'alpha destination
-//      avec la formule d'origine PS2 (motif alphamod) pour doser le reflet —
-//      le même rôle que la passe alpha du near des artistes ;
-//   C. reflet envmap additif (bucket shader 4) : inchangé (DST_ALPHA, ONE).
-// Jamais d'écriture de profondeur ; GEQUAL comme le near — un rocher devant
-// masque l'eau, Jak immergé reçoit le voile.
+// EAU TRANSPARENTE
 void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
                                                 ScopedProfilerNode& prof) {
+  float eau_deep[3] = {0.30f, 0.62f, 0.66f};  // couleur de la pleine mer (eau vivante)
   glBindVertexArray(m_ogl.vao);
   glBindBuffer(GL_ARRAY_BUFFER, m_ogl.vertex_buffer);
   glEnable(GL_PRIMITIVE_RESTART);
@@ -482,7 +706,7 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
               render_state->fog_color[2] / 255.f, render_state->fog_intensity / 255);
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "water_fx"),
               (float)(render_state->frame_idx % 100000) / 60.f, 1.f, 0.f, 0.f);
-  // 17/10 : brume de l'eau posee par la surface (voir g_water_murk_frame)
+  // brume de l'eau posee par la surface (voir g_water_murk_frame)
   {
     const auto id = render_state->shaders[ShaderId::OCEAN_COMMON].id();
     const bool murk = water_depth_capture(render_state);
@@ -496,11 +720,10 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
                   render_state->camera_pos[1], render_state->camera_pos[2], 0.f);
       g_water_murk_frame = render_state->frame_idx;
     }
-    // y = densite de la brume par metre d'eau traverse. 17/10 : 0.5 -> 0.2 — les rochers
-    // sous 1 a 3 m d'eau n'etaient plus qu'un aplat cyan sans texture
+    // y = densite de la brume par metre d'eau traverse
     glUniform4f(pc_uniform_loc(id, "water_murk"), murk ? 1.f : 0.f, 0.2f,
                 (float)render_state->render_fb_w, (float)render_state->render_fb_h);
-    // PC-REMAKE : cartes du rivage -> unites 20 et 21
+    // cartes du rivage -> unites 20 et 21
     for (int i = 0; i < 2; i++) {
       glActiveTexture(GL_TEXTURE20 + i);
       glBindTexture(GL_TEXTURE_2D, i < g_rivage_n ? g_rivage_tex[i] : 0);
@@ -510,10 +733,7 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
     glUniform1i(pc_uniform_loc(id, "riv_tex1"), 21);
     glUniform4fv(pc_uniform_loc(id, "riv_box"), 2, g_rivage_box);
     glUniform1i(pc_uniform_loc(id, "riv_n"), murk ? g_rivage_n : 0);
-    // Couleur de la PLEINE MER des artistes (sommets du large, alpha plein) : pres des
-    // cotes le large est transparent (alpha 0, couleur noire — le near prenait le relais
-    // sur PS2) ; l'eau profonde y prend cette couleur au lieu du noir local. Moyenne des
-    // sommets de la surface de cette image, a l'echelle de fragment_color (bucket 3 : x2).
+    // Couleur de la PLEINE MER des artistes (sommets du large, alpha plein)
     {
       static float deep[3] = {0.30f, 0.62f, 0.66f};
       double acc[3] = {0, 0, 0};
@@ -539,22 +759,186 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
         }
       }
       glUniform4f(pc_uniform_loc(id, "water_deep"), deep[0], deep[1], deep[2], 0.f);
+      for (int c = 0; c < 3; c++) {
+        eau_deep[c] = deep[c];
+      }
     }
   }
+
+  // EAU VIVANTE (voir g_eau)
+  bool vive = false;
+  const float* camp = render_state->camera_pos.data();
+  const float mer_m = g_water_glitter[0] / 4096.f;
+  {
+    // meme horloge que le post
+    g_eau_temps = (float)(render_state->frame_idx % 216000) / 60.f;
+    const float cam_y = camp[1] / 4096.f;
+    vive = g_world_from_clip_ok &&
+           g_water_murk_frame == render_state->frame_idx && g_rivage_n > 0 &&
+           (g_water_glitter[1] > 0.001f || g_water_glitter[2] > 0.001f) && cam_y > mer_m + 0.15f &&
+           cam_y < mer_m + 80.f;
+    if (vive) {
+      eau_init();
+      vive = g_eau.prog->okay();
+    }
+    g_eau.pret = vive;
+    g_eau_active = vive;
+  }
+  if (vive) {
+    const float cx = camp[0] / 4096.f, cz = camp[2] / 4096.f;
+    const float x0 = std::floor(cx / kCoulPas) * kCoulPas - kCoulN * kCoulPas * 0.5f;
+    const float z0 = std::floor(cz / kCoulPas) * kCoulPas - kCoulN * kCoulPas * 0.5f;
+    g_eau.coul_box[0] = x0;
+    g_eau.coul_box[1] = z0;
+    g_eau.coul_box[2] = 1.f / (kCoulN * kCoulPas);
+    g_eau.coul_box[3] = 1.f / (kCoulN * kCoulPas);
+    // positions monde des sommets (m)
+    g_eau.monde.resize(m_next_free_vertex * 3);
+    const float* Mi = g_world_from_clip;
+    for (u32 vi = 0; vi < m_next_free_vertex; vi++) {
+      const auto& v = m_vertices[vi];
+      const float nx = (v.xyz[0] - 0.5f) * 16.f;
+      const float ny = -(v.xyz[1] - 0.5f) * 32.f * (512.f / 448.f);
+      const float nz = v.xyz[2] * 2.f - 1.f;
+      float w4[4];
+      for (int r = 0; r < 4; r++) {
+        w4[r] = Mi[r] * nx + Mi[4 + r] * ny + Mi[8 + r] * nz + Mi[12 + r];
+      }
+      float* o = &g_eau.monde[vi * 3];
+      if (std::abs(w4[3]) < 1e-12f) {
+        o[0] = o[1] = o[2] = std::numeric_limits<float>::quiet_NaN();
+        continue;
+      }
+      o[0] = (w4[0] / w4[3] + camp[0]) / 4096.f;
+      o[1] = (w4[1] / w4[3] + camp[1]) / 4096.f;
+      o[2] = (w4[2] / w4[3] + camp[2]) / 4096.f;
+      if (std::abs(o[1] - mer_m) > 1.5f) {
+        o[0] = std::numeric_limits<float>::quiet_NaN();
+      }
+    }
+    // fond : la pleine mer (couleur moyenne), alpha plein
+    for (int i = 0; i < kCoulN * kCoulN; i++) {
+      u8* c = &g_eau.coul[i * 4];
+      for (int k = 0; k < 3; k++) {
+        c[k] = (u8)std::clamp(eau_deep[k] * 255.f / 2.f, 0.f, 255.f);
+      }
+      c[3] = 128;
+    }
+    // triangles des bandes de la surface (seau 0)
+    const u32 count = m_next_free_index[0];
+    for (u32 k = 0; k + 2 < count; k++) {
+      const u32 ia = m_indices[0][k], ib = m_indices[0][k + 1], ic = m_indices[0][k + 2];
+      if (ia == UINT32_MAX || ib == UINT32_MAX || ic == UINT32_MAX || ia >= m_next_free_vertex ||
+          ib >= m_next_free_vertex || ic >= m_next_free_vertex) {
+        continue;
+      }
+      const float* pa = &g_eau.monde[ia * 3];
+      const float* pb = &g_eau.monde[ib * 3];
+      const float* pc = &g_eau.monde[ic * 3];
+      if (std::isnan(pa[0]) || std::isnan(pb[0]) || std::isnan(pc[0])) {
+        continue;
+      }
+      // en cases de la carte
+      const float ax = (pa[0] - x0) / kCoulPas, az = (pa[2] - z0) / kCoulPas;
+      const float bx = (pb[0] - x0) / kCoulPas, bz = (pb[2] - z0) / kCoulPas;
+      const float cxx = (pc[0] - x0) / kCoulPas, czz = (pc[2] - z0) / kCoulPas;
+      const float det = (bx - ax) * (czz - az) - (cxx - ax) * (bz - az);
+      if (std::abs(det) < 1e-6f) {
+        continue;
+      }
+      const int i0 = std::max(0, (int)std::floor(std::min({ax, bx, cxx})));
+      const int i1 = std::min(kCoulN - 1, (int)std::ceil(std::max({ax, bx, cxx})));
+      const int j0 = std::max(0, (int)std::floor(std::min({az, bz, czz})));
+      const int j1 = std::min(kCoulN - 1, (int)std::ceil(std::max({az, bz, czz})));
+      if (i0 > i1 || j0 > j1) {
+        continue;
+      }
+      const auto& va = m_vertices[ia];
+      const auto& vb = m_vertices[ib];
+      const auto& vc = m_vertices[ic];
+      for (int j = j0; j <= j1; j++) {
+        for (int i = i0; i <= i1; i++) {
+          const float px = i + 0.5f, pz = j + 0.5f;
+          const float u = ((px - ax) * (czz - az) - (cxx - ax) * (pz - az)) / det;
+          const float w = ((bx - ax) * (pz - az) - (px - ax) * (bz - az)) / det;
+          if (u < -0.02f || w < -0.02f || u + w > 1.02f) {
+            continue;
+          }
+          u8* c = &g_eau.coul[(j * kCoulN + i) * 4];
+          for (int q = 0; q < 4; q++) {
+            const float val = va.rgba[q] * (1.f - u - w) + vb.rgba[q] * u + vc.rgba[q] * w;
+            c[q] = (u8)std::clamp(val + 0.5f, 0.f, 255.f);
+          }
+        }
+      }
+    }
+    glBindTexture(GL_TEXTURE_2D, g_eau.tex_coul);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kCoulN, kCoulN, GL_RGBA, GL_UNSIGNED_BYTE,
+                    g_eau.coul.data());
+    // les cartes du rivage sont liees aux unites 20 et 21 plus haut
+    eau_sim_pas(camp, mer_m, g_eau_temps);
+  }
+  glUniform4f(pc_uniform_loc(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "eau_vivante"),
+              vive ? 1.f : 0.f, kEauRayon * 0.92f, kEauRayon * 0.25f, 0.f);
+  // dessin de la surface vivante (memes uniformes que la mer d'origine), puis retour a celle-ci
+  auto dessiner_eau = [&](int seau) {
+    const GLuint id = g_eau.prog->id();
+    g_eau.prog->activate();
+    glUniform4f(pc_uniform_loc(id, "fog_color"), render_state->fog_color[0] / 255.f,
+                render_state->fog_color[1] / 255.f, render_state->fog_color[2] / 255.f,
+                render_state->fog_intensity / 255);
+    glUniform4f(pc_uniform_loc(id, "water_fx"), (float)(render_state->frame_idx % 100000) / 60.f,
+                1.f, 0.f, 0.f);
+    glUniform1i(pc_uniform_loc(id, "water_depth"), 19);
+    glUniformMatrix4fv(pc_uniform_loc(id, "water_inv_camera"), 1, GL_FALSE, g_world_from_clip);
+    glUniform4f(pc_uniform_loc(id, "water_cam"), camp[0], camp[1], camp[2], 0.f);
+    glUniform4f(pc_uniform_loc(id, "water_murk"), 1.f, 0.2f, (float)render_state->render_fb_w,
+                (float)render_state->render_fb_h);
+    glUniform1i(pc_uniform_loc(id, "riv_tex0"), 20);
+    glUniform1i(pc_uniform_loc(id, "riv_tex1"), 21);
+    glUniform4fv(pc_uniform_loc(id, "riv_box"), 2, g_rivage_box);
+    glUniform1i(pc_uniform_loc(id, "riv_n"), g_rivage_n);
+    glUniform4f(pc_uniform_loc(id, "water_deep"), eau_deep[0], eau_deep[1], eau_deep[2], 0.f);
+    glUniform1i(pc_uniform_loc(id, "tex_T0"), 0);
+    glUniform1i(pc_uniform_loc(id, "bucket"), seau);
+    glUniform4f(pc_uniform_loc(id, "eau_vivante"), 2.f, kEauRayon * 0.92f, kEauRayon * 0.25f, 0.f);
+    glUniformMatrix4fv(pc_uniform_loc(id, "clip_from_world"), 1, GL_FALSE, g_clip_from_world);
+    glUniform4f(pc_uniform_loc(id, "eau_grille"), camp[0] / 4096.f, mer_m, camp[2] / 4096.f,
+                kEauRayon);
+    // w = vagues de rivage en relief
+    glUniform4f(pc_uniform_loc(id, "eau_houle"), g_eau_temps, g_eau_dose[0], g_eau_dose[1], 0.f);
+    glActiveTexture(GL_TEXTURE23);
+    glBindTexture(GL_TEXTURE_2D, g_eau.tex_coul);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(pc_uniform_loc(id, "eau_couleurs"), 23);
+    glUniform4fv(pc_uniform_loc(id, "eau_couleurs_box"), 1, g_eau.coul_box);
+    glActiveTexture(GL_TEXTURE24);
+    glBindTexture(GL_TEXTURE_2D, g_eau.sim_tex[g_eau.sim_cur]);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(pc_uniform_loc(id, "eau_sim"), 24);
+    glUniform4f(pc_uniform_loc(id, "eau_sim_box"), g_eau.sim_x0, g_eau.sim_z0, 1.f / kSimCote,
+                g_eau.sim_ok ? 1.f : 0.f);
+    glBindVertexArray(g_eau.vao);
+    glDrawElements(GL_TRIANGLES, g_eau.n_idx, GL_UNSIGNED_INT, nullptr);
+    prof.add_draw_call();
+    prof.add_tri(g_eau.n_idx / 3);
+    render_state->shaders[ShaderId::OCEAN_COMMON].activate();
+    glBindVertexArray(m_ogl.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_ogl.vertex_buffer);
+  };
 
   glDepthMask(GL_FALSE);
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_GEQUAL);
   glEnable(GL_BLEND);
 
-  // même astuce que flush_mid : envmap en ordre inverse + alpha destination 0
+  // même astuce que flush_mid
   reverse_indices(m_indices[1].data(), m_next_free_index[1]);
 
-  // ---- passe A : surface transparente (RGB), alpha du framebuffer préservé
+  // --- passe A
   {
     auto tbp = render_state->version == GameVersion::Jak1 ? OCEAN_TEX_TBP_JAK1 : OCEAN_TEX_TBP_JAK2;
-    // 17/10 : la texture retenue au bucket du large (voir capture_mid_textures)
-    // (original : auto tex = render_state->texture_pool->lookup(tbp);)
+    // la texture retenue au bucket du large (voir capture_mid_textures)
     auto tex = m_mid_ocean_tex ? m_mid_ocean_tex : render_state->texture_pool->lookup(tbp);
     if (!tex) {
       tex = render_state->texture_pool->get_placeholder_texture();
@@ -569,9 +953,7 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
                 0);
     glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"),
                 3);
-    // 17/10 : avec la brume de l'eau, melange a DEUX SOURCES : final = couleur + fond *
-    // transmission (ocean_common.frag, color_t) — l'eau filtre le fond au lieu de le
-    // recouvrir. Sans brume : blend alpha d'origine.
+    // avec la brume de l'eau, melange a DEUX SOURCES
     if (g_water_murk_frame == render_state->frame_idx) {
       glBlendFuncSeparate(GL_ONE, GL_SRC1_COLOR, GL_ONE, GL_ZERO);
     } else {
@@ -585,8 +967,14 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
     glDrawElements(GL_TRIANGLE_STRIP, m_next_free_index[0], GL_UNSIGNED_INT, nullptr);
     prof.add_draw_call();
     prof.add_tri(m_next_free_index[0]);
+    // la surface vivante, meme melange
+    if (vive) {
+      dessiner_eau(3);
+      glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"),
+                  3);
+    }
 
-    // ---- passe B : dépôt d'alpha (dose du reflet), mêmes sommets
+    // --- passe B
     glUniform1i(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "bucket"),
                 5);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
@@ -594,14 +982,16 @@ void CommonOceanRenderer::flush_mid_transparent(SharedRenderState* render_state,
     glDrawElements(GL_TRIANGLE_STRIP, m_next_free_index[0], GL_UNSIGNED_INT, nullptr);
     prof.add_draw_call();
     prof.add_tri(m_next_free_index[0]);
+    if (vive) {
+      dessiner_eau(5);
+    }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glEnable(GL_BLEND);
   }
 
-  // ---- passe C : reflet envmap additif, identique à flush_mid
+  // --- passe C
   {
-    // 17/10 : idem, retenue au bucket du large
-    // (original : auto tex = render_state->texture_pool->lookup(m_envmap_tex);)
+    // idem, retenue au bucket du large
     auto tex = m_mid_envmap_tex ? m_mid_envmap_tex : render_state->texture_pool->lookup(m_envmap_tex);
     if (!tex) {
       tex = render_state->texture_pool->get_placeholder_texture();
@@ -745,7 +1135,7 @@ void CommonOceanRenderer::flush_mid(SharedRenderState* render_state, ScopedProfi
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "fog_color"),
               render_state->fog_color[0] / 255.f, render_state->fog_color[1] / 255.f,
               render_state->fog_color[2] / 255.f, render_state->fog_intensity / 255);
-  // PC-REMAKE "Spyro water": animated sea (time + strength)
+  // "Spyro water": animated sea (time + strength)
   glUniform4f(glGetUniformLocation(render_state->shaders[ShaderId::OCEAN_COMMON].id(), "water_fx"),
               (float)(render_state->frame_idx % 100000) / 60.f, 1.f, 0.f, 0.f);
 

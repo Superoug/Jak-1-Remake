@@ -1,21 +1,16 @@
 #version 410 core
 
 out vec4 color;
-// PC-REMAKE 13/10 : G-BUFFER. Les arbustes (herbe, touffes, feuillages) n'ecrivaient
-// PAS la normale : le post relumait chaque brin avec la normale et les drapeaux du
-// decor situe DERRIERE (toit, rocher, parfois une surface emissive) — le toit se
-// voyait a travers la feuille du palmier, et les herbes au sol aussi.
-// Herbe et feuillage n'ont pas de normale utile : la verticale, eclaires comme le
-// sol qui les porte (alpha 1.0 = normale vraie, jamais emissive).
+// G-BUFFER. Les arbustes (herbe, touffes, feuillages) n'ecrivaient PAS la normale
 layout (location = 1) out vec4 out_normal;
-in vec3 v_rel;               // position relative a la camera
-uniform float shrub_facet;   // 1 = objet rigide : vraie facette ; 0 = verticale
+in vec3 v_rel;  // position relative a la camera
+uniform float shrub_facet;  // 1 = objet rigide : vraie facette ; 0 = verticale
 
 in vec4 fragment_color;
 in vec3 tex_coord;
 in float fogginess;
 uniform sampler2D tex_T0;
-uniform float herbe_vert;  // PC-REMAKE : etalonnage du vert de l'herbe (comme le sol, tfrag3.frag)
+uniform float herbe_vert;  // etalonnage du vert de l'herbe (comme le sol, tfrag3.frag)
 
 uniform float alpha_min;
 uniform float force_opaque;
@@ -24,7 +19,7 @@ uniform vec4 fog_color;
 
 uniform int gfx_hack_no_tex;
 
-// PC-REMAKE sun shadows
+// sun shadows
 in vec4 sun_light_pos;
 uniform sampler2DShadow sun_shadow_tex;
 uniform float sun_shadow_strength;
@@ -45,7 +40,9 @@ float sun_shadow_factor() {
       acc += texture(sun_shadow_tex, vec3(p.xy + vec2(dx, dy) * px, p.z - bias));
     }
   }
-  return (1.0 - acc / 9.0) * sun_shadow_strength;
+  // fondu vers la limite de la carte, comme le sol
+  float rim = 1.0 - smoothstep(0.72, 0.97, length(p.xy - 0.5) * 2.0);
+  return (1.0 - acc / 9.0) * sun_shadow_strength * rim;
 }
 
 void main() {
@@ -56,7 +53,7 @@ void main() {
     vec4 T0 = texture(tex_T0, tex_coord.xy);
     color = fragment_color * T0;
     if (herbe_vert > 0.5) {
-      vec3 c = color.rgb * vec3(0.69, 0.81, 0.72);  // (v1 : 0.80, 0.94, 0.84)
+      vec3 c = color.rgb * vec3(0.69, 0.81, 0.72);  // 0.80, 0.94, 0.84
       float l = dot(c, vec3(0.299, 0.587, 0.114));
       color.rgb = mix(vec3(l), c, 1.08);
     }
@@ -74,24 +71,21 @@ void main() {
       float fl = length(fn);
       if (fl > 1e-8) {
         n = fn / fl;
-        // double face : la normale regarde toujours la camera
+        // double face
         if (dot(n, -v_rel) < 0.0) {
           n = -n;
         }
       }
     }
-    // 17/10 : alpha 0.95 = feuillage (voir tie_wind.frag) ; bois/rochers gardent 1.0
+    // alpha 0.95 = feuillage (voir tie_wind.frag)
     out_normal = vec4(n * 0.5 + 0.5, (shrub_facet > 0.5) ? 1.0 : 0.95);
   }
-  // PC-REMAKE 22/09 : ALPHA AFFUTE pour l'alpha-to-coverage (MSAA). Les alphas
-  // doux des textures (feuillage, herbe) devenaient une COUVERTURE partielle =
-  // feuilles et touffes semi-transparentes laissant voir le decor derriere
-  //. Interieur opaque, transition anti-aliasee sur ~1 px au seuil.
+  // ALPHA AFFUTE pour l'alpha-to-coverage (MSAA)
   if (alpha_min >= 0.45) {
     color.a = clamp((color.a - alpha_min) / max(fwidth(color.a), 0.0001) + 0.5, 0.0, 1.0);
   }
 
-  // PC-REMAKE sun shadows
+  // sun shadows
   color.xyz *= 1.0 - sun_shadow_factor();
 
   color.xyz = mix(color.xyz, fog_color.rgb, clamp(fogginess * fog_color.a, 0, 1));

@@ -1,5 +1,11 @@
 #include "Sprite3.h"
 
+#include <algorithm>
+#include <set>
+#include <unordered_map>
+
+#include "common/util/FileUtil.h"
+
 #include "common/log/log.h"
 
 #include "game/graphics/opengl_renderer/background/background_common.h"
@@ -8,7 +14,7 @@
 #include "fmt/format.h"
 #include "third-party/imgui/imgui.h"
 
-void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
+void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA]
 
 namespace {
 
@@ -232,12 +238,17 @@ void Sprite3::render_2d_group0(DmaFollower& dma,
   glUniform1f(pc_uniform_loc(shid, "max_scale"), m_frame_data.max_scale);
   glUniform1f(pc_uniform_loc(shid, "fog_min"), m_frame_data.fog_min);
   glUniform1f(pc_uniform_loc(shid, "fog_max"), m_frame_data.fog_max);
-  // glUniform1f(pc_uniform_loc(shid, "bonus"), m_frame_data.bonus);
-  // glUniform4fv(pc_uniform_loc(shid, "hmge_scale"), 1, m_frame_data.hmge_scale.data());
   glUniform1f(pc_uniform_loc(shid, "deg_to_rad"), m_frame_data.deg_to_rad);
   glUniform1f(pc_uniform_loc(shid, "inv_area"), m_frame_data.inv_area);
   glUniformMatrix4fv(pc_uniform_loc(shid, "camera"), 1, GL_FALSE,
                      m_3d_matrix_data.camera.data());
+  // niveau de la mer pour cacher les particules passees dessous (sprite3_3d.frag)
+  {
+    const bool mer = g_water_glitter[1] > 0.001f || g_water_glitter[2] > 0.001f;
+    const bool dessus = render_state->camera_pos[1] > g_water_glitter[0];
+    glUniform4f(pc_uniform_loc(shid, "pc_mer"), g_water_glitter[0], (mer && dessus) ? 1.f : 0.f,
+                0.f, 0.f);
+  }
   glUniform4fv(pc_uniform_loc(shid, "xy_array"), 8, m_frame_data.xy_array[0].data());
   glUniform4fv(pc_uniform_loc(shid, "xyz_array"), 4, m_frame_data.xyz_array[0].data());
   glUniform4fv(pc_uniform_loc(shid, "st_array"), 4, m_frame_data.st_array[0].data());
@@ -484,8 +495,9 @@ void Sprite3::render_jak2(DmaFollower& dma,
   }
 }
 
-// PC-REMAKE 12/10 : defini dans OpenGLRenderer.cpp
+// defini dans OpenGLRenderer.cpp
 void pc_bloom_snapshot(GLuint src_fbo, int w, int h);
+void pc_restaure_alpha(GLuint fbo, int w, int h);
 
 void Sprite3::render_jak1(DmaFollower& dma,
                           SharedRenderState* render_state,
@@ -520,6 +532,19 @@ void Sprite3::render_jak1(DmaFollower& dma,
     render_distorter(dma, render_state, child);
   }
 
+  // masque d'eau des particules (voir flush_sprites)
+  {
+    const GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    const GLfloat zero[4] = {0.f, 0.f, 0.f, 0.f};
+    glClearBufferfv(GL_COLOR, 0, zero);
+    glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    if (sc) {
+      glEnable(GL_SCISSOR_TEST);
+    }
+  }
+
   // next, sprite frame setup.
   handle_sprite_frame_setup(dma, render_state->version, render_state, prof);
 
@@ -537,10 +562,12 @@ void Sprite3::render_jak1(DmaFollower& dma,
   // shadow draw
   render_fake_shadow(dma);
 
-  // PC-REMAKE 12/10 : source du BLOOM LARGE — la scene avec ses particules (lueurs,
-  // spirales, etincelles), juste AVANT les sprites du HUD (rien de l'interface ne
-  // rayonne). Voir pc_bloom_run (OpenGLRenderer.cpp).
+  // source du BLOOM LARGE
   pc_bloom_snapshot(render_state->render_fb, render_state->render_fb_w,
+                    render_state->render_fb_h);
+
+  // le masque d'eau des particules (canal alpha) est lu dans la copie qui precede
+  pc_restaure_alpha(render_state->render_fb, render_state->render_fb_w,
                     render_state->render_fb_h);
 
   // 2d draw (HUD)
@@ -590,6 +617,48 @@ void Sprite3::draw_debug_window() {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Render (for real)
 
+namespace {
+// particule d'eau d'apres le nom de sa texture
+bool anneau_d_eau(SharedRenderState* render_state, u32 tbp) {
+  static std::unordered_map<u32, bool> memo;
+  auto* gt = render_state->texture_pool->lookup_gpu_texture(tbp);
+  if (!gt) {
+    return false;
+  }
+  u32 id = ((u32)gt->tex_id.page << 16) | gt->tex_id.tex;
+  auto it = memo.find(id);
+  if (it != memo.end()) {
+    return it->second;
+  }
+  std::string nom = render_state->texture_pool->get_debug_texture_name(gt->tex_id);
+  bool r = nom.find("water-ring") != std::string::npos;
+  memo[id] = r;
+  return r;
+}
+bool particule_d_eau(SharedRenderState* render_state, u32 tbp) {
+  static std::unordered_map<u32, bool> memo;
+  auto* gt = render_state->texture_pool->lookup_gpu_texture(tbp);
+  if (!gt) {
+    return false;
+  }
+  u32 id = ((u32)gt->tex_id.page << 16) | gt->tex_id.tex;
+  auto it = memo.find(id);
+  if (it != memo.end()) {
+    return it->second;
+  }
+  std::string nom = render_state->texture_pool->get_debug_texture_name(gt->tex_id);
+  std::transform(nom.begin(), nom.end(), nom.begin(), ::tolower);
+  bool eau = false;
+  // + fumees et vapeurs (bigpuff, smoke, steam...)
+  for (const char* k : {"falls", "water", "splash", "drop", "rain", "spray", "bubble", "mist",
+                        "puff", "smoke", "steam", "dust", "cloud"}) {
+    eau |= nom.find(k) != std::string::npos;
+  }
+  memo[id] = eau;
+  return eau;
+}
+}  // namespace
+
 void Sprite3::flush_sprites(SharedRenderState* render_state,
                             ScopedProfilerNode& prof,
                             bool double_draw) {
@@ -631,15 +700,20 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
     }
     ASSERT(tex);
 
+    // eau vivante (CommonOceanRenderer.cpp)
+    {
+      extern bool g_eau_active;
+      if (!double_draw && g_eau_active && anneau_d_eau(render_state, tbp)) {
+        continue;
+      }
+    }
+
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, *tex);
 
     auto settings = setup_opengl_from_draw_mode(mode, GL_TEXTURE0, false);
 
-    // PC-REMAKE (18/08) : régulateur des particules ADDITIVES — les fontaines
-    // d'éco / lueurs vanilla saturent en boule blanche sous notre pipeline
-    // (la pile d'énergie éblouissait, l'objet devenait indistinct).
-    // 0.5 sur les modes additifs uniquement ; les autres sprites inchangés.
+    // : régulateur des particules ADDITIVES
     {
       auto ab = mode.get_alpha_blend();
       bool additive = ab == DrawMode::AlphaBlend::SRC_0_FIX_DST ||
@@ -647,6 +721,25 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
       glUniform1f(
           pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "additive_scale"),
           additive ? 0.5f : 1.0f);
+      // MASQUE D'EAU dans le canal alpha
+      bool eau = false;
+      if (!double_draw && mode.get_ab_enable()) {
+        eau = particule_d_eau(render_state, tbp);
+        GLenum aa = eau ? GL_ONE_MINUS_DST_ALPHA : GL_ZERO;
+        switch (ab) {
+          case DrawMode::AlphaBlend::SRC_DST_SRC_DST:
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, aa, GL_ONE);
+            break;
+          case DrawMode::AlphaBlend::SRC_0_SRC_DST:
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, aa, GL_ONE);
+            break;
+          case DrawMode::AlphaBlend::SRC_0_FIX_DST:
+            glBlendFuncSeparate(GL_ONE, GL_ONE, aa, GL_ONE);
+            break;
+          default:
+            break;
+        }
+      }
     }
 
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::SPRITE3].id(), "alpha_min"),
@@ -660,7 +753,7 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
 
     glDrawElements(GL_TRIANGLE_STRIP, bucket->ids.size(), GL_UNSIGNED_INT,
                    (void*)(bucket->offset_in_idx_buffer * sizeof(u32)));
-    qa_glerr_check("sprite3 draw #1 (ligne 659)");  // [QA-GLERR] 14/10
+    qa_glerr_check("sprite3 draw #1 (ligne 659)");  // [QA]
 
     if (double_draw) {
       switch (settings.kind) {
@@ -678,7 +771,7 @@ void Sprite3::flush_sprites(SharedRenderState* render_state,
           glDepthMask(GL_FALSE);
           glDrawElements(GL_TRIANGLE_STRIP, bucket->ids.size(), GL_UNSIGNED_INT,
                          (void*)(bucket->offset_in_idx_buffer * sizeof(u32)));
-          qa_glerr_check("sprite3 draw #2 (ligne 676)");  // [QA-GLERR] 14/10
+          qa_glerr_check("sprite3 draw #2 (ligne 676)");  // [QA]
           break;
         default:
           ASSERT(false);

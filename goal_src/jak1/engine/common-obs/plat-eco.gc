@@ -144,8 +144,7 @@
            (spawn-projectile-blue *target*)))))
   :trans
     (behavior ()
-      ;; PC-REMAKE 25/10 : une plateforme a eco bleu allumee est une source de lumiere (sa lueur
-      ;; bleue, sous le plateau, eclaire ce qui l'entoure) — comme les orifices d'eco
+      ;; une plateforme a eco bleu allumee est une source de lumiere
       (pc-add-lamp! (-> self root trans x)
                     (- (-> self root trans y) 4096.0)
                     (-> self root trans z)

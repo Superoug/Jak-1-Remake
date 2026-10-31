@@ -17,8 +17,7 @@ void main() {
   vec2 texture_coords = vec2(tex_coord.x, (1.0f - tex_coord.y) - (1 - (SCISSOR_HEIGHT / 512.0)) / 2);
 
   // sample framebuffer texture
-  // 14/10 : la copie est desormais RGBA (voir Sprite3_Distort.cpp) ; alpha force a 1
-  // comme avec l'ancienne texture RGB (original : color * texture(...))
+  // la copie est desormais RGBA (voir Sprite3_Distort.cpp)
   vec4 fb = texture(framebuffer_tex, texture_coords);
   fb.a = 1.0;
   out_color = color * fb;

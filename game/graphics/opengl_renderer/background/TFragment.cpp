@@ -118,8 +118,7 @@ void TFragment::render(DmaFollower& dma,
         }
       } else {
         ASSERT(transfers[i].size_bytes == 16);
-        // see VisDataHandler: a stale visibility string tears up a level that
-        // is displayed while the player stands somewhere else
+        // see VisDataHandler: a stale visibility string tears up a level that is displayed while the player
         render_state->occlusion_vis[i].valid = false;
       }
     }
@@ -303,13 +302,11 @@ void TFragment::update_load(const std::vector<tfrag3::TFragmentTreeKind>& tree_k
         tree_cache.vertex_buffer = loader_data->tfrag_vertex_data[geom][tree_idx];
         tree_cache.vert_count = verts;
         tree_cache.draws = &tree.draws;  // todo - should we just copy this?
-        // projecteur violet : la classification se fait à chaud dans render_tree
-        // (la spec de /tmp/palm_debug change en cours de jeu)
+        // projecteur violet
         tree_cache.tex_names = &lev_data->textures;
         tree_cache.palm_debug_seq_built = 0;
-        tree_cache.draw_snow.clear();  // 20/10 : reclasse au premier rendu
-        // inventaire des textures du niveau, loggé UNE fois (base de la chasse
-        // par dichotomie : grep 'texinv' dans le log de gk)
+        tree_cache.draw_snow.clear();  // reclasse au premier rendu
+        // inventaire des textures du niveau, loggé UNE fois
         {
           static std::set<const void*> inv_logged;
           if (inv_logged.insert((const void*)&lev_data->textures).second) {
@@ -318,8 +315,7 @@ void TFragment::update_load(const std::vector<tfrag3::TFragmentTreeKind>& tree_k
             }
           }
         }
-        // [QA 22/09] modes des draws de feuillage (tfrag) — le toit se voyait a
-        // travers la feuille
+        // [QA] modes des draws de feuillage (tfrag)
         for (const auto& d : tree.draws) {
           std::string tn = (d.tree_tex_id >= 0 && d.tree_tex_id < (int)lev_data->textures.size())
                                ? lev_data->textures[d.tree_tex_id].debug_name
@@ -335,8 +331,7 @@ void TFragment::update_load(const std::vector<tfrag3::TFragmentTreeKind>& tree_k
                    (int)m.get_at_enable(), (int)m.get_alpha_test(), (int)m.get_aref(),
                    (int)m.get_alpha_fail(), (int)m.get_decal());
         }
-        // [QA-VISTA 25/08] : qui habille la doublure lointaine ? On liste les
-        // textures reellement utilisees par CHAQUE arbre, avec son type.
+        // [QA] : qui habille la doublure lointaine ? On liste les textures reellement utilisees par CHAQUE
         {
           std::map<std::string, int> use;
           for (const auto& d : tree.draws) {
@@ -406,19 +401,17 @@ void TFragment::update_load(const std::vector<tfrag3::TFragmentTreeKind>& tree_k
                                sizeof(tfrag3::PreloadedVertex),  // stride
                                (void*)offsetof(tfrag3::PreloadedVertex, color_index)  // offset (0)
         );
-        // PC-REMAKE : normales lissées (subdiv Phong) — le battement des
-        // feuillages fondus dans le terrain se fait le long de la normale
+        // normales lissées (subdiv Phong)
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 4, GL_INT_2_10_10_10_REV, GL_TRUE,
                               sizeof(tfrag3::PreloadedVertex),
                               (void*)offsetof(tfrag3::PreloadedVertex, nor));
-        // PC-REMAKE : squelette de couronne (fr, az, hn, id) gravé dans rgba au
-        // chargement — mêmes données que les palmiers TIE, mêmes formules
+        // squelette de couronne (fr, az, hn, id) gravé dans rgba au chargement
         glEnableVertexAttribArray(4);
         glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, GL_TRUE,
                               sizeof(tfrag3::PreloadedVertex),
                               (void*)offsetof(tfrag3::PreloadedVertex, r));
-        // PC-REMAKE : decor affine : 3e couleur peinte + poids (tfrag3.vert)
+        // decor affine
         glEnableVertexAttribArray(6);
         glVertexAttribIPointer(6, 1, GL_UNSIGNED_INT, sizeof(tfrag3::PreloadedVertex),
                                (void*)offsetof(tfrag3::PreloadedVertex, color_index3));
@@ -513,7 +506,7 @@ void TFragment::render_tree(int geom,
   if (m_color_result.size() < tree.colors->color_count) {
     m_color_result.resize(tree.colors->color_count);
   }
-  // [QA-TOD] 14/10 : temps CPU du calcul des couleurs d'heure / de l'envoi / du reste
+  // [QA] temps CPU du calcul des couleurs d'heure / de l'envoi / du reste
   static double qa_tod[3] = {0, 0, 0};
   static int qa_tod_n = 0;
   Timer qa_t;
@@ -535,25 +528,22 @@ void TFragment::render_tree(int geom,
   first_tfrag_draw_setup(settings.camera, render_state, ShaderId::TFRAG3);
   // bascule à chaud du mode peinture violette (fichier témoin)
   update_palm_debug_flag();
-  // PC-REMAKE : temps + amplitude (réglable au REPL) du vent des feuillages
-  // fondus dans le terrain
+  // temps + amplitude (réglable au REPL) du vent des feuillages fondus dans le terrain
   glUniform1f(
       pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "wind_time"),
       (float)(render_state->frame_idx % 216000) / 60.f);
   glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "tfrag_wind_amp"),
               g_palm_wind[2]);
 
-  // PC-REMAKE sun shadows: refresh the light matrix once per frame and feed
-  // the map + uniforms to the receiving shader.
+  // sun shadows: refresh the light matrix once per frame and feed the map + uniforms to the receiving
   g_sun_shadow.maybe_update_for_frame(settings.camera.trans.data(), render_state->frame_idx);
   if (g_sun_shadow.enabled()) {
     g_sun_shadow.bind_for_receive(render_state->shaders[ShaderId::TFRAG3].id());
   } else {
-    // 21/09 : sampler toujours pose sur l'unite 14 (voir bind_disabled)
+    // sampler toujours pose sur l'unite 14 (voir bind_disabled)
     g_sun_shadow.bind_disabled(render_state->shaders[ShaderId::TFRAG3].id());
   }
-  // PC-REMAKE "Spyro water": WATER kind trees get animated ripples, caustic
-  // shimmer and a sun sparkle in the shader. x=time, y=strength.
+  // "Spyro water": WATER kind trees get animated ripples
   {
     float wfx[4] = {(float)(render_state->frame_idx % 100000) / 60.f,
                     tree.kind == tfrag3::TFragmentTreeKind::WATER ? 1.f : 0.f, 0.f, 0.f};
@@ -587,7 +577,7 @@ void TFragment::render_tree(int geom,
 
   prof.add_tri(total_tris);
 
-  // projecteur violet : reclassification à chaud quand la spec change
+  // projecteur violet
   if (tree.palm_debug_seq_built != g_palm_debug_seq && tree.tex_names && tree.draws) {
     tree.palm_debug_seq_built = g_palm_debug_seq;
     tree.draw_palm_debug.assign(tree.draws->size(), 0);
@@ -600,8 +590,7 @@ void TFragment::render_tree(int geom,
     }
   }
 
-  // PC-REMAKE émissives : auto-illumination par draw, bâtie une fois par arbre
-  // (la lave EST sa propre lumière — 18/08)
+  // émissives : auto-illumination par draw, bâtie une fois par arbre
   if (tree.draw_emissive.size() != tree.draws->size() && tree.tex_names && tree.draws) {
     tree.draw_emissive.assign(tree.draws->size(), 0.f);
     tree.draw_lava.assign(tree.draws->size(), 0.f);
@@ -618,7 +607,7 @@ void TFragment::render_tree(int geom,
     }
   }
 
-  // PC-REMAKE 21/09 : detail intrinseque des sols, par draw (regle par nom)
+  // detail intrinseque des sols, par draw (regle par nom)
   update_detail_gain();
   if (tree.draw_detail.size() != tree.draws->size() && tree.tex_names && tree.draws) {
     tree.draw_detail.assign(tree.draws->size(), 0.f);
@@ -635,9 +624,7 @@ void TFragment::render_tree(int geom,
   const GLint detail_loc =
       pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "detail_amt");
 
-  // 20/10 : SOL DE NEIGE DEFORMABLE — les draws de neige au sol (textures snow, snow-0x,
-  // snow-path, snow-clumps, snow-fringe : pc_is_snow_ground_texture) passent par le programme
-  // decoupe TFRAG3_SNOW quand la carte des traces est active (voir la passe apres la boucle)
+  // SOL DE NEIGE DEFORMABLE
   if (tree.draw_snow.size() != tree.draws->size() && tree.tex_names && tree.draws) {
     tree.draw_snow.assign(tree.draws->size(), 0);
     for (size_t i = 0; i < tree.draws->size(); i++) {
@@ -654,7 +641,7 @@ void TFragment::render_tree(int geom,
                          pc_snow_tess_available(render_state);
   std::vector<size_t> snow_draws;
 
-  // PC-REMAKE 21/09 : le shader TFRAG3 ecrit la normale monde dans le G-buffer
+  // le shader TFRAG3 ecrit la normale monde dans le G-buffer
   pc_normal_target(true);
   for (size_t draw_idx = 0; draw_idx < tree.draws->size(); draw_idx++) {
     const auto& draw = tree.draws->operator[](draw_idx);
@@ -683,17 +670,16 @@ void TFragment::render_tree(int geom,
       glBindTexture(GL_TEXTURE_2D, m_anim_slot_array->at(-(tex_idx + 1)));
     }
     auto double_draw = setup_tfrag_shader(render_state, draw.mode, ShaderId::TFRAG3);
-    // PC-REMAKE : carte de hauteur sculptee de cette texture (relief par pixel ; 0 = sans)
+    // carte de hauteur sculptee de cette texture
     pc_sculpt_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
                    render_state->shaders[ShaderId::TFRAG3].id());
     pc_normal_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
                    render_state->shaders[ShaderId::TFRAG3].id());
     pc_det_bind(tex_idx >= 0 ? m_textures->at(tex_idx) : 0,
                 render_state->shaders[ShaderId::TFRAG3].id());
-    // [QA-TEST 25/08] vista : on desarme le test d'alpha (seuil 38) qui perce
-    // le decor lointain en tamis
+    // [QA] vista
     glUniform1i(m_uniforms.decal, draw.mode.get_decal() ? 1 : 0);
-    // test d'identité des penchés : draws ciblés peints en violet
+    // test d'identité des penchés
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "palm_debug"),
                 (g_palm_debug > 0.5f && draw_idx < tree.draw_palm_debug.size() &&
                  tree.draw_palm_debug[draw_idx])
@@ -708,7 +694,7 @@ void TFragment::render_tree(int geom,
                 draw_idx < tree.draw_reflet.size() ? tree.draw_reflet[draw_idx] : 0.f);
     glUniform1f(detail_loc, (draw_idx < tree.draw_detail.size() ? tree.draw_detail[draw_idx] : 0.f) *
                                 g_pc_detail_gain);
-    // PC-REMAKE : palmes pliees + relief des folioles (dessin a texture de palme)
+    // palmes pliees + relief des folioles (dessin a texture de palme)
     {
       const float pli = (tex_idx >= 0 && tex_idx < (int)tree.tex_names->size() &&
                          pc_is_palm_leaf_texture((*tree.tex_names)[tex_idx].debug_name))
@@ -718,10 +704,10 @@ void TFragment::render_tree(int geom,
       glUniform1f(pc_uniform_loc(prog, "fronde_pli"), pli);
       glUniform1f(pc_uniform_loc(prog, "fronde_pli_f"), pli);
     }
-    // PC-REMAKE : sol (relief adouci) et sol d'herbe (vert etalonne) — /tmp/qa_no_vert : coupe (A/B)
+    // sol (relief adouci) et sol d'herbe (vert etalonne)
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "sol_kind"),
                 (draw_idx < tree.draw_sol.size() && !pc_vert_off()) ? tree.draw_sol[draw_idx] : 0.f);
-    // PC-REMAKE : couche de sol en transparence -> bord guide par la texture (/tmp/qa_no_solmel : coupe)
+    // couche de sol en transparence -> bord guide par la texture
     glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "sol_melange"),
                 (draw.mode.get_ab_enable() && draw_idx < tree.draw_detail.size() &&
                  tree.draw_detail[draw_idx] > 0.f && !pc_sol_melange_off())
@@ -765,12 +751,11 @@ void TFragment::render_tree(int geom,
         ASSERT(false);
     }
   }
-  // le programme TFRAG3 est partagé (replays d'ombres, etc.) : ne pas laisser
-  // traîner la teinte violette du dernier draw
+  // le programme TFRAG3 est partagé (replays d'ombres, etc.)
   glUniform1f(pc_uniform_loc(render_state->shaders[ShaderId::TFRAG3].id(), "palm_debug"),
               0.f);
 
-  // 20/10 : passe du sol de neige deformable (memes reglages que TFRAG3, primitive = patch)
+  // passe du sol de neige deformable
   if (!snow_draws.empty()) {
     const ShaderId sid = ShaderId::TFRAG3_SNOW;
     const GLuint pid = pc_snow_tess_begin(settings.camera, render_state);
@@ -812,13 +797,11 @@ void TFragment::render_tree(int geom,
   }
   pc_normal_target(false);
 
-  // PC-REMAKE sun shadows: render the WHOLE tree into the shadow map (not the
-  // frustum-culled subset — otherwise shadows pop as the camera turns).
-  // Only solid ground kinds cast.
+  // sun shadows: render the WHOLE tree into the shadow map
   if (g_sun_shadow.enabled() &&
       (tree.kind == tfrag3::TFragmentTreeKind::NORMAL ||
        tree.kind == tfrag3::TFragmentTreeKind::DIRT)) {
-    // 14/10 : passe d'ombres DIFFEREE (voir SunShadowMap::flush_deferred)
+    // passe d'ombres DIFFEREE (voir SunShadowMap::flush_deferred)
     if (g_sun_shadow.deferred()) {
       static bool shadow_cull_d = true;
       static int shadow_cull_poll_d = 0;
@@ -845,9 +828,7 @@ void TFragment::render_tree(int geom,
     // static scenery: only replayed when the cached layer is stale
     if (g_sun_shadow.begin_static_replay(&render_state->shaders)) {
       glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, tree.index_buffer);
-      // 14/10 : seuls les groupes qui touchent la carte d'ombres (voir
-      // shadow_vis_from_light) — original : glDrawElements(tree.index_count) de tout
-      // l'arbre. /tmp/qa_no_shadow_cull = ancien chemin (A/B).
+      // seuls les groupes qui touchent la carte d'ombres (voir shadow_vis_from_light)
       static bool shadow_cull = true;
       static int shadow_cull_poll = 0;
       if ((shadow_cull_poll++ % 256) == 0) {
@@ -916,10 +897,7 @@ void TFragment::render_matching_trees(int geom,
       continue;
     }
     if (std::find(trees.begin(), trees.end(), tree.kind) != trees.end() || tree.forced) {
-      // [QA-LOWRES 21/09] experience decisive du treillis lointain : NORMAL et
-      // LOWRES (la doublure basse resolution du MEME niveau) sont dessines
-      // ensemble -> combat de profondeur au loin ? QA_NO_LOWRES=1 saute LOWRES
-      // et LOWRES_TRANS. Sans la variable, aucun effet.
+      // [QA] experience decisive du treillis lointain
       {
         static const bool no_lowres = [] {
           const char* e = getenv("QA_NO_LOWRES");
@@ -932,11 +910,7 @@ void TFragment::render_matching_trees(int geom,
       }
       tree.rendered_this_frame = true;
       settings_copy.tree_idx = i;
-      // 13/10 (herbes au sol trop transparentes) :
-      // les couches de SALISSURE (chemins de sable, tfrag DIRT, semi-transparentes)
-      // sont dessinees APRES les arbustes et recouvraient le bas des touffes —
-      // le sable du chemin traversait l'herbe. Les arbustes de vegetation marquent
-      // leurs pixels (stencil 0x80, Shrub.cpp) : la salissure ne les touche plus.
+      // (herbes au sol trop transparentes)
       const bool dirt = tree.kind == tfrag3::TFragmentTreeKind::DIRT;
       if (dirt) {
         glEnable(GL_STENCIL_TEST);

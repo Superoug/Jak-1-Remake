@@ -47,9 +47,7 @@ struct Plane {
   double at(int x, int y) const { return v[(size_t)y * w + x]; }
 };
 
-// Coefficients Lanczos-3 a la maniere de Pillow (precompute_coeffs) pour passer de
-// in_size a out_size. `wrap_edges` : la texture est vue TUILEE (indices modulo), sinon
-// les noyaux sont tronques au bord puis renormalises (Pillow sans tuilage).
+// Coefficients Lanczos-3 a la maniere de Pillow (precompute_coeffs) pour passer de in_size a out_size
 struct Coeffs {
   std::vector<int> first;
   std::vector<int> count;
@@ -93,8 +91,7 @@ Coeffs make_coeffs(int in_size, int out_size, bool wrap_edges) {
   return c;
 }
 
-// redimensionnement separable (horizontal puis vertical, arrondi 8 bits entre les
-// passes comme Pillow)
+// redimensionnement separable
 Plane resize(const Plane& in, int out_w, int out_h, bool wrap_edges) {
   const Coeffs cx = make_coeffs(in.w, out_w, wrap_edges);
   const Coeffs cy = make_coeffs(in.h, out_h, wrap_edges);
@@ -129,8 +126,7 @@ Plane resize(const Plane& in, int out_w, int out_h, bool wrap_edges) {
   return out;
 }
 
-// masque flou (Pillow UnsharpMask rayon 1,2 / 48 % / seuil 2), flou gaussien en
-// tuilage (l'image Python etait la texture tuilee 3x3)
+// masque flou (Pillow UnsharpMask rayon 1,2 / 48 % / seuil 2), flou gaussien en tuilage
 void unsharp(Plane& p) {
   const double sigma = 1.2;
   const int r = 5;
@@ -223,15 +219,9 @@ Plane channel(const u32* rgba, int w, int h, int c) {
 
 }  // namespace
 
-// PC-REMAKE 17/10 : IRIS DES YEUX. Les iris sont des dessins de 16 px (bam-iris-16x16)
-// agrandis enormement a l'ecran. AdvMAME2x n'arrondit un contour que si les couleurs
-// voisines sont EXACTEMENT egales : sur les degrades d'un iris il ne lissait rien et
-// rendait des blocs 4x4 (yeux pixelises). Ici : la silhouette de l'iris (ce qui n'est
-// pas le blanc de l'oeil) est agrandie puis lissee avant d'etre redecoupee net, et les
-// couleurs d'origine, prolongees sous le contour, sont agrandies en Lanczos. Le dessin
-// (couleurs, liseré sombre, reflet) est celui d'origine ; seuls les escaliers disparaissent.
+// IRIS DES YEUX
 bool faithful_iris_texture(const std::string& tex_name) {
-  // (les portes en iris des precurseurs, irisdoor, ne sont pas des yeux)
+  // les portes en iris des precurseurs, irisdoor, ne sont pas des yeux
   return tex_name.find("iris") != std::string::npos &&
          tex_name.find("door") == std::string::npos;
 }
@@ -255,7 +245,7 @@ std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int
     }
   }
   const double ref = lum_of(rgba[white_i]);
-  // couverture de l'iris (0 sur le blanc, 1 dans l'iris, partielle sur les texels de bord)
+  // couverture de l'iris
   std::vector<double> cov(n);
   std::vector<bool> solid(n);
   Plane col[3];
@@ -266,7 +256,7 @@ std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int
     cov[i] = std::clamp((ref - 0.05 * 255.0 - lum_of(rgba[i])) / (0.30 * 255.0), 0.0, 1.0);
     solid[i] = cov[i] > 0.85;
   }
-  // couleurs de l'iris prolongees dans le blanc (pas de melange blanc au contour)
+  // couleurs de l'iris prolongees dans le blanc
   for (int it = 0; it < 8; it++) {
     std::vector<bool> next = solid;
     for (int y = 0; y < h; y++) {
@@ -303,7 +293,7 @@ std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int
   for (int c = 0; c < 3; c++) {
     big[c] = resize(col[c], ow, oh, false);
   }
-  // silhouette : agrandissement bilineaire puis flou gaussien (sigma 0,9 texel d'origine)
+  // silhouette
   std::vector<double> cu((size_t)ow * oh);
   for (int y = 0; y < oh; y++) {
     for (int x = 0; x < ow; x++) {
@@ -349,8 +339,7 @@ std::optional<FaithfulUpscale> faithful_iris_upscale(const u32* rgba, int w, int
       }
     }
   };
-  // silhouette arrondie (0,9 texel d'origine) ; couleurs adoucies (0,5 texel) : le liseré
-  // d'origine alterne texels sombres et clairs, qui faisaient des dents sur le contour
+  // silhouette arrondie (0,9 texel d'origine)
   gauss(cu, 0.9 * factor);
   for (int c = 0; c < 3; c++) {
     gauss(big[c].v, 0.5 * factor);
@@ -401,7 +390,7 @@ std::optional<FaithfulUpscale> faithful_upscale(const u32* rgba, int w, int h, i
   res.w = w * factor;
   res.h = h * factor;
 
-  // 1. peu de couleurs ou toute petite texture : AdvMAME2x (couleurs existantes)
+  // 1. peu de couleurs ou toute petite texture
   std::set<u32> colors;
   std::set<u8> alphas;
   for (size_t i = 0; i < n; i++) {
@@ -457,7 +446,7 @@ std::optional<FaithfulUpscale> faithful_upscale(const u32* rgba, int w, int h, i
     res.rgba[i] = v;
   }
 
-  // 3. controle : re-reduite, la texture doit retomber sur l'original (texels visibles)
+  // 3. controle
   double err = 0.0;
   size_t nvis = 0;
   {

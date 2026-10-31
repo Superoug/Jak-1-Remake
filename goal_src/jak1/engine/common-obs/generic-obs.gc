@@ -1481,11 +1481,7 @@
    (:flags (bit2 bit3 bit14 left-multiply-quat))))
 
 (defun draw-eco-beam ((arg0 vector) (arg1 vector))
-  ;; PC-REMAKE 20/10 : la nuit, le faisceau d'eco ECLAIRE — le segment est transmis au rendu,
-  ;; qui en fait une lumiere en tube (post_processing.frag) : tours, sol et feuillage autour
-  ;; du rayon s'eclairent en bleu. Hors du test de visibilite : la lumiere reste meme si le
-  ;; rayon sort de l'ecran. De jour : rien (dose = part de nuit, dans le rendu).
-  ;; (v1 : une lampe eco tous les ~10 m — trop peu retenues par la selection des lampes)
+  ;; la nuit, le faisceau d'eco ECLAIRE
   (pc-add-beam! (-> arg0 x) (-> arg0 y) (-> arg0 z) (-> arg1 x) (-> arg1 y) (-> arg1 z))
   (when (line-in-view-frustum? arg0 arg1)
     (let ((s2-1 (vector-! (new 'stack-no-clear 'vector) arg1 arg0))

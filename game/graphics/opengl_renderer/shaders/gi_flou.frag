@@ -1,11 +1,10 @@
 #version 410 core
-// PC-REMAKE — flou de la lumiere rebondie (gi_rebond.frag) : gaussien separable sur 9 points,
-// qui respecte la profondeur (pas de halo d'un objet sur le decor derriere lui).
+// flou de la lumiere rebondie (gi_rebond.frag)
 in vec2 tex_coord;
 out vec4 color;
 uniform sampler2D src_tex;
 uniform sampler2D depth_tex;  // unite 15
-uniform vec2 blur_step;       // 1 texel dans la direction du passage
+uniform vec2 blur_step;  // 1 texel dans la direction du passage
 
 void main() {
   float dc = texture(depth_tex, tex_coord).r;

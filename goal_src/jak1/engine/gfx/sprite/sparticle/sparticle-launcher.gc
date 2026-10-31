@@ -157,11 +157,7 @@
 
 ;; og:preserve-this
 ;(#if (not PC_BIG_MEMORY)
-;; PC-REMAKE 14/10 : 32 -> 256. Au Rocher du Geyser, chaque goutte de la pluie du
-;; geyser (check-drop-level-training-spout-rain) relance 2 eclaboussures PENDANT le
-;; traitement des particules : la file debordait en continu (3 142 eclaboussures
-;; perdues + autant de lignes d'erreur dans une partie, 13/10).
-;; (original : (defconstant SPARTICLE_QUEUE_SIZE 32))
+;; 32 -> 256. Au Rocher du Geyser, chaque goutte de la pluie du geyser
 (defconstant SPARTICLE_QUEUE_SIZE 256)
 
 ;(defconstant SPARTICLE_QUEUE_SIZE 80))

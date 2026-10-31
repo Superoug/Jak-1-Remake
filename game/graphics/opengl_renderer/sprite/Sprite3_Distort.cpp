@@ -1,7 +1,7 @@
 #include "Sprite3.h"
 #include "game/graphics/opengl_renderer/dma_helpers.h"
 
-void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA-GLERR]
+void qa_glerr_check(const char* where);  // OpenGLRenderer.cpp — sonde [QA]
 
 namespace {
 /*!
@@ -26,10 +26,7 @@ void Sprite3::opengl_setup_distort() {
   glGenTextures(1, &m_distort_ogl.fbo_texture);
   glBindTexture(GL_TEXTURE_2D, m_distort_ogl.fbo_texture);
 
-  // PC-REMAKE 14/10 (bug) : RGBA8 comme le tampon de rendu. En RGB, la copie
-  // depuis le tampon MSAA (RGBA8) etait REFUSEE par OpenGL (formats differents =
-  // GL_INVALID_OPERATION) : la distorsion de chaleur lisait une texture vide.
-  // (original : GL_RGB, ... GL_RGB)
+  // (bug) : RGBA8 comme le tampon de rendu
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_distort_ogl.fbo_width,
                m_distort_ogl.fbo_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 
@@ -525,7 +522,7 @@ void Sprite3::distort_draw(SharedRenderState* render_state, ScopedProfilerNode& 
   prof.add_tri(m_distort_stats.total_tris);
 
   glDrawElements(GL_TRIANGLE_STRIP, m_sprite_distorter_indices.size(), GL_UNSIGNED_INT, (void*)0);
-  qa_glerr_check("distort draw #1 (ligne 521)");  // [QA-GLERR] 14/10
+  qa_glerr_check("distort draw #1 (ligne 521)");  // [QA]
 
   // Done
   glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -589,7 +586,7 @@ void Sprite3::distort_draw_instanced(SharedRenderState* render_state, ScopedProf
       prof.add_draw_call();
 
       glDrawArraysInstanced(GL_TRIANGLE_STRIP, vert_offset, num_verts, instances.size());
-      qa_glerr_check("distort draw #2 (ligne 584)");  // [QA-GLERR] 14/10
+      qa_glerr_check("distort draw #2 (ligne 584)");  // [QA]
     }
 
     vert_offset += num_verts;
@@ -640,10 +637,7 @@ void Sprite3::distort_setup_framebuffer_dims(SharedRenderState* render_state) {
 
     glBindTexture(GL_TEXTURE_2D, m_distort_ogl.fbo_texture);
 
-    // PC-REMAKE 14/10 (bug) : RGBA8 comme le tampon de rendu. En RGB, la copie
-    // depuis le tampon MSAA (RGBA8) etait REFUSEE par OpenGL (formats differents =
-    // GL_INVALID_OPERATION) : la distorsion de chaleur lisait une texture vide.
-    // (original : GL_RGB, ... GL_RGB)
+    // (bug) : RGBA8 comme le tampon de rendu
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_distort_ogl.fbo_width,
                  m_distort_ogl.fbo_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 

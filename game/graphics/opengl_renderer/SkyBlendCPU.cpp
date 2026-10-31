@@ -11,7 +11,7 @@
 
 SkyBlendCPU::SkyBlendCPU() {
   for (int i = 0; i < 2; i++) {
-    // 14/10 : anneau de 3 textures (voir m_ring) ; m_textures[i].gl = la premiere
+    // anneau de 3 textures (voir m_ring)
     glGenTextures(kRing, m_ring[i]);
     for (int r = 0; r < kRing; r++) {
       glBindTexture(GL_TEXTURE_2D, m_ring[i][r]);
@@ -223,9 +223,7 @@ SkyBlendStats SkyBlendCPU::do_sky_blends(DmaFollower& dma,
           stats.cloud_blends++;
         }
       }
-      // 14/10 : la mise en ligne se fait UNE fois a la fin (voir m_ring) — original :
-      //   glBindTexture(m_textures[buffer_idx].gl); glTexImage2D(... data) ;
-      //   move_existing_to_vram(...) apres CHAQUE melange
+      // la mise en ligne se fait UNE fois a la fin (voir m_ring)
       dirty[buffer_idx] = true;
     }
   }

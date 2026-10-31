@@ -9,8 +9,7 @@
 ;; definition for symbol *wind-work*, type wind-work
 (define *wind-work* (new 'global 'wind-work))
 
-;; PC-REMAKE : multiplicateur du vent global — les palmiers et l'herbe TIE du
-;; jeu d'origine ondulent, mais trop faiblement pour se voir. Réglable au REPL.
+;; multiplicateur du vent global
 (define *remake-wind-mult* 2.5)
 
 ;; definition for function update-wind

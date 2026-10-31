@@ -1,8 +1,5 @@
 #version 410 core
-// PC-REMAKE 20/10 — SOL DE NEIGE DEFORMABLE (etape 3/3 : deformation). Chaque point du sol
-// redecoupe est ENFONCE selon la carte des traces (sillon tasse, bourrelet repousse) — un vrai
-// creux dans la geometrie — puis projete comme dans tfrag3.vert. La normale suit la pente du
-// creux (eclairage du sillon par la passe de lumiere).
+// SOL DE NEIGE DEFORMABLE (etape deformation)
 layout (triangles, equal_spacing, ccw) in;
 
 in vec3 tc_pos[];
@@ -27,11 +24,9 @@ out vec3 w_nor;
 flat out float v_foliage;
 out float v_dist;
 out vec3 v_pos_w;
-out vec3 v_vue;  // PC-REMAKE : camera -> sommet (parallaxe de la sculpture du decor)
+out vec3 v_vue;  // camera -> sommet (parallaxe de la sculpture du decor)
 
-// ---- TRACE DANS LA NEIGE : profil du sillon (meme code dans tfrag3_snow.tese et
-// post_processing.frag). La carte (unite 7) garde, par texel de 10 cm : R = distance au chemin
-// de Jak (m), G = hauteur de ses pieds, B = instant du passage, A = profondeur tassee.
+// --- TRACE DANS LA NEIGE
 const float SNOW_N = 1024.0;  // texels de la carte (fenetre de 102,4 m)
 const float SNOW_TW = 0.10 * SNOW_N;
 float snow_hash(ivec2 i) {
@@ -52,9 +47,7 @@ float snow_vnoise(vec2 p) {
 float snow_thick(float dyg) {
   return clamp(dyg / 0.35, 1.0, 3.5);
 }
-// relief (m) au point pm (m) de la surface d'origine : < 0 sillon, > 0 bourrelet, 0 hors trace.
-// Filtrage bilineaire fait a la main (texture flottante non filtree par le pilote Apple) ;
-// lineaire pur : une distance s'interpole exactement (le lissage en S faisait onduler la paroi).
+// relief (m) au point pm (m) de la surface d'origine
 float snow_relief(vec3 pm, float now) {
   vec2 px = pm.xz / SNOW_TW * SNOW_N - 0.5;
   vec2 fl = floor(px);
@@ -74,21 +67,17 @@ float snow_relief(vec3 pm, float now) {
       wv += w;
     }
   }
-  // hors de portee du sillon le plus large (r 0,7 m x 1,95, bord irregulier compris)
+  // hors de portee du sillon le plus large
   if (wv < 1e-3 || fill < 1e-3 || dist > 1.7) return 0.0;
   float dyg = pm.y - feet / wv;
   if (dyg < -1.5 || dyg > 2.6) return 0.0;
   float thick = snow_thick(dyg);
-  // largeur : x1 en neige fine, jusqu'a x1,75 en neige epaisse ; bord irregulier (bruit lisse
-  // fixe dans le monde, pas de dents de scie)
+  // largeur : x1 en neige fine, jusqu'a x1,75 en neige epaisse
   float r = 0.40 * (1.0 + 0.30 * (thick - 1.0));
-  // (v1 : octave a 9 /m — dents de 11 cm sur le bord, effet pixelise sur les parois)
   float jag = (snow_vnoise(pm.xz * 1.3) - 0.5) * 0.22 + (snow_vnoise(pm.xz * 3.5) - 0.5) * 0.10;
   float d = dist * (1.0 + jag);
   if (d > 1.95 * r) return 0.0;
-  // profondeur : en neige epaisse, le sillon descend jusqu'aux pieds de Jak (ses jambes ne
-  // disparaissent plus dans une neige intacte) ; en neige fine, tassement x epaisseur
-  // (v1 : tassement x epaisseur seul — 40 cm au centre des etendues, Jak enfonce de 1 m)
+  // profondeur
   float dp = min(max(depth * (1.0 + 0.6 * (thick - 1.0)), dyg * smoothstep(0.0, 0.08, depth)),
                  max(dyg, 0.0) + 0.2);
   // fond plat, paroi en S, puis bourrelet de neige repoussee
@@ -106,14 +95,7 @@ void main() {
   vec3 nor = normalize(bc.x * tc_nor[0] + bc.y * tc_nor[1] + bc.z * tc_nor[2] + vec3(1e-5));
   const float M = 4096.0;
 
-  // une partie du sol de neige a des normales INVERSEES (vers le bas) dans les donnees : on
-  // raisonne avec la normale tournee vers le haut, et on rend la normale dans son sens d'origine
-  // (le post la retourne vers la camera, comme avant)
-  // (v1 : nor.y > 0.45 — ces sols etaient pris pour des parois : pas de creux par endroits)
-  // 22/10 : point de la surface AVANT le creusement, pour l'ombre du soleil. La carte d'ombres
-  // est rendue avec la neige intacte : le fond d'un sillon se croyait a l'ombre de sa propre
-  // surface, plus sombre, et la relumiere chaude du soleil (post) le teintait en brun. Le creux
-  // recoit desormais l'ombre (ou le soleil) de la neige qui le borde : il reste blanc.
+  // une partie du sol de neige a des normales INVERSEES (vers le bas) dans les donnees
   vec3 pos_ombre = pos_w;
   float nsign = nor.y < 0.0 ? -1.0 : 1.0;
   vec3 nup = nor * nsign;
@@ -143,7 +125,6 @@ void main() {
   fogginess = 255 - clamp(-transformed.w + hvdf_offset.w, fog_min, fog_max);
   transformed.y *= SCISSOR_ADJUST * HEIGHT_SCALE;
   gl_Position = transformed;
-  // (original : sun_light_vp * vec4(pos_w, 1.0))
   sun_light_pos = sun_light_vp * vec4(pos_ombre, 1.0);
   w_nor = nor;
   v_foliage = 0.0;

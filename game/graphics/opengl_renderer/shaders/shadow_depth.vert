@@ -1,8 +1,6 @@
 #version 410 core
 
-// PC-REMAKE sun shadow pass: depth-only render from the sun's point of view.
-// `light_vp` is world->light clip for static geometry, or light*instance for
-// wind-animated instances (palm crowns), so one shader serves both.
+// sun shadow pass: depth-only render from the sun's point of view
 
 layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;

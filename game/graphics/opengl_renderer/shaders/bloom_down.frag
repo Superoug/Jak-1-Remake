@@ -1,35 +1,23 @@
 #version 410 core
-// PC-REMAKE 12/10 — BLOOM LARGE (rendu remake), passe de REDUCTION.
-// Filtre 13 points (Jimenez 2014) : chaque niveau = la moitie du precedent. Le
-// premier niveau trie ce qui RAYONNE vraiment :
-//  - surfaces emissives (lave, ecos, cristaux — alpha 0.6-0.9 du G-buffer) :
-//    toute leur lumiere ;
-//  - PARTICULES (lueurs, spirales vertes, etincelles, portail) : reperees par
-//    difference avec la scene d'AVANT les sprites (pre_tex) — leur exces au-dela
-//    de 0.35, davantage si elles sont colorees ;
-//  - le decor ordinaire : presque rien (v1 : l'herbe du village en plein soleil,
-//    aussi claire et saturee qu'une lueur, voilait toute l'image) ;
-//  - le ciel : rien (le soleil a son propre disque).
-// Moyenne de Karis au premier niveau : un pixel isole tres clair ne scintille pas.
+// BLOOM LARGE (rendu remake), passe de REDUCTION
 
 in vec2 tex_coord;
 out vec4 color;
 
-uniform sampler2D src_tex;     // unite 0 : niveau precedent (ou la scene)
-uniform sampler2D depth_tex;   // unite 15 : profondeur resolue (ciel = 0)
+uniform sampler2D src_tex;  // unite 0 : niveau precedent (ou la scene)
+uniform sampler2D depth_tex;  // unite 15 : profondeur resolue (ciel = 0)
 uniform sampler2D normal_tex;  // unite 13 : G-buffer (alpha = drapeaux)
-uniform sampler2D pre_tex;     // unite 12 : scene AVANT les sprites (particules absentes)
-uniform vec4 bloom_p;          // x = premier niveau, y = profondeur, z = normales, w = pre_tex
-uniform vec2 src_texel;        // 1 / taille de la source
-uniform float bloom_night;     // 20/10 : part de nuit (0..1)
+uniform sampler2D pre_tex;  // unite 12 : scene AVANT les sprites (particules absentes)
+uniform vec4 bloom_p;  // x = premier niveau, y = profondeur, z = normales, w = pre_tex
+uniform vec2 src_texel;  // 1 / taille de la source
+uniform float bloom_night;  // part de nuit (0..1)
 
 float luma(vec3 c) {
   return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
 vec3 bright(vec2 uv) {
-  // texel EXACT : pre_tex est en NEAREST, la source en LINEAR — lues entre deux
-  // texels elles differaient sur tout detail et tout passait pour particule
+  // texel EXACT
   ivec2 sz = textureSize(src_tex, 0);
   ivec2 ip = clamp(ivec2(uv * vec2(sz)), ivec2(0), sz - ivec2(1));
   vec3 c = texelFetch(src_tex, ip, 0).rgb;
@@ -54,33 +42,15 @@ vec3 bright(vec2 uv) {
   }
   part *= 1.0 - em;
   vec3 e = c * c * 2.2 * em;
-  // fumee et vapeur (particules peu colorees) : halo reduit — un voile rose
-  // couvrait la lave du village 3 (v1 : mix(0.35, 1.0, sat))
-  // v3 : 1.8 -> 1.2 — les spirales vertes de l'etage de Samos se noyaient dans
-  // leur halo (la reference garde des lignes nettes ET une lueur)
-  // v4 (13/10, texture absente derriere la cascade) : une
-  // cascade = des centaines de particules bleues superposees sur une grande
-  // surface — leur halo cumule noyait la falaise dans un voile bleu. Seuil 0.35
-  // -> 0.50 et poids 1.2 -> 0.7 ; les petites lueurs gardent leur halo.
-  // v5 (27/10) : seule la lumiere que la particule AJOUTE rayonne. Un sprite presque
-  // transparent (fumee, voile) pose sur une surface claire (personnage, bois eclaire par une
-  // lampe) faisait rayonner toute cette surface le temps d'une image : halos qui
-  // s'allumaient et s'eteignaient en tournant la camera. Sur un fond sombre (les lueurs, les
-  // spirales, le portail), rien ne change : le fond reste sous le seuil de 0.50.
-  // (v4 : max(c - vec3(0.50), vec3(0.0)) * ...)
+  // fumee et vapeur (particules peu colorees)
   vec3 p = max(c - max(vec3(0.50), pre), vec3(0.0)) * 0.7 * mix(0.15, 1.0, sat) * part;
-  // 13/10 : decor ordinaire = seuil sur la LUMINANCE (l'herbe vert vif, canal
-  // vert ~0.95, rayonnait et voilait la prairie)
-  // (original : max(c - vec3(0.86), vec3(0.0)) * ...)
+  // decor ordinaire = seuil sur la LUMINANCE
   float lc = dot(c, vec3(0.299, 0.587, 0.114));
   vec3 r = (lc > 1e-4 ? c * (max(lc - 0.86, 0.0) / lc) : vec3(0.0)) * 0.8 * (1.0 - em) * (1.0 - part);
-  // 20/10 : la nuit, les surfaces emissives et les particules colorees (faisceau d'eco,
-  // ecos) rayonnent davantage ; le decor ordinaire (r) ne change pas
+  // la nuit, les surfaces emissives et les particules colorees
   e *= 1.0 + 1.2 * bloom_night;
-  p *= 1.0 + 3.0 * bloom_night;  // v2 (v1 : 1.5)
-  // 27/10 : compression PAR PIXEL (voir main) : le decor ordinaire comme la moyenne de Karis le
-  // faisait pour un reflet isole (les eclats du soleil sur l'eau ne doivent pas rayonner) ; les
-  // sources (emissives, particules) bornees seulement tres haut
+  p *= 1.0 + 3.0 * bloom_night;
+  // compression PAR PIXEL (voir main)
   r *= 1.0 / (1.0 + 0.75 * luma(r));
   vec3 ep = e + p;
   float lep = luma(ep);
@@ -97,15 +67,7 @@ void main() {
   vec2 uv = tex_coord;
   vec3 o;
   if (bloom_p.x > 0.5) {
-    // PREMIER NIVEAU (perf 12/10 : 13 points x 4 textures = 52 lectures par pixel,
-    // 2,6 ms) : pre-filtre 2x2 — chaque texel plein ecran lu UNE fois (4 x 4
-    // textures), tri de ce qui rayonne, moyenne de Karis contre le scintillement.
-    // 27/10 (clignotement en tournant la camera) : la moyenne de Karis n'est pas
-    // lineaire — une petite lampe de 2 ou 3 pixels donnait un halo plus ou moins fort selon qu'elle
-    // tombait dans un seul bloc de 2 x 2 ou a cheval sur deux : en tournant, les halos pulsaient
-    // (mesure : jusqu'a 20 % d'une image a l'autre). Moyenne SIMPLE (l'energie ne depend plus de
-    // l'alignement), la compression se fait par pixel dans bright().
-    // (original : moyenne de Karis, poids 1 / (1 + luma))
+    // PREMIER NIVEAU (perf 13 points x 4 textures = 52 lectures par pixel, 2,6 ms)
     vec3 b0 = bright(uv + t * vec2(-0.5, -0.5));
     vec3 b1 = bright(uv + t * vec2(0.5, -0.5));
     vec3 b2 = bright(uv + t * vec2(-0.5, 0.5));

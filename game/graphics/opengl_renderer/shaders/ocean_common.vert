@@ -21,15 +21,12 @@ void main() {
   
   if (bucket == 0) {
     fragment_color.rgb *= 2;
-    // PC-REMAKE : parité avec le large (bucket 3 multiplie AUSSI l'alpha) — la
-    // base proche écrivait un alpha moitié → couche additive 2 fois plus faible
-    // → zone proche plus sombre, frontière visible (captures 17/08 soir)
+    // parité avec le large (bucket 3 multiplie AUSSI l'alpha)
     fragment_color.a *= 2;
   } else if (bucket == 1 || bucket == 3) {
     fragment_color *= 2;
   } else if (bucket == 4) {
-    // couche REFLET additive du large (blend DST_ALPHA,ONE) : alpha 0 est son
-    // état d'origine légitime (le rendre opaque etait une fausse piste, 17/08)
+    // couche REFLET additive du large (blend DST_ALPHA,ONE)
     fragment_color.a = 0;
   }
 }

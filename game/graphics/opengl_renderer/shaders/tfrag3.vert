@@ -4,8 +4,8 @@ layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;
 layout (location = 2) in ivec2 time_of_day_index;  // (index A, index B) : milieux de subdivision = moyenne
 layout (location = 3) in vec4 normal_in;  // normales lissées (subdiv Phong)
-layout (location = 4) in vec4 crown_in;   // squelette de couronne : fr, az, hn, id
-// PC-REMAKE : decor affine — 3e index de couleur peinte + poids (index3 | poids0 << 16 | poids1 << 24)
+layout (location = 4) in vec4 crown_in;  // squelette de couronne : fr, az, hn, id
+// decor affine
 layout (location = 6) in uint color3_in;
 
 uniform vec4 hvdf_offset;
@@ -17,15 +17,13 @@ uniform float fog_min;
 uniform float fog_max;
 uniform sampler1D tex_T10; // note, sampled in the vertex shader on purpose.
 uniform int decal;
-// PC-REMAKE : feuillages fondus dans le terrain (palmiers penchés). Leurs
-// sommets portent s+100 ; on retire l'offset et on fait onduler en espace monde.
+// feuillages fondus dans le terrain (palmiers penchés)
 uniform float wind_time;
 uniform float tfrag_wind_amp;  // amplitude réglable au REPL, 0 = figé
-uniform float palm_debug;      // 1 = draw ciblé par la chirurgie : peint en violet
-uniform float fronde_pli;      // PC-REMAKE : palmes pliees en V (voir tie_wind.vert), 0 = cartes d'origine
+uniform float palm_debug;  // 1 = draw ciblé par la chirurgie : peint en violet
+uniform float fronde_pli;  // palmes pliees en V (voir tie_wind.vert), 0 = cartes d'origine
 
-// 26/10 : 2 = lave en fusion : la houle lente (meme code que lv_houle de tfrag3.frag) souleve
-// vraiment la surface (+-9 cm)
+// 2 = lave en fusion
 uniform float lava_kind;
 float lv_houle(vec2 m, float t) {
   vec2 w = m + 0.9 * vec2(sin(m.y * 0.23 + t * 0.07), sin(m.x * 0.19 - t * 0.05));
@@ -38,17 +36,16 @@ float lv_houle(vec2 m, float t) {
 out vec4 fragment_color;
 out vec3 tex_coord;
 out float fogginess;
-// PC-REMAKE sun shadows: vertex position in light clip space
+// sun shadows: vertex position in light clip space
 uniform mat4 sun_light_vp;
 out vec4 sun_light_pos;
-// normale monde vers le fragment : biais d'ombre proportionnel à la pente
-// (les falaises frémissaient sous le soleil fluide — 17/08)
+// normale monde vers le fragment
 out vec3 w_nor;
-flat out float v_foliage;  // 17/10 : 1 = feuille marquee (s > 50), voir tfrag3.frag
-// 21/09 : distance camera->sommet (unites jeu) pour le fondu du detail des sols
+flat out float v_foliage;  // 1 = feuille marquee (s > 50), voir tfrag3.frag
+// distance camera->sommet (unites jeu) pour le fondu du detail des sols
 out float v_dist;
 out vec3 v_pos_w;  // position monde (grain procedural des sols, ancre au monde)
-out vec3 v_vue;    // PC-REMAKE : camera -> sommet (parallaxe de la sculpture du decor)
+out vec3 v_vue;  // camera -> sommet (parallaxe de la sculpture du decor)
 
 void main() {
   // old system:
@@ -67,7 +64,7 @@ void main() {
 
 
   // Step 3, the camera transform
-  // feuilles marquées (s > 50) : houle douce en espace monde, tronc immobile
+  // feuilles marquées (s > 50)
   vec3 pos_w = position_in;
   vec3 tc_in = tex_coord_in;
   v_foliage = 0.0;
@@ -75,23 +72,16 @@ void main() {
     tc_in.x -= 100.0;
     v_foliage = 1.0;
 
-    // Palmiers fondus dans le terrain : MÊME recette que les palmiers TIE
-    // validés — battement feuille à feuille le long de la NORMALE (phases
-    // courtes entre feuilles) + houle de couronne légère. Amplitude pilotée
-    // au REPL (pc-set-palm-wind! z).
+    // Palmiers fondus dans le terrain
     if (tfrag_wind_amp > 0.5) {
-      // CODE DÉDIÉ AUX PALMIERS PENCHÉS : la couronne SE BALANCE EN BLOC
-      // autour de son centre (champ de ROTATION — continu par construction,
-      // sin/cos de l'angle ne sautent jamais, donc zéro déchirure possible)
-      // + léger affaissement des pointes. C'est le mouvement validé des
-      // palmiers TIE, écrit sur le squelette de couronne.
+      // CODE DÉDIÉ AUX PALMIERS PENCHÉS
       float fr = crown_in.x;
       float az = crown_in.y * 6.2831853;
       float ph = crown_in.w * 15.0;  // phase propre à la couronne
       float t = wind_time;
       // angle de balancement de la couronne (radians, doux)
       float rock = sin(t * 1.5 + ph) + 0.45 * sin(t * 2.6 + ph * 1.7 + 1.3);
-      // tangentielle = rotation autour de l'axe : continue partout
+      // tangentielle = rotation autour de l'axe
       vec2 tangent = vec2(-sin(az), cos(az)) * fr;
       float amp = tfrag_wind_amp * 0.55;
       pos_w.xz += tangent * (rock * amp);
@@ -100,8 +90,7 @@ void main() {
     }
   }
 
-  // PC-REMAKE : palme pliee en V le long de sa nervure (s = 0), folioles retombantes vers la pointe
-  // (dessins a texture de palme seulement : fronde_pli pose par dessin)
+  // palme pliee en V le long de sa nervure (s = 0), folioles retombantes vers la pointe
   if (fronde_pli > 0.0) {
     float sp = clamp(tc_in.x, 0.0, 1.0);
     pos_w.y += fronde_pli * 0.22 * 4096.0 * (1.6 * sp - 0.9 * sp * sp);
@@ -125,15 +114,14 @@ void main() {
   // scissoring area adjust
   transformed.y *= SCISSOR_ADJUST * HEIGHT_SCALE;
   gl_Position = transformed;
-  // PC-REMAKE sun shadows
+  // sun shadows
   sun_light_pos = sun_light_vp * vec4(pos_w, 1.0);
   w_nor = normal_in.xyz;
 
   // time of day lookup
-  // (original : 0.5 * (A + B) seulement)
   uint cw0 = (color3_in >> 16) & 0xffu, cw1 = (color3_in >> 24) & 0xffu;
   if (cw0 + cw1 > 0u) {
-    // PC-REMAKE : sommet du decor affine — melange des couleurs des trois coins du triangle d'origine
+    // sommet du decor affine
     float a = float(cw0) / 255.0, b = float(cw1) / 255.0;
     fragment_color = a * texelFetch(tex_T10, time_of_day_index.x, 0) +
                      b * texelFetch(tex_T10, time_of_day_index.y, 0) +
@@ -150,7 +138,7 @@ void main() {
     fragment_color.xyz = vec3(1.0, 1.0, 1.0);
   }
 
-  // test d'identité des penchés : draws terrain ciblés peints en violet
+  // test d'identité des penchés
   if (palm_debug > 0.5) {
     fragment_color.rgb = vec3(6.0, 0.3, 6.0);
   }

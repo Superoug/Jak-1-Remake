@@ -1,39 +1,31 @@
 #version 410 core
-// PC-REMAKE 20/10 — RAYONS DE SOLEIL VOLUMETRIQUES (jungle), calcules au QUART de la
-// resolution puis adoucis (shafts_blur.frag) avant d'etre ajoutes par le post : sans grain.
-// Le regard est suivi de la camera au pixel (70 m au plus) ; a chaque pas, la carte d'ombres
-// du soleil dit si le soleil y passe, et un point voisin (~3 m) s'il est a l'ombre. Seul
-// compte l'air ECLAIRE A COTE DE L'OMBRE : les colonnes de lumiere des trouees du feuillage
-// (une clairiere en plein soleil ne voile pas l'image).
+// RAYONS DE SOLEIL VOLUMETRIQUES (jungle), calcules au QUART de la resolution puis adoucis
 
 in vec2 tex_coord;
 out vec4 color;
 
-uniform sampler2D depth_tex;        // unite 15 : profondeur resolue (inversee : 0 = ciel)
+uniform sampler2D depth_tex;  // unite 15 : profondeur resolue (inversee : 0 = ciel)
 uniform sampler2DShadow sun_shadow_tex;  // unite 14
 uniform mat4 sun_light_vp;
 uniform mat4 inv_camera;
 uniform vec4 cam_trans;
-uniform vec4 sun_dir;               // vers le soleil, w = 1 si valide
-uniform float shaft_indoor;         // 0 = dehors (jungle), 1 = interieur (cabane de Samos)
-uniform float shaft_time;           // 22/10 : temps (s), mouvement du feuillage des faisceaux
+uniform vec4 sun_dir;  // vers le soleil, w = 1 si valide
+uniform float shaft_indoor;  // 0 = dehors (jungle), 1 = interieur (cabane de Samos)
+uniform float shaft_time;  // temps (s), mouvement du feuillage des faisceaux
 
-// ---- 22/10 : FAISCEAUX DE CANOPEE (jungle). Des colonnes de lumiere descendent du feuillage,
-// meme la ou le vrai soleil ne passe pas : elles tombent d'en haut (axe L presque vertical,
-// penche de ~20 degres vers le soleil). Une colonne par cellule de 7 m, une cellule sur trois
-// environ. Meme code dans post_processing.frag (taches de lumiere au sol).
+// --- FAISCEAUX DE CANOPEE (jungle)
 const float CB_CELL = 7.0;
 vec3 cb_axis(vec3 to_sun) {
   return normalize(vec3(to_sun.x * 0.36, 1.0, to_sun.z * 0.36));
 }
-// projection le long de L sur le plan y = 0 (metres) : une colonne y devient un point
+// projection le long de L sur le plan y = 0 (metres)
 vec2 cb_proj(vec3 p_m, vec3 L) {
   return p_m.xz - L.xz / L.y * p_m.y;
 }
 float cb_hash(vec2 c, float k) {
   return fract(sin(dot(c, vec2(127.1, 311.7)) + k * 74.7) * 43758.5453);
 }
-// colonne de la cellule : centre (m), rayon (m), poids (0 = pas de colonne)
+// colonne de la cellule
 vec4 cb_beam(vec2 cell, float t) {
   if (cb_hash(cell, 0.0) > 0.24) {
     return vec4(0.0);
@@ -43,16 +35,14 @@ vec4 cb_beam(vec2 cell, float t) {
   vec2 off = vec2(cb_hash(cell, 2.0), cb_hash(cell, 3.0));
   vec2 ctr = cell * CB_CELL + vec2(r) + off * (CB_CELL - 2.0 * r);
   float w = mix(0.55, 1.0, cb_hash(cell, 4.0));
-  // le feuillage bouge : la colonne respire doucement
+  // le feuillage bouge
   w *= 0.78 + 0.22 * sin(t * (0.45 + 0.35 * h) + 6.2832 * cb_hash(cell, 5.0));
   return vec4(ctr, r, w);
 }
 float cb_erf(float x) {
   return tanh(1.202 * x + 0.083 * x * x * x);
 }
-// une colonne n'a de source que s'il y a du ciel au-dessus du feuillage : le vrai soleil
-// doit eclairer l'un des points 12 m ou 24 m plus haut le long de L (sous la canopee : oui ;
-// dans une salle enterree ou sous un toit : non). Hors de la carte d'ombres : oui.
+// une colonne n'a de source que s'il y a du ciel au-dessus du feuillage
 float cb_ciel(vec3 q, vec3 L) {
   for (int i = 1; i <= 2; i++) {
     vec3 s = (sun_light_vp * vec4(q + L * (12.0 * 4096.0 * float(i)), 1.0)).xyz * 0.5 + 0.5;
@@ -91,9 +81,7 @@ void main() {
     slen = min(length(sdv), 4096.0 * 70.0);
     sdir = sdv / max(length(sdv), 1.0);
   }
-  // 26/10 : dans la cabane de Samos, seul compte l'air DE la cabane : le regard s'arrete a la
-  // sortie du volume (cylindre de pc_hut_inside, post_processing.frag). Avant, l'air au soleil
-  // du dehors, vu par l'ouverture, faisait un grand voile clair jusqu'a ce que la camera sorte.
+  // dans la cabane de Samos, seul compte l'air DE la cabane
   if (shaft_indoor > 0.001) {
     vec3 o = cam_trans.xyz * (1.0 / 4096.0);
     vec2 oc = o.xz - vec2(-130.5, 208.4);
@@ -131,15 +119,9 @@ void main() {
   sshaft /= float(NS);
   float smu = max(dot(sdir, sun_dir.xyz), 0.0);
   float sphase = 0.6 + 1.3 * pow(smu, 6.0);
-  // epaisseur d'air : 40 m dehors, 6 m dans une piece (sinon les rayons d'une petite piece
-  // restaient a 20 % de leur force)
+  // epaisseur d'air
   float sdepth = 1.0 - exp(-slen / (4096.0 * mix(40.0, 6.0, shaft_indoor)));
-  // 22/10 : faisceaux de canopee (canal vert), dehors seulement. Le regard [0, slen] est
-  // projete le long de L : il traverse les cellules en ligne droite (parcours de grille) ; pour
-  // chaque colonne rencontree, la lumiere de son profil gaussien le long du regard est
-  // integree exactement. Elle ne compte que dans l'air A L'OMBRE du vrai soleil (sous le
-  // feuillage) : en plein soleil, la vraie lumiere suffit, et au-dessus du feuillage la colonne
-  // n'existe pas encore.
+  // faisceaux de canopee (canal vert), dehors seulement
   float cb = 0.0;
   if (shaft_indoor < 0.5) {
     vec3 L = cb_axis(sun_dir.xyz);
@@ -171,7 +153,7 @@ void main() {
           vec3 qs = (sun_light_vp * vec4(q, 1.0)).xyz * 0.5 + 0.5;
           float ombre = 0.0;
           if (qs.x > 0.01 && qs.x < 0.99 && qs.y > 0.01 && qs.y < 0.99 && qs.z < 1.0) {
-            // 4 points ecartes (~1 m) : la colonne s'eteint en douceur a la lisiere du feuillage
+            // 4 points ecartes (~1 m)
             vec2 o = vec2(1.0 / 240.0, 0.0);
             ombre = 1.0 - 0.25 * (texture(sun_shadow_tex, vec3(qs.xy + o, qs.z - 0.002)) +
                                   texture(sun_shadow_tex, vec3(qs.xy - o, qs.z - 0.002)) +
@@ -181,11 +163,10 @@ void main() {
           if (ombre > 0.01) {
             ombre *= cb_ciel(q, L);
           }
-          // au loin, la brume reprend la main ; pres de la camera (et donc de Jak), rien : vue
-          // a quelques metres, une colonne se lisait comme une bande plaquee sur l'image
+          // au loin, la brume reprend la main
           float tcc = clamp(tc, 0.0, tmax);
           float loin = (1.0 - smoothstep(35.0, 70.0, tcc)) * smoothstep(6.0, 14.0, tcc);
-          // stries le long de l'axe : la lumiere passe entre les feuilles en fins filets
+          // stries le long de l'axe
           vec2 ax = normalize(vec2(-V.y, V.x) + vec2(1e-5, 0.0));
           float u = dot(dv, ax) / b.z;
           float stries = 0.55 + 0.45 * sin(u * 9.0 + b.x * 3.1) * sin(u * 4.3 - b.y * 2.3 + 1.7);

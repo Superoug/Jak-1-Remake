@@ -22,9 +22,7 @@ void FrameTimeRecorder::finish_frame() {
   m_frame_times[m_idx++] = m_compute_timer.getMs();
   if (m_idx == SIZE) {
     m_idx = 0;
-    // PERF 25/08 : temps de TRAVAIL reel (hors attente vsync/limiteur) —
-    // moyenne + 3 pires sur 300 frames. La sonde [QA-PERF] du swap mesure la
-    // cadence percue ; celle-ci mesure le cout. A retirer apres la passe.
+    // PERF temps de TRAVAIL reel (hors attente vsync/limiteur)
     float sorted[SIZE];
     memcpy(sorted, m_frame_times, sizeof(sorted));
     std::sort(sorted, sorted + SIZE);

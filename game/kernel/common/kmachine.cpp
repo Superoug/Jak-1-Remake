@@ -1292,13 +1292,9 @@ void pc_screen_shot() {
   g_want_screenshot = true;
 }
 
-// PC-REMAKE: grass interaction. GOAL floats arrive bit-cast in the u32 args
-// (same convention as pc_filter_debug_string's dist). Stores Jak's world
-// position + push strength for the Shrub renderer.
-// Defined in game/graphics/opengl_renderer/background/background_common.cpp;
-// declared here directly to keep graphics headers out of the kernel.
+// grass interaction
 extern float g_grass_push[4];
-// 20/10 : pas de Jak sur la neige (traces, background_common.cpp) — w = 0.5 neige, 1 profonde
+// pas de Jak sur la neige (traces, background_common.cpp)
 extern float g_snow_step[4];
 void pc_set_snow_step(u32 x_bits, u32 y_bits, u32 z_bits, u32 kind_bits) {
   memcpy(&g_snow_step[0], &x_bits, 4);
@@ -1307,7 +1303,7 @@ void pc_set_snow_step(u32 x_bits, u32 y_bits, u32 z_bits, u32 kind_bits) {
   memcpy(&g_snow_step[3], &kind_bits, 4);
 }
 
-// 20/10 : pendant une cinematique, l'herbe autour de Jak se couche (shrub.vert, grass_clear)
+// pendant une cinematique, l'herbe autour de Jak se couche
 extern float g_grass_clear[4];
 void pc_set_grass_clear(u32 x_bits, u32 y_bits, u32 z_bits, u32 amount_bits) {
   memcpy(&g_grass_clear[0], &x_bits, 4);
@@ -1323,8 +1319,7 @@ void pc_set_grass_push(u32 x_bits, u32 y_bits, u32 z_bits, u32 strength_bits) {
   memcpy(&g_grass_push[3], &strength_bits, 4);
 }
 
-// PC-REMAKE: presentation post effects (bloom / saturation / warmth).
-// Same float bit-cast convention; storage in background_common.cpp.
+// presentation post effects (bloom / saturation / warmth)
 extern float g_post_fx[4];
 void pc_set_post_fx(u32 bloom_bits, u32 thresh_bits, u32 sat_bits, u32 warmth_bits) {
   memcpy(&g_post_fx[0], &bloom_bits, 4);
@@ -1333,7 +1328,7 @@ void pc_set_post_fx(u32 bloom_bits, u32 thresh_bits, u32 sat_bits, u32 warmth_bi
   memcpy(&g_post_fx[3], &warmth_bits, 4);
 }
 
-// PC-REMAKE: sun shadow direction (xyz, world) + strength (0 disables).
+// sun shadow direction (xyz, world) + strength (0 disables)
 extern float g_sun_shadow_params[4];
 void pc_set_sun_shadow(u32 x_bits, u32 y_bits, u32 z_bits, u32 strength_bits) {
   memcpy(&g_sun_shadow_params[0], &x_bits, 4);
@@ -1342,12 +1337,9 @@ void pc_set_sun_shadow(u32 x_bits, u32 y_bits, u32 z_bits, u32 strength_bits) {
   memcpy(&g_sun_shadow_params[3], &strength_bits, 4);
 }
 
-// PC-REMAKE 25/08 : qualite des effets — (pc-set-fx-quality! reflets halos
-// contact) avec reflets 0/1/2, halos 0/1, contact 0/1. Defaut 2 1 1.
+// qualite des effets
 extern float g_fx_quality[4];
-// 22/09 : 4e parametre = gain des LENS FLARES (float bits, 0 = off, 1 = leger)
-// RENDU REMAKE : (pc-set-grade! dose nettete vignette etalonnage) et
-// (pc-set-grade2! exposition contraste saturation 0)
+// 4e parametre = gain des LENS FLARES (float bits, 0 = off, 1 = leger) RENDU REMAKE
 extern float g_grade_fx[4];
 extern float g_grade_amt2[4];
 void pc_set_grade(u32 a, u32 b, u32 c, u32 d) {
@@ -1369,7 +1361,7 @@ void pc_set_fx_quality(u32 reflets, u32 halos, u32 contact, u32 flare_bits) {
   memcpy(&g_fx_quality[3], &flare_bits, 4);
 }
 
-// PC-REMAKE: toon / cel-shading post pass (posterize, edges, levels).
+// toon / cel-shading post pass (posterize, edges, levels)
 extern float g_toon_fx[4];
 void pc_set_toon_fx(u32 poster_bits, u32 edge_bits, u32 levels_bits, u32 unused_bits) {
   memcpy(&g_toon_fx[0], &poster_bits, 4);
@@ -1378,10 +1370,7 @@ void pc_set_toon_fx(u32 poster_bits, u32 edge_bits, u32 levels_bits, u32 unused_
   memcpy(&g_toon_fx[3], &unused_bits, 4);
 }
 
-// PC-REMAKE: real-time ocean simulation — advances one step and overwrites the
-// interpolated heightmap (1024 u8) at the given EE address. Implemented in
-// background_common.cpp (free-function bridge to keep graphics types out of
-// the kernel).
+// real-time ocean simulation
 extern void ocean_sim_step_and_export(float* dst_1024);
 extern void ocean_sim_set_gain(float g);
 void pc_set_ocean_gain(u32 gain_bits) {
@@ -1393,7 +1382,7 @@ void pc_ocean_sim(u32 dst_ptr) {
   ocean_sim_step_and_export((float*)Ptr<u8>(dst_ptr).c());
 }
 
-// PC-REMAKE: rebuilt lighting rig (god rays, sun relight, ambient, spec).
+// rebuilt lighting rig (god rays, sun relight, ambient, spec)
 extern float g_light_fx[4];
 extern float g_sky_color[4];
 extern float g_ground_color[4];
@@ -1403,8 +1392,7 @@ void pc_set_light_fx(u32 ray_bits, u32 sun_bits, u32 amb_bits, u32 spec_bits) {
   memcpy(&g_light_fx[2], &amb_bits, 4);
   memcpy(&g_light_fx[3], &spec_bits, 4);
 }
-// PC-REMAKE night rig. x = night amount (0 day .. 1 night), y = lamp reach
-// multiplier, z = lamp brightness.
+// night rig. x = night amount
 extern float g_night_fx[4];
 void pc_remake_lamps_begin_frame();
 void pc_remake_add_lamp(float x, float y, float z, float radius, float r, float g, float b,
@@ -1415,20 +1403,14 @@ void pc_remake_remove_static_lamp(long long id);
 
 extern float g_shaft_amt;
 void pc_set_night_fx(u32 night_bits, u32 reach_bits, u32 bright_bits, u32 shaft_bits) {
-  // 20/10 : 4e parametre (libre jusque-la) = dose des rayons de soleil volumetriques
+  // 4e parametre (libre jusque-la) = dose des rayons de soleil volumetriques
   memcpy(&g_shaft_amt, &shaft_bits, 4);
   memcpy(&g_night_fx[0], &night_bits, 4);
   memcpy(&g_night_fx[1], &reach_bits, 4);
   memcpy(&g_night_fx[2], &bright_bits, 4);
 }
 
-// Register one local light for this frame. `kind` picks the colour so the call
-// stays inside the 6 register arguments OpenGOAL passes.
-//   0 = warm pickup   1 = green eco   2 = blue eco   3 = fire
-//   4 = village street lamp (same warm colour, but never dropped in favour of
-//       a pickup that happens to be closer)
-// PC-REMAKE 20/10 : un faisceau d'eco (segment monde) pour cette image — le post en fait une
-// lumiere en tube la nuit (post_processing.frag, beam_seg).
+// Register one local light for this frame
 void pc_remake_add_beam(float x0, float y0, float z0, float x1, float y1, float z1);
 void pc_add_beam(u32 x0, u32 y0, u32 z0, u32 x1, u32 y1, u32 z1) {
   float f[6];
@@ -1445,36 +1427,25 @@ void pc_add_lamp(u32 x_bits, u32 y_bits, u32 z_bits, u32 rad_bits, u32 int_bits,
   memcpy(&rad, &rad_bits, 4);
   memcpy(&inten, &int_bits, 4);
   static const float kColors[7][3] = {
-      // 19/08 (modele unifie) : les LAMPES eclairent blanc chaud, mais les
-      // ECOS teintent FRANC — sous une lampe d'eco verte, le monde est vert
-      // (objectif : eclairer de differentes couleurs suivant les
-      // ecos). Le modele lineaire rend ces teintes sans les cramer.
+      // (modele unifie)
       {1.00f, 0.88f, 0.62f},  // 0 warm pickup (pile d'energie : or chaud)
       {0.28f, 1.00f, 0.40f},  // 1 green eco : VERT franc
-      // 25/10 : bleu cyan de l'eco bleu du jeu (v1 : 0.25, 0.55, 1.00 — bleu profond qui
-      // virait au violet sur les sols bruns de la jungle)
+      // bleu cyan de l'eco bleu du jeu
       {0.36f, 0.74f, 1.00f},  // 2 blue eco : BLEU franc
       {1.00f, 0.58f, 0.24f},  // 3 fire : orange feu
       {1.00f, 0.84f, 0.66f},  // 4 village street lamp : blanc chaud
-      {1.00f, 0.85f, 0.12f},  // 5 yellow eco : JAUNE franc (19/08, eco porte)
+      {1.00f, 0.85f, 0.12f},  // 5 yellow eco : JAUNE franc (eco porte)
       {1.00f, 0.26f, 0.10f},  // 6 red eco : ROUGE franc
   };
   static const int kPriority[7] = {0, 0, 0, 1, 2, 0, 0};
   u32 k = kind < 7 ? kind : 0;
-  // famille ECO (1,2,5,6) : intensite NEGATIVE = la convention visible de
-  // jour du modele unifie — l'eco rayonne sa couleur a toute heure
+  // famille ECO (1,2,5,6)
   bool eco = (k == 1 || k == 2 || k == 5 || k == 6);
   pc_remake_add_lamp(x, y, z, rad, kColors[k][0], kColors[k][1], kColors[k][2],
                      eco ? -inten : inten, kPriority[k]);
 }
 
-// Same as pc-add-lamp!, but the lamp is a fixture: it stays registered after
-// the game pauses or unloads its actor. `id` is the entity address, so a lamp
-// re-registering itself updates its slot instead of adding a duplicate.
-//
-// Deliberately six arguments: nothing else in this codebase passes more, and
-// the GOAL->C convention is only exercised up to six. The colour is fixed here
-// (a village street lamp) rather than passed as a seventh `kind`.
+// Same as pc-add-lamp!, but the lamp is a fixture: it stays registered after the game pauses or
 void pc_add_static_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u32 rad_bits, u32 int_bits) {
   float x, y, z, rad, inten;
   memcpy(&x, &x_bits, 4);
@@ -1485,11 +1456,7 @@ void pc_add_static_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u32 rad_bits
   pc_remake_add_static_lamp((long long)id, x, y, z, rad, 1.00f, 0.52f, 0.16f, inten, 2);
 }
 
-// PC-REMAKE: every eco pickup emits a soft glow in its own colour, visible even
-// in daylight. The NEGATIVE intensity is the shader-side
-// marker for "keeps a presence at day"; the colour comes from the pickup-type
-// (fact-h.gc: 1 yellow, 2 red, 3 blue, 4 green). Keyed by entity address like
-// the street lamps, so respawns update their slot instead of duplicating.
+// every eco pickup emits a soft glow in its own colour, visible even in daylight
 void pc_remove_eco_lamp(u64 id) {
   pc_remake_remove_static_lamp((long long)id);
 }
@@ -1499,8 +1466,7 @@ void pc_add_eco_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u64 pickup_type
   memcpy(&y, &y_bits, 4);
   memcpy(&z, &z_bits, 4);
   float r, g, b;
-  // couleurs PROFONDES : le gain multiplicatif du shader délave les teintes
-  // pâles (la lumière ne paraissait pas bleue)
+  // couleurs PROFONDES
   switch (pickup_type) {
     case 1:  // eco-yellow
       r = 1.00f, g = 0.78f, b = 0.10f;
@@ -1509,7 +1475,7 @@ void pc_add_eco_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u64 pickup_type
       r = 1.00f, g = 0.22f, b = 0.10f;
       break;
     case 3:  // eco-blue
-      // 25/10 : bleu cyan (v1 : 0.10, 0.45, 1.00 — bleu violent dans la jungle)
+      // bleu cyan
       r = 0.28f, g = 0.68f, b = 1.00f;
       break;
     case 4:  // eco-green
@@ -1518,16 +1484,13 @@ void pc_add_eco_lamp(u64 id, u32 x_bits, u32 y_bits, u32 z_bits, u64 pickup_type
     default:
       return;  // money, fuel cells etc. keep their own systems
   }
-  // rayon 10 m / intensité 1.6, et la source ANCRÉE AU SOL (l'amas flotte à
-  // ~3 m : posée à sa hauteur, la flaque au sol restait fantôme)
+  // rayon 10 m / intensité 1.6, et la source ANCRÉE AU SOL
   constexpr float kRadius = 10.f * 4096.f;
   pc_remake_add_static_lamp((long long)id, x, y - 2.f * 4096.f, z, kRadius, r, g, b, -1.6f, 1);
   lg::info("PC-REMAKE eco lamp: type {} at ({:.0f}, {:.0f}, {:.0f})", pickup_type, x, y, z);
 }
 
-// PC-REMAKE : réglage en direct du vent des palmiers, pour calibrer
-// au REPL sans recompiler. (houle TIE, battement feuilles TIE,
-// amplitude terrain, réserve)
+// réglage en direct du vent des palmiers, pour calibrer au REPL sans recompiler
 extern float g_palm_wind[4];
 void pc_set_palm_wind(u32 a, u32 b, u32 c, u32 d) {
   memcpy(&g_palm_wind[0], &a, 4);
@@ -1536,15 +1499,9 @@ void pc_set_palm_wind(u32 a, u32 b, u32 c, u32 d) {
   memcpy(&g_palm_wind[3], &d, 4);
 }
 
-// scintillement de l'eau : forces jour/nuit côté GOAL ; le NIVEAU de la mer
-// vient du rendu océan C++ (lire *ocean-map* per-frame côté GOAL crashait sur
-// pointeur pendouillant pendant les transitions de niveau — 17/08). Une
-// sentinelle < -900000 signifie ne touche pas au niveau.
+// scintillement de l'eau
 extern float g_water_glitter[4];
-// PC-REMAKE 25/10 : JAK MOUILLE (merc2.frag) — x = haut du corps (0..1), y = jambes (0..1),
-// z = hauteur mouillee au-dessus des pieds (unites du jeu), w = hauteur des pieds (monde) ;
-// et JAK DANS L'EAU (ondes, post_processing.frag) : x = 0 hors de l'eau / 1 patauge / 2 nage,
-// y = hauteur de la surface (monde)
+// JAK MOUILLE (merc2.frag)
 extern float g_jak_mouille[4];
 extern float g_jak_eau[2];
 void pc_set_jak_wet(u32 top, u32 low, u32 line, u32 feet, u32 state, u32 surf) {
@@ -1556,11 +1513,29 @@ void pc_set_jak_wet(u32 top, u32 low, u32 line, u32 feet, u32 state, u32 surf) {
   memcpy(&g_jak_eau[1], &surf, 4);
 }
 
-// PC-REMAKE 27/10 : LUCIOLES (vie_air.vert) — lieu de la camera : 0 rien, 1 village (autour des
-// lampes), 2 foret (jungle)
+// LUCIOLES (vie_air.vert)
 extern int g_vie_zone;
 void pc_set_vie_zone(u32 zone) {
   g_vie_zone = (int)zone;
+}
+
+// JAK ENNEIGE (merc2.frag, jak_neige)
+extern float g_jak_neige[4];
+void pc_set_jak_snow(u32 top, u32 low, u32 line, u32 feet) {
+  memcpy(&g_jak_neige[0], &top, 4);
+  memcpy(&g_jak_neige[1], &low, 4);
+  memcpy(&g_jak_neige[2], &line, 4);
+  memcpy(&g_jak_neige[3], &feet, 4);
+}
+
+// METEO ENRICHIE (pc_meteo_run, meteo.vert)
+extern int g_meteo_kind;
+extern int g_meteo_pause;
+void pc_set_meteo(u32 kind, u32 pause) {
+  g_meteo_pause = (int)pause;
+  if (!pause) {
+    g_meteo_kind = (int)kind;  // en pause les ambiances (abris) ne sont pas calculees
+  }
 }
 
 void pc_set_water_glitter(u32 sea, u32 day, u32 night) {
@@ -1568,12 +1543,7 @@ void pc_set_water_glitter(u32 sea, u32 day, u32 night) {
   memcpy(&fsea, &sea, 4);
   memcpy(&fday, &day, 4);
   memcpy(&fnight, &night, 4);
-  // VERROU ANTI-COURSE (25/08, eau qui clignotait / disparaissait) : main.gc
-  // desarme CHAQUE frame GOAL puis draw-ocean re-arme — le thread de rendu qui
-  // lisait entre les deux peignait une frame sans aucun effet d'eau (prouve par
-  // [QA-GLITTER] : 1 lecture desarmee sur ~2000, pire en mouvement). Le
-  // desarmement ne prend effet qu'apres 20 appels consecutifs sans re-armement
-  // (~0,3 s — vrai changement de niveau), jamais dans la fenetre de course.
+  // VERROU ANTI-COURSE (eau qui clignotait / disparaissait)
   static int s_disarm_streak = 0;
   if (fday > 0.001f || fnight > 0.001f) {
     s_disarm_streak = 0;
@@ -1588,24 +1558,61 @@ void pc_set_water_glitter(u32 sea, u32 day, u32 night) {
   }
 }
 
+// lumiere des nuages en volume
+extern float g_cloud_light[8];
+void pc_set_cloud_light(u32 sr, u32 sg, u32 sb, u32 er, u32 eg, u32 eb) {
+  memcpy(&g_cloud_light[0], &sr, 4);
+  memcpy(&g_cloud_light[1], &sg, 4);
+  memcpy(&g_cloud_light[2], &sb, 4);
+  memcpy(&g_cloud_light[4], &er, 4);
+  memcpy(&g_cloud_light[5], &eg, 4);
+  memcpy(&g_cloud_light[6], &eb, 4);
+}
+// couverture nuageuse en % (0 = ciel d'origine) PC-REMAKE
+extern float g_moon[4];
+void pc_set_moon(u32 x, u32 y, u32 z, u32 heure) {
+  float v[4];
+  memcpy(&v[0], &x, 4);
+  memcpy(&v[1], &y, 4);
+  memcpy(&v[2], &z, 4);
+  memcpy(&v[3], &heure, 4);
+  const float l = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  if (l > 1e-6f) {
+    g_moon[0] = v[0] / l;
+    g_moon[1] = v[1] / l;
+    g_moon[2] = v[2] / l;
+  }
+  g_moon[3] = v[3];
+}
+// EAU VIVANTE
+float pc_eau_houle(float x, float z);
+void pc_eau_houle_goal(u32 vec_ptr) {
+  auto v = Ptr<float>(vec_ptr).c();
+  if (v) {
+    v[1] = pc_eau_houle(v[0] / 4096.f, v[2] / 4096.f) * 4096.f;
+  }
+}
+void pc_set_nuages(u32 couverture) {
+  g_cloud_light[3] = couverture ? 1.f : 0.f;
+  g_cloud_light[7] = (float)std::min(couverture, 100u) / 100.f;
+}
 void pc_set_sky_ambient(u32 sr, u32 sg, u32 sb, u32 gr) {
   memcpy(&g_sky_color[0], &sr, 4);
   memcpy(&g_sky_color[1], &sg, 4);
   memcpy(&g_sky_color[2], &sb, 4);
   memcpy(&g_ground_color[0], &gr, 4);
 }
-// PC-REMAKE 21/09 : le 3e parametre porte le drapeau niveau interieur (grottes,
-// cite engloutie, temple, citadelle : pas de soleil, pas de nuit) dans ground_color.w.
+// le 3e parametre porte le drapeau niveau interieur
 extern float g_pc_detail_menu;
 void pc_set_ground_ambient(u32 gg, u32 gb, u32 interior_bits, u32 detail_bits) {
   memcpy(&g_ground_color[1], &gg, 4);
   memcpy(&g_ground_color[2], &gb, 4);
   memcpy(&g_ground_color[3], &interior_bits, 4);
-  // 21/09 : gain du detail des sols (menu Remake, 1.0 = 100 %)
+  // gain du detail des sols (menu Remake, 1.0 = 100 %)
   memcpy(&g_pc_detail_menu, &detail_bits, 4);
 }
 
-// PC-REMAKE: depth-aware post (SSAO, aerial fog, DOF, filmic tonemap).
+// depth-aware post (SSAO, aerial fog, DOF, filmic tonemap)
 extern float g_depth_fx[4];
 void pc_set_depth_fx(u32 ssao_bits, u32 fog_bits, u32 dof_bits, u32 tonemap_bits) {
   memcpy(&g_depth_fx[0], &ssao_bits, 4);
@@ -1784,10 +1791,16 @@ void init_common_pc_port_functions(
   make_func_symbol_func("pc-set-depth-fx!", (void*)pc_set_depth_fx);
   make_func_symbol_func("pc-set-light-fx!", (void*)pc_set_light_fx);
   make_func_symbol_func("pc-set-sky-ambient!", (void*)pc_set_sky_ambient);
+  make_func_symbol_func("pc-set-cloud-light!", (void*)pc_set_cloud_light);
+  make_func_symbol_func("pc-set-nuages!", (void*)pc_set_nuages);
+  make_func_symbol_func("pc-set-moon!", (void*)pc_set_moon);
   make_func_symbol_func("pc-set-night-fx!", (void*)pc_set_night_fx);
   make_func_symbol_func("pc-add-lamp!", (void*)pc_add_lamp);
   make_func_symbol_func("pc-set-jak-wet!", (void*)pc_set_jak_wet);
   make_func_symbol_func("pc-set-vie-zone!", (void*)pc_set_vie_zone);
+  make_func_symbol_func("pc-set-meteo!", (void*)pc_set_meteo);
+  make_func_symbol_func("pc-eau-houle!", (void*)pc_eau_houle_goal);
+  make_func_symbol_func("pc-set-jak-snow!", (void*)pc_set_jak_snow);
   make_func_symbol_func("pc-add-beam!", (void*)pc_add_beam);
   make_func_symbol_func("pc-add-static-lamp!", (void*)pc_add_static_lamp);
   make_func_symbol_func("pc-add-eco-lamp!", (void*)pc_add_eco_lamp);

@@ -1,20 +1,16 @@
 #version 410 core
-// PC-REMAKE 27/10 — BLOOM LARGE, STABILISATION dans le temps. Le halo de cette image est
-// melange a celui de l'image precedente, recale sur le mouvement de la camera (profondeur de
-// la scene). Une lueur qui ne dure qu'une image (eclair de soudure, etincelle, petite lampe
-// qui saute d'un pixel en tournant) ne fait plus pulser tout son halo ; la moyenne, donc la
-// clarte, ne change pas.
+// BLOOM LARGE, STABILISATION dans le temps
 
 in vec2 tex_coord;
 out vec4 color;
 
-uniform sampler2D src_tex;           // unite 0 : bloom de cette image (niveau 1/2)
-uniform sampler2D hist_tex;          // unite 6 : bloom stabilise de l'image precedente
-uniform sampler2D depth_tex;         // unite 15 : profondeur resolue (inversee : 0 = ciel)
-uniform mat4 inv_camera;             // ecran -> monde relatif a la camera (cette image)
-uniform mat4 prev_clip_from_world;   // monde relatif a la camera -> ecran (image precedente)
-uniform vec3 cam_delta;              // camera de cette image - camera precedente
-uniform float stab_w;                // poids de cette image (1 = sans historique)
+uniform sampler2D src_tex;  // unite 0 : bloom de cette image (niveau )
+uniform sampler2D hist_tex;  // unite 6 : bloom stabilise de l'image precedente
+uniform sampler2D depth_tex;  // unite 15 : profondeur resolue (inversee : 0 = ciel)
+uniform mat4 inv_camera;  // ecran -> monde relatif a la camera (cette image)
+uniform mat4 prev_clip_from_world;  // monde relatif a la camera -> ecran (image precedente)
+uniform vec3 cam_delta;  // camera de cette image - camera precedente
+uniform float stab_w;  // poids de cette image (1 = sans historique)
 
 void main() {
   vec3 cur = texture(src_tex, tex_coord).rgb;
@@ -30,7 +26,7 @@ void main() {
     return;
   }
   vec3 p = q.xyz / q.w;
-  // ciel : une direction (a 1 km, la translation de la camera n'y change rien)
+  // ciel : une direction
   p = ciel ? normalize(p) * (4096.0 * 1000.0) : p + cam_delta;
   vec4 c = prev_clip_from_world * vec4(p, 1.0);
   if (c.w <= 1e-4) {

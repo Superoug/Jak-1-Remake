@@ -10,9 +10,7 @@ class OceanMid {
   OceanMid();
   void run(DmaFollower& dma, SharedRenderState* render_state, ScopedProfilerNode& prof);
   void run_jak2(DmaFollower& dma, SharedRenderState* render_state, ScopedProfilerNode& prof);
-  // PC-REMAKE EAU TRANSPARENTE (25/08) : le flush du mid est différé au bucket
-  // ocean-near (après Jak) et dessiné en transparent sans écriture de
-  // profondeur — l'équivalent PC du duo trou caméra + voile near PS2.
+  // EAU TRANSPARENTE
   void flush_deferred(SharedRenderState* render_state, ScopedProfilerNode& prof);
 
  private:
@@ -196,6 +194,5 @@ class OceanMid {
   } vu;
 };
 
-// PC-REMAKE EAU TRANSPARENTE : instance du mid de la frame courante, posée par
-// OceanMid::run, consommée par OceanNear::render (flush différé après Jak).
+// EAU TRANSPARENTE
 extern OceanMid* g_ocean_mid_deferred;

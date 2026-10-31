@@ -17,12 +17,7 @@
 namespace decompiler {
 
 namespace {
-// PC-REMAKE 21/10 : BORDS TRANSPARENTS FIDELES. L'agrandissement voit la texture comme un motif
-// qui se repete : il reporte sur la derniere rangee un peu de la premiere. Sur une frange d'herbe
-// (haut opaque, bas transparent), cette rangee devenait a demi opaque ; etiree par le mode clamp
-// sous la frange, elle tracait un fil vert le long de nombreux bords d'herbe. Partout ou le bord
-// de l'original est transparent, la bande correspondante de la version HD le redevient.
-// Le reste de la texture n'est pas touche.
+// BORDS TRANSPARENTS FIDELES
 void pc_restore_transparent_border(const std::vector<u32>& orig,
                                    int w,
                                    int h,
@@ -243,9 +238,7 @@ ResolvedTextureData TextureDB::resolve_texture(u32 id, bool allow_faithful) cons
     result = std::move(*replacement);
     pc_restore_transparent_border(tex.rgba_bytes, tex.w, tex.h, result);
   } else if (faithful_hd && allow_faithful && !faithful_upscale_frozen(tex.name)) {
-    // PC-REMAKE 14/10 : version HD FIDELE calculee ici depuis l'original du joueur
-    // (cache borne : une texture partagee par plusieurs niveaux n'est calculee
-    // qu'une fois tant qu'elle reste dans les 256 derniers Mo)
+    // version HD FIDELE calculee ici depuis l'original du joueur
     static std::mutex cache_mutex;
     static std::unordered_map<u32, ResolvedTextureData> cache;
     static std::deque<u32> order;
@@ -263,8 +256,7 @@ ResolvedTextureData TextureDB::resolve_texture(u32 id, bool allow_faithful) cons
     if (up) {
       const auto& tpage_name = tpage_names.at(tex.page);
       if (tpage_name == "title-vis-pris" && tex.name == "trademark") {
-        // TM du logo : son RGB d'origine est un rebut violet/noir (seul l'alpha a un
-        // sens) -> dessin d'origine en creme (13/10)
+        // TM du logo
         for (auto& px : up->rgba) {
           px = (px & 0xff000000u) | (222u << 16) | (232u << 8) | 235u;
         }

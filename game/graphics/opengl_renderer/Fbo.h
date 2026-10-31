@@ -11,9 +11,7 @@ struct Fbo {
   // optional rgba/zbuffer/stencil data.
   std::optional<GLuint> tex_id;
   std::optional<GLuint> zbuf_stencil_id;
-  // PC-REMAKE 21/09 : G-buffer de normales (attachement couleur 1, RGBA8 :
-  // rgb = normale monde *0.5+0.5, a = 1 quand le pixel en a une). Seul le
-  // framebuffer principal (avec z/stencil) en possede un.
+  // G-buffer de normales
   std::optional<GLuint> normal_tex_id;
 
   bool multisampled = false;

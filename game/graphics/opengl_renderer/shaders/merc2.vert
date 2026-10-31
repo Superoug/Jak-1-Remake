@@ -23,9 +23,9 @@ uniform vec4 fog_constants;
 
 uniform mat4 perspective_matrix;
 
-// PC-REMAKE: view-space -> sun shadow clip space (see background_common.cpp)
+// view-space -> sun shadow clip space (see background_common.cpp)
 uniform mat4 sun_light_from_cam;
-// PC-REMAKE 21/09 : normale merc (espace des os) -> monde pour le G-buffer
+// normale merc (espace des os) -> monde pour le G-buffer
 uniform mat3 world_nrm_from_merc;
 uniform float write_normals;
 out vec3 w_nor;
@@ -34,18 +34,13 @@ out vec3 w_nor;
 out vec4 vtx_color;
 out vec2 vtx_st;
 out vec4 sun_light_pos;
-// PC-REMAKE 22/09 : ECLAIRAGE PAR PIXEL (Phong) — la normale interpolee et la
-// couleur brute du sommet partent au fragment, qui refait le calcul de lumiere
-// exact de la VU1 par pixel. Le Gouraud d'origine (lumiere calculee aux sommets
-// puis interpolee) dessinait les aretes des polygones sur les visages en
-// cinematique (lignes des polygones trop visibles, 21/09).
+// ECLAIRAGE PAR PIXEL (Phong)
 out vec3 v_nrm;
 out vec4 v_rgba;
-out vec3 v_pos;  // 21/10 : position (espace camera du moteur) — matieres des personnages
-out vec3 v_ref;  // 21/10 : position de reference du modele (detail fin des matieres)
-out vec3 v_refn;  // 21/10 v3 : normale de reference (projection des cartes de detail)
-// 26/10 : NAPPE DE LAVE (lacs du village du volcan et de l'ogre, Merc2.cpp) : la houle lente de la
-// lave du decor (meme lv_houle que tfrag3) souleve la surface ; position monde vers merc2.frag
+out vec3 v_pos;  // position (espace camera du moteur)
+out vec3 v_ref;  // position de reference du modele (detail fin des matieres)
+out vec3 v_refn;  // normale de reference (projection des cartes de detail)
+// NAPPE DE LAVE (lacs du village du volcan et de l'ogre, Merc2.cpp)
 uniform int lave_merc;
 uniform float lava_time;
 uniform mat4 lava_world_from_merc;
@@ -107,13 +102,13 @@ void main() {
     vec4 wh = lava_world_from_merc * vtx_pos;
     vec3 wp = wh.xyz / wh.w;
     float h = lv_houle(wp.xz * (1.0 / 4096.0), lava_time) * 4096.0;
-    // deplacement monde (0, h, 0) ramene dans l'espace merc (inverse de la partie lineaire)
+    // deplacement monde (0, h, 0) ramene dans l'espace merc
     vtx_pos.xyz += wh.w * (transpose(world_nrm_from_merc) * vec3(0.0, h, 0.0));
     v_lava_w = wp + vec3(0.0, h, 0.0);
   }
   vec4 transformed = perspective_matrix * vtx_pos;
 
-  // PC-REMAKE: sun shadow lookup for characters
+  // sun shadow lookup for characters
   sun_light_pos = sun_light_from_cam * vtx_pos;
 
   rotated_nrm = normalize(rotated_nrm);
@@ -143,7 +138,7 @@ void main() {
   gl_Position = transformed;
 
 
-  vtx_color = rgba * light_color;  // (Gouraud d'origine, garde pour reference / repli)
+  vtx_color = rgba * light_color;  // Gouraud d'origine, garde pour reference / repli
   v_nrm = rotated_nrm;
   v_rgba = rgba;
   v_pos = vtx_pos.xyz;

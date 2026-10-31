@@ -1,8 +1,7 @@
 #version 410 core
 
 out vec4 color;
-// PC-REMAKE 21/09 : G-buffer de normales (attachement 1) — rgb = normale monde
-// *0.5+0.5, a = 1 quand le fragment en porte une (0 = le post reconstruit)
+// G-buffer de normales (attachement 1)
 layout (location = 1) out vec4 out_normal;
 
 in vec4 fragment_color;
@@ -12,60 +11,54 @@ uniform sampler2D tex_T0;
 
 uniform float alpha_min;
 uniform float force_opaque;
-// PC-REMAKE : >0 = surface auto-lumineuse (lave, braises, lueurs précurseurs)
+// >0 = surface auto-lumineuse (lave, braises, lueurs précurseurs)
 uniform float emissive_boost;
 uniform float alpha_max;
 uniform vec4 fog_color;
 
 uniform int gfx_hack_no_tex;
 
-// PC-REMAKE sun shadows
+// sun shadows
 in vec4 sun_light_pos;
 in vec3 w_nor;
 flat in float v_foliage;
 uniform vec3 sun_dir_w;  // direction normalisée VERS la surface (des ombres)
 uniform sampler2DShadow sun_shadow_tex;
 uniform float sun_shadow_strength;
-// 22/10 : dose du relief des surfaces (voir plus bas ; 0 = rien)
+// dose du relief des surfaces
 uniform float relief_amt;
-// 22/10 : LAVE ANIMEE (voir pc_lava) — 0 = rien, 1 = croute craquelee, 2 = lave en fusion
+// LAVE ANIMEE (voir pc_lava)
 uniform float lava_kind;
-// metal et verre (pc_reflect_texture_kind) : 0 rien, 0.5 metal, 1 metal poli, 2 verre
+// metal et verre (pc_reflect_texture_kind)
 uniform float reflet_kind;
-// verre : panorama de l'entourage (reflet_env.frag, image precedente ; rgb / a, a = couverture)
-// et reglages : x = dose, y = 1 si le panorama existe, z = soleil (jour, hors interieur)
+// verre : panorama de l'entourage
 uniform sampler2D reflet_env_tex;
 uniform vec4 reflet_fwd;
 uniform float wind_time;  // horloge (s), posee par TFragment pour tout le programme
 
-// PC-REMAKE "Spyro water": x = time (s), y = strength (1 on WATER trees)
+// "Spyro water": x = time (s), y = strength (1 on WATER trees)
 uniform vec4 water_fx;
-// 21/09 : detail intrinseque des sols (0 = rien, 1 = plein), fondu par distance
+// detail intrinseque des sols (0 = rien, 1 = plein), fondu par distance
 uniform float detail_amt;
 in float v_dist;
 in vec3 v_pos_w;
-// PC-REMAKE : SCULPTURE DU DECOR — carte de hauteur par texture (outil sculpture_decor.py) : joints
-// creuses, planches, pierres et rivets en volume, par parallaxe (relief par pixel) ; la normale,
-// l'assombrissement des creux et l'ombre propre en viennent aussi
+// SCULPTURE DU DECOR
 uniform sampler2D sculpt_tex;
-// PC-REMAKE : COUCHE DE SOL EN TRANSPARENCE (herbe posee sur le sable) : sa forme vient de l'alpha des
-// sommets du terrain (un tous les metres environ) -> taches a bords en escalier de pres. Le bord
-// suit maintenant le dessin de la texture (touffes) : net, organique, sans rien changer au plein.
+// COUCHE DE SOL EN TRANSPARENCE (herbe posee sur le sable)
 uniform float sol_melange;
-// PC-REMAKE : 1 sol (relief adouci), 2 sol d'herbe : vert plus profond, moins jaune, moins eblouissant
+// 1 sol (relief adouci), 2 sol d'herbe
 uniform float sol_kind;
-uniform float fronde_pli_f;  // PC-REMAKE : relief des folioles (feuilles du terrain), 0 = rien
+uniform float fronde_pli_f;  // relief des folioles (feuilles du terrain), 0 = rien
 uniform float sculpt_amp;  // hauteur maxi en fraction d'une repetition de texture (0 = sans carte)
-// PC-REMAKE : carte de normales du sol (repere de la texture : x vers +u, y vers +v ; b = hauteur)
+// carte de normales du sol
 uniform sampler2D nrm_tex;
 uniform float nrm_amt;  // 0 = pas de carte
-// PC-REMAKE : couche de detail des sols (0 sable, 1 terre, 2 herbe, 3 roche ; -1 = rien).
-// RGBA : R = variation de clarte (0.5 = rien), GB = pente (x vers +x monde, y vers +z), A = hauteur
+// couche de detail des sols
 uniform sampler2DArray det_tex;
 uniform int det_kind;
 in vec3 v_vue;
 
-// bruit de valeur (hash) — grain de sable/terre a petite echelle, ancre au monde
+// bruit de valeur (hash)
 float pc_hash21(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -82,12 +75,7 @@ float pc_vnoise(vec2 p) {
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y) - 0.5;
 }
 
-// ---- 22/10 : LAVE ANIMEE. La lave du jeu est une texture fixe : un aplat orange. Ici elle coule
-// et rougeoie. Ecoulement par carte de flux a deux phases (la texture glisse le long d'un
-// champ de directions lent, deux tirages decales d'une demi-periode se relaient : pas
-// d'etirement infini) ; chaleur qui respire (bruit ancre au monde qui derive) : les zones
-// chaudes jaunissent, les froides tirent vers le rouge sombre. Croute (kind 1) : seuls les
-// texels incandescents (orange vif) coulent, la croute reste ; sa bordure recoit la lueur.
+// --- LAVE ANIMEE
 float lv_hash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -99,23 +87,22 @@ float lv_noise(vec2 p) {
   return mix(mix(lv_hash(i), lv_hash(i + vec2(1.0, 0.0)), f.x),
              mix(lv_hash(i + vec2(0.0, 1.0)), lv_hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
-// part incandescente d'un texel (orange-jaune vif = 1, croute brune ou noire = 0)
+// part incandescente d'un texel
 float lv_hot(vec3 c) {
   return smoothstep(0.38, 0.75, c.r * 0.9 + c.g * 0.45 - c.b * 1.1);
 }
-// motif de surface de la lave a un point (m) : x = peau refroidie (sombre), y = filament chaud
+// motif de surface de la lave a un point (m)
 vec2 lv_motif(vec2 q) {
   float n1 = lv_noise(q * 0.9) * 0.6 + lv_noise(q * 2.3 + 4.1) * 0.4;
   float peau = smoothstep(0.42, 0.72, n1);
   float r = 1.0 - abs(lv_noise(q * 1.4 + 9.2) * 2.0 - 1.0);
   return vec2(peau, pow(r, 5.0));
 }
-// eclat final de la lave (applique APRES l'auto-illumination, sinon la lave sature au rouge pur
-// et la peau sombre ne se voit pas) : < 1 peau refroidie, > 1 filament chaud
+// eclat final de la lave
 float lv_eclat = 1.0;
 vec4 pc_lava(vec4 T0, vec2 uv, vec3 pw, float t, float kind) {
   vec2 m = pw.xz / 4096.0;  // metres
-  // champ de flux lent : direction qui tourne doucement d'un endroit a l'autre
+  // champ de flux lent
   float a = lv_noise(m * 0.05 + vec2(3.1, 7.7)) * 6.2832 * 1.5;
   vec2 dir = vec2(cos(a), sin(a));
   // flux a deux phases (periode 5,5 s, 2 m parcourus par phase)
@@ -126,7 +113,7 @@ vec4 pc_lava(vec4 T0, vec2 uv, vec3 pw, float t, float kind) {
   // la texture elle-meme glisse un peu avec le courant
   vec2 du = dir * 0.02;
   vec4 F = mix(texture(tex_T0, uv - du * ph0), texture(tex_T0, uv - du * ph1), wa);
-  // chaleur qui respire (0 froid .. 1 tres chaud)
+  // chaleur qui respire
   float ch = lv_noise(m * 0.2 + vec2(t * 0.05, -t * 0.035)) * 0.65 +
              lv_noise(m * 0.6 - vec2(t * 0.09, t * 0.06)) * 0.35;
   ch = smoothstep(0.2, 0.85, ch);
@@ -135,7 +122,7 @@ vec4 pc_lava(vec4 T0, vec2 uv, vec3 pw, float t, float kind) {
   vec4 res = T0;
   float hot = kind < 1.5 ? max(lv_hot(T0.rgb), lv_hot(F.rgb) * 0.85) : 1.0;
   vec3 base = kind < 1.5 ? max(F.rgb, T0.rgb * 0.6) : F.rgb;
-  // peau refroidie : rouge sombre ; filaments : jaune presque blanc
+  // peau refroidie
   vec3 lave = mix(base, base * vec3(0.80, 0.42, 0.30), peau * 0.85);
   lave = mix(lave, vec3(1.0, 0.76, 0.32) * 1.2, veine * 0.7);
   res.rgb = mix(T0.rgb, lave, hot);
@@ -148,12 +135,7 @@ vec4 pc_lava(vec4 T0, vec2 uv, vec3 pw, float t, float kind) {
   return res;
 }
 
-// ---- 26/10 : LAVE QUI ONDULE (kind 2 ; la croute craquelee, kind 1, garde pc_lava). Fidele au
-// dessin d'origine : la lave garde SA texture et ses couleurs ; seuls le mouvement et la lumiere
-// changent. Une houle lente et lourde (lv_houle, meme code dans tfrag3.vert, ou elle souleve
-// vraiment les sommets) ondule la surface : le dessin ondule avec elle, les creux sont un peu
-// plus chauds, les cretes un peu plus sombres, et la texture coule lentement.
-// metres, secondes -> hauteur (m) : trois trains lents (7 m, 4,3 m, 2,6 m ; 0,2 a 0,35 m/s)
+// --- LAVE QUI ONDULE
 float lv_houle(vec2 m, float t) {
   vec2 w = m + 0.9 * vec2(sin(m.y * 0.23 + t * 0.07), sin(m.x * 0.19 - t * 0.05));
   float h = 0.55 * sin(dot(w, vec2(0.85, 0.53)) * 0.90 - t * 0.30) +
@@ -161,16 +143,14 @@ float lv_houle(vec2 m, float t) {
             0.15 * sin(dot(w, vec2(0.30, -0.95)) * 2.42 - t * 0.55 + 4.1);
   return h * 0.09;
 }
-// coeur commun (meme code dans merc2.frag pour les lacs de lave) : couleur de la texture animee,
-// normale monde de la houle
+// coeur commun (meme code dans merc2.frag pour les lacs de lave)
 vec3 lv_ondule(vec2 uv, vec3 pw, vec3 vue, float t, out vec3 n) {
   vec2 m = pw.xz / 4096.0;  // metres
   float h0 = lv_houle(m, t);
   vec2 gr = vec2(lv_houle(m + vec2(0.15, 0.0), t) - h0, lv_houle(m + vec2(0.0, 0.15), t) - h0) /
             0.15;
   n = normalize(vec3(-gr.x * 1.8, 1.0, -gr.y * 1.8));
-  // coulee lente de la texture (deux phases qui se relaient, comme pc_lava) ; le dessin suit
-  // la pente de la houle
+  // coulee lente de la texture (deux phases qui se relaient, comme pc_lava)
   float a = lv_noise(m * 0.05 + vec2(3.1, 7.7)) * 6.2832 * 1.5;
   vec2 du = vec2(cos(a), sin(a)) * 0.03;
   float ph0 = fract(t * 0.12);
@@ -179,8 +159,7 @@ vec3 lv_ondule(vec2 uv, vec3 pw, vec3 vue, float t, out vec3 n) {
   vec2 ond = gr * 0.035;
   vec3 F = mix(texture(tex_T0, uv - du * ph0 + ond).rgb, texture(tex_T0, uv - du * ph1 + ond).rgb,
                wa);
-  // chaleur qui respire ; creux plus chauds, cretes plus sombres ; flancs tournes vers le haut
-  // un peu plus clairs (a plat : 1)
+  // chaleur qui respire
   float ch = lv_noise(m * 0.2 + vec2(t * 0.05, -t * 0.035)) * 0.65 +
              lv_noise(m * 0.6 - vec2(t * 0.09, t * 0.06)) * 0.35;
   float k = (0.92 + 0.16 * ch) * (1.0 - h0 * 2.2);
@@ -201,49 +180,58 @@ vec4 pc_lava_ondule(vec4 T0, vec2 uv, vec3 pw, vec3 vue, float t) {
   lv_eclat = 1.0;
   return vec4(res, T0.a);
 }
-// (fin du code commun avec merc2.frag)
+// fin du code commun avec merc2.frag
+
+// PENOMBRE CONTINUE
+float pc_ombre_douce(vec2 uv, float zref) {
+  vec2 px = 1.0 / vec2(textureSize(sun_shadow_tex, 0));
+  const float R = 2.6;
+  float e = texture(sun_shadow_tex, vec3(uv, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(-R, -R) * px, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(R, -R) * px, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(-R, R) * px, zref));
+  e += texture(sun_shadow_tex, vec3(uv + vec2(R, R) * px, zref));
+  if (e < 0.001 || e > 4.999) {
+    return e / 5.0;
+  }
+  float acc = 0.0;
+  for (int dy = -2; dy <= 2; dy++) {
+    for (int dx = -2; dx <= 2; dx++) {
+      acc += texture(sun_shadow_tex, vec3(uv + vec2(dx, dy) * (1.3 * px), zref));
+    }
+  }
+  return acc / 25.0;
+}
 
 float sun_shadow_factor() {
   if (sun_shadow_strength < 0.001) {
     return 0.0;
   }
-  vec3 p = sun_light_pos.xyz;      // ortho: no perspective divide needed
-  p = p * 0.5 + 0.5;               // to [0,1]
+  vec3 p = sun_light_pos.xyz;  // ortho: no perspective divide needed
+  p = p * 0.5 + 0.5;  // to [0,1]
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) {
-    return 0.0;                    // outside the map: lit
+    return 0.0;  // outside the map: lit
   }
-  // BIAIS DE PENTE (17/08, clignotement uniquement sur les ombres des
-  // rochers) : les faces raides rasées par le soleil s'auto-ombrent à la
-  // limite de précision — le motif frémit quand le soleil fluide avance.
-  // Plus la face est rasante, plus on recule la comparaison.
+  // BIAIS DE PENTE (clignotement uniquement sur les ombres des rochers)
   float slope = 1.0 - clamp(abs(dot(normalize(w_nor), normalize(sun_dir_w))), 0.0, 1.0);
   float bias = 0.0016 + 0.0060 * slope * slope;
   // 3x3 PCF for soft edges
   float acc = 0.0;
   vec2 px = 1.0 / vec2(textureSize(sun_shadow_tex, 0));
-  for (int dy = -1; dy <= 1; dy++) {
-    for (int dx = -1; dx <= 1; dx++) {
-      // spread x2: at 4096² the texels are finer — wider taps keep the penumbra
-      // soft and stop the edge shimmer
-      // (original : px * 2.0) — 22/09 : penombre plus large, ombres moins dures
-      acc += texture(sun_shadow_tex, vec3(p.xy + vec2(dx, dy) * px * 3.0, p.z - bias));
-    }
-  }
-  // texture() on sampler2DShadow returns visibility (1 = lit); invert
-  // FONDU DE BORDURE (17/08, coupure visible) : les ombres s'estompent en douceur
-  // vers la limite de la carte au lieu de se couper en ligne nette
-  vec2 edge = min(p.xy, 1.0 - p.xy);
-  float rim = smoothstep(0.0, 0.08, min(edge.x, edge.y));
+  // penombre continue (pc_ombre_douce)
+  acc = pc_ombre_douce(p.xy, p.z - bias) * 9.0;
+  // texture on sampler2DShadow returns visibility (1 = lit); invert FONDU DE BORDURE (coupure visible)
+  float rim = 1.0 - smoothstep(0.72, 0.97, length(p.xy - 0.5) * 2.0);
   return (1.0 - acc / 9.0) * sun_shadow_strength * rim;
 }
 
 void main() {
   vec2 uv = tex_coord.xy;
-  // 22/10 : derivees et hauteurs du relief prises AVANT tout discard (voir RELIEF plus bas)
+  // derivees et hauteurs du relief prises AVANT tout discard
   vec2 rl_dx = dFdx(uv), rl_dy = dFdy(uv);
   vec3 rl_sx = dFdx(v_pos_w), rl_sy = dFdy(v_pos_w);
 
-  // PC-REMAKE : SCULPTURE (parallaxe). Repere de la texture tire des derivees ecran (sans tangentes).
+  // SCULPTURE (parallaxe)
   bool sc_ok = false;
   vec3 sc_N = vec3(0.0);
   float sc_h = 0.0, sc_fondu = 0.0, sc_ombre = 0.0;
@@ -261,14 +249,11 @@ void main() {
       sc_fondu = 1.0 - smoothstep(4096.0 * 18.0, 4096.0 * 34.0, v_dist);
       vec3 V = -normalize(v_vue);  // fragment -> camera
       vec3 Vt = vec3(dot(V, T), dot(V, B), max(dot(V, N), 0.12));
-      // taille monde d'une unite de texture ; profondeur plafonnee a 5 cm reels (une texture
-      // etiree sur dix metres ne se creuse pas de quarante centimetres)
+      // taille monde d'une unite de texture
       float aire_uv = abs(rl_dx.x * rl_dy.y - rl_dx.y * rl_dy.x);
       float monde_par_uv = sqrt(length(cross(rl_sx, rl_sy)) / max(aire_uv, 1e-20));
       float prof = min(2.0 * sculpt_amp, 0.05 * 4096.0 / max(monde_par_uv, 1e-6)) * sc_fondu;
-      // decalage de parallaxe : 1,2 cm reels au plus et rasant borne (avant : 5 cm, rasant a
-      // 0.12 -> 8x) ; les cartes tirees du dessin prennent des fibres peintes pour des joints,
-      // un decalage profond froisse les planches vues de pres. Le relief reste dans la normale.
+      // decalage de parallaxe
       float prof_px = min(prof, 0.012 * 4096.0 / max(monde_par_uv, 1e-6));
       int n = int(mix(26.0, 8.0, Vt.z));
       vec2 pas = -Vt.xy / max(Vt.z, 0.4) * prof_px / float(n);
@@ -289,7 +274,7 @@ void main() {
       }
       float apres = hc - d, avant = hp - dp;
       uv = mix(p, p - pas, clamp(apres / (apres - avant - 1e-6), 0.0, 1.0));
-      // normale de la sculpture (pente de la hauteur, unites de texture -> monde)
+      // normale de la sculpture
       vec2 e = 1.0 / vec2(textureSize(sculpt_tex, 0));
       float hl = textureGrad(sculpt_tex, uv - vec2(e.x, 0.0), rl_dx, rl_dy).r;
       float hr = textureGrad(sculpt_tex, uv + vec2(e.x, 0.0), rl_dx, rl_dy).r;
@@ -300,7 +285,7 @@ void main() {
       sc_N = normalize(N - T * pente.x - B * pente.y);
       float hh = textureGrad(sculpt_tex, uv, rl_dx, rl_dy).r;
       sc_h = hh * 2.0 - 1.0;
-      // ombre propre vers le soleil : une bosse entre ce point et le soleil le cache
+      // ombre propre vers le soleil
       vec3 L = -normalize(sun_dir_w);
       vec3 Lt = vec3(dot(L, T), dot(L, B), dot(L, N));
       if (Lt.z > 0.05) {
@@ -317,9 +302,7 @@ void main() {
     }
   }
 
-  // PC-REMAKE : CARTE DE NORMALES DU SOL. Repere de la texture tire des derivees ecran (comme la
-  // sculpture). Remplace le relief devine par la clarte : plus juste, et filtre par les mips
-  // (sans scintillement).
+  // CARTE DE NORMALES DU SOL
   bool nr_ok = false;
   vec3 nr_N = vec3(0.0);
   float nr_h = 0.5, nr_hb = 0.5;
@@ -344,11 +327,9 @@ void main() {
   vec4 T0 = vec4(1.0);
   if (gfx_hack_no_tex == 0) {
     T0 = sc_ok ? textureGrad(tex_T0, uv, rl_dx, rl_dy) : texture(tex_T0, uv);
-    // 22/10 : lave animee (avant tout le reste : l'auto-illumination plus bas en profite)
-    // 26/10 : lave qui ondule (pc_lava_ondule) ; la croute craquelee garde pc_lava
-    // (original : if (lava_kind > 0.5) { T0 = pc_lava(T0, uv, v_pos_w, wind_time, lava_kind); })
+    // lave animee
     if (lava_kind > 1.5) {
-      // a plat seulement : les flancs (colonnes, chutes) gardent l'ecoulement de pc_lava
+      // a plat seulement
       float plat = smoothstep(0.45, 0.75, abs(normalize(w_nor).y));
       vec4 T_old = T0;
       float e_old = 1.0;
@@ -370,18 +351,12 @@ void main() {
     color = fragment_color * T0;
     if (sol_kind > 1.5) {
       // herbe : -25 % de lumiere, rouge retire (le jaune), un peu de saturation en plus
-      // (v1 : 0.74, 0.90, 0.80, trop clair)
       vec3 c = color.rgb * vec3(0.63, 0.77, 0.68);
       float l = dot(c, vec3(0.299, 0.587, 0.114));
       color.rgb = mix(vec3(l), c, 1.04);
     }
     if (sol_melange > 0.5) {
-      // PC-REMAKE : BORD NATUREL ENTRE DEUX SOLS. Le melange d'origine suit les triangles : son
-      // seuil traçait des marches d'escalier. Distance (m) a la ligne de partage, estimee par
-      // la pente du melange, puis deformee par un bruit ancre au monde (40 cm, 15 cm, 5 cm) :
-      // un bord irregulier, independant des triangles.
-      // (original : a = color.a + clamp(h * 2.2, -0.3, 0.3) ; w = max(fwidth(a) * 0.75, 0.06) ;
-      //  color.a = smoothstep(0.5 - w, 0.5 + w, a) * step(0.004, color.a))
+      // BORD NATUREL ENTRE DEUX SOLS
       const vec3 Ys = vec3(0.299, 0.587, 0.114);
       float h = dot(T0.rgb, Ys) - dot(textureLod(tex_T0, uv, 3.5).rgb, Ys);
       float a0 = color.a;
@@ -403,21 +378,17 @@ void main() {
     discard;
   }
 
-  // PC-REMAKE : COUCHE DE DETAIL DES SOLS. Les sols d'origine (128 pixels sur plusieurs metres)
-  // sont flous de pres : une couche de matiere reelle (1 mm par pixel, en tuile d'un metre,
-  // projetee a plat dans le monde) leur donne grain et relief fin, sans changer leur couleur
-  // moyenne. Deux tirages (tourne, autre echelle) melanges selon un bruit lent et leur hauteur :
-  // pas de motif qui se repete. Seulement de pres (fondu 5 -> 18 m) et sur les faces a plat.
+  // COUCHE DE DETAIL DES SOLS
   bool dt_ok = false;
   vec3 dt_tilt = vec3(0.0);
   {
-    // une tuile de detail couvre 1,6 m : grains, gravillons et brins lisibles a la distance de jeu
+    // une tuile de detail couvre 1,6 m
     const float DT_TUILE = 1.0 / (4096.0 * 1.6);
     vec2 dpx = rl_sx.xz * DT_TUILE, dpy = rl_sy.xz * DT_TUILE;
     if (det_kind >= 0 && gfx_hack_no_tex == 0 && v_dist < 4096.0 * 18.0) {
       float nl = length(w_nor);
       vec3 Nd = nl > 0.05 ? w_nor / nl : vec3(0.0, 1.0, 0.0);
-      // (le sens des normales du terrain d'origine n'est pas fiable : vers le haut ou vers le bas)
+      // le sens des normales du terrain d'origine n'est pas fiable
       float f = (1.0 - smoothstep(4096.0 * 5.0, 4096.0 * 18.0, v_dist)) * smoothstep(0.5, 0.8, abs(Nd.y));
       if (f > 0.001) {
         vec2 p = v_pos_w.xz * DT_TUILE;
@@ -438,34 +409,21 @@ void main() {
       }
     }
   }
-  // QA 22/09 : draws a decoupe peints en couleur pleine (tfrag=rouge, tie_wind=bleu,
-  // etie=jaune) — si le decor se voit A TRAVERS cette couleur pleine, le melange
-  // ne vient pas de la couleur du fragment (couverture MSAA ou post)
+  // QA draws a decoupe peints en couleur pleine (tfrag=rouge, tie_wind=bleu, etie=jaune)
 
-  // PC-REMAKE 22/09 : ALPHA AFFUTE pour l'alpha-to-coverage (MSAA). Les alphas
-  // doux des textures (feuillage, herbe) devenaient une COUVERTURE partielle =
-  // feuilles et touffes semi-transparentes laissant voir le decor derriere
-  //. Interieur opaque, transition anti-aliasee sur ~1 px au seuil.
+  // ALPHA AFFUTE pour l'alpha-to-coverage (MSAA)
   if (alpha_min >= 0.45) {
     color.a = clamp((color.a - alpha_min) / max(fwidth(color.a), 0.0001) + 0.5, 0.0, 1.0);
   }
 
-  // 22/10 : RELIEF DES SURFACES (rendu plus recent). Les textures du decor sont plates : le
-  // soleil glisse dessus sans accrocher le moindre grain. La luminance de la texture (adoucie
-  // d'un niveau de mip) sert de hauteur — clair = bosse, sombre = creux — et la normale est
-  // inclinee par sa pente (methode de Mikkelsen, sans tangentes : derivees ecran de la
-  // position et de la hauteur). Le soleil eclaire alors un flanc de chaque bosse et laisse
-  // l'autre dans l'ombre ; les creux s'assombrissent un peu. Ni feuillage, ni decoupes, ni
-  // surfaces emissives ; fondu au loin (le grain y scintillerait).
-  // (ombre portee du soleil calculee une seule fois : relief ET assombrissement plus bas)
+  // RELIEF DES SURFACES (rendu plus recent)
   float sun_shadow = sun_shadow_factor();
   if (relief_amt > 0.001 && gfx_hack_no_tex == 0 && alpha_min < 0.45 &&
       emissive_boost < 0.001 && v_foliage < 0.5 && v_dist < 4096.0 * 45.0) {
     float nl = length(w_nor);
     if (nl > 0.05) {
       vec3 N = w_nor / nl;
-      // niveau de mip pris sur l'uv d'origine (continu) : apres la parallaxe, uv saute aux
-      // bords du relief (original : textureQueryLod(tex_T0, uv))
+      // niveau de mip pris sur l'uv d'origine (continu)
       float lb = textureQueryLod(tex_T0, tex_coord.xy).x + 0.7;
       const vec3 Y = vec3(0.299, 0.587, 0.114);
       float h0 = dot(textureLod(tex_T0, uv, lb).rgb, Y);
@@ -477,19 +435,18 @@ void main() {
       float det = dot(rl_sx, r1);
       vec3 grad = sign(det) * ((hx - h0) * H * r1 + (hy - h0) * H * r2);
       vec3 Nb = normalize(abs(det) * N - grad);
-      // PC-REMAKE : avec une carte sculptee, la normale vient de la sculpture (le dessin n'invente
-      // plus de bosses a chaque tache claire) ; creux = joints creuses
+      // avec une carte sculptee, la normale vient de la sculpture
       if (sc_ok) {
         Nb = normalize(mix(N, sc_N, 0.85));
         hb = h0 - sc_h * 0.15;
       }
-      // PC-REMAKE : carte de normales du sol : normale et creux tires de la carte
+      // carte de normales du sol
       if (nr_ok) {
         Nb = nr_N;
         h0 = nr_h;
         hb = nr_hb;
       } else if (dt_ok && !sc_ok) {
-        // sol sans carte : la couche de detail remplace le relief devine par la clarte
+        // sol sans carte
         Nb = N;
         hb = h0;
       }
@@ -502,29 +459,22 @@ void main() {
                          ? clamp(1.0 - sun_shadow / sun_shadow_strength, 0.0, 1.0)
                          : 0.0;
       float flanc = clamp(dot(Nb, L) - dot(N, L), -0.45, 0.45);
-      // a l'ombre : la lumiere du ciel vient d'en haut — les bosses tournees vers lui en
-      // recoivent un peu plus
+      // a l'ombre : la lumiere du ciel vient d'en haut
       float ciel = clamp(Nb.y - N.y, -0.3, 0.3);
       float creux = clamp((h0 - hb) * 1.6, -0.25, 0.25);
       float fondu = 1.0 - smoothstep(4096.0 * 25.0, 4096.0 * 45.0, v_dist);
-      // PC-REMAKE : sols : relief adouci (scintillement) ; pas avec une carte de normales (stable)
+      // sols : relief adouci (scintillement)
       fondu *= (sol_kind > 0.5 && !nr_ok && !dt_ok) ? 0.35 : 1.0;
       color.rgb *= 1.0 + relief_amt * fondu *
                              (flanc * 1.45 * direct + ciel * 0.6 * (1.0 - direct) + creux * 0.45);
       if (sc_ok) {
-        // joints et creux sculptes : plus sombres (occlusion) ; ombre propre au soleil
-        // (avant : 0.34 joints, 0.35 ombre)
+        // joints et creux sculptes
         color.rgb *= 1.0 - sc_fondu * (0.2 * smoothstep(0.25, 1.0, -sc_h) + 0.25 * sc_ombre * direct);
       }
     }
   }
 
-  // 21/09 (au village, la texture du sol paraissait de basse qualite) :
-  // les sols sont des textures 128² etirees sur des metres. DETAIL INTRINSEQUE :
-  // la MEME texture re-echantillonnee a 4x la frequence, dont on ne garde que la
-  // haute frequence (difference avec son mip flou) -> le grain du sable / de la
-  // terre a petite echelle, sans rien inventer ni changer la couleur (luminance
-  // seulement). Fondu 4 m -> 18 m : de loin, rien ne change.
+  // (au village, la texture du sol paraissait de basse qualite)
   if (detail_amt > 0.001 && gfx_hack_no_tex == 0) {
     float fade = 1.0 - smoothstep(4096.0 * 4.0, 4096.0 * 18.0, v_dist);
     if (fade > 0.001) {
@@ -532,32 +482,22 @@ void main() {
       vec3 fine = texture(tex_T0, duv).rgb;
       vec3 coarse = textureLod(tex_T0, duv, 3.0).rgb;
       float hp = dot(fine - coarse, vec3(0.299, 0.587, 0.114));
-      // + GRAIN procedural ancre au monde (cellules 4 cm et 1,5 cm) : les
-      // textures de sable sont lisses par construction (aucune haute frequence
-      // a re-echantillonner) — un grain fin, en luminance, les rend nettes
-      // sous les pieds ; il disparait avec la distance comme le reste.
+      // + GRAIN procedural ancre au monde (cellules 4 cm et 1,5 cm)
       vec2 gp = v_pos_w.xz / 4096.0;  // metres
       float grain = pc_vnoise(gp * 9.0) * 0.35 + pc_vnoise(gp * 25.0) * 0.4 + pc_vnoise(gp * 66.0) * 0.25;
-      // + accentuation (masque flou) du dessin de la texture a sa propre echelle :
-      // les taches molles du sable retrouvent des bords
+      // + accentuation (masque flou) du dessin de la texture a sa propre echelle
       float hp0 = dot(T0.rgb - textureLod(tex_T0, uv, 2.0).rgb, vec3(0.299, 0.587, 0.114));
       color.rgb *= 1.0 + (hp * 2.2 + hp0 * 1.2 + grain * 0.30) * detail_amt * fade;
     }
   }
 
 
-  // PC-REMAKE émissives : la surface EST une source (lave, braises, lueurs) —
-  // texture à pleine puissance, insensible à la nuit et aux ombres
+  // émissives : la surface EST une source (lave, braises, lueurs)
   if (emissive_boost > 0.001) {
-    // auto-normalisant : les texels déjà CLAIRS reçoivent moins de boost — la
-    // source brille sans clipper au blanc, sa forme reste lisible (la pile
-    // d'énergie était indistincte, 18/08)
+    // auto-normalisant
     float t_l = dot(T0.rgb, vec3(0.299, 0.587, 0.114));
     float eb = mix(emissive_boost, 1.05, clamp(t_l, 0.0, 1.0));
-    // 25/10 : une texture lumineuse en GRIS (lueurs precurseur du temple de la jungle) tient sa
-    // couleur des sommets : la source garde la teinte des sommets (le bleu d'origine), au lieu
-    // de briller en blanc. Une texture deja coloree (lave, braises) est inchangee.
-    // (original : color.rgb = max(color.rgb, T0.rgb * eb);)
+    // une texture lumineuse en GRIS (lueurs precurseur du temple de la jungle) tient sa couleur des
     float t_mx = max(T0.r, max(T0.g, T0.b));
     float t_sat = t_mx > 1e-4 ? (t_mx - min(T0.r, min(T0.g, T0.b))) / t_mx : 0.0;
     float f_mx = max(fragment_color.r, max(fragment_color.g, fragment_color.b));
@@ -566,15 +506,11 @@ void main() {
     color.rgb = max(color.rgb, T0.rgb * teinte * eb);
   }
 
-  // PC-REMAKE sun shadows: soft darkening, before fog so distance stays hazy
-  // (original : (1.0 - sun_shadow_factor()) — calcule une fois plus haut, 22/10)
+  // sun shadows: soft darkening, before fog so distance stays hazy
   color.rgb *= (emissive_boost > 0.001) ? 1.0 : (1.0 - sun_shadow);
-  color.rgb *= lv_eclat;  // 22/10 : lave animee (1 ailleurs)
+  color.rgb *= lv_eclat;  // lave animee (1 ailleurs)
 
-  // VERRE (vitres, lentilles) : reflet calcule ici, au dessin de la vitre. Transparente, elle se
-  // melange a ce qui est derriere elle (couverture MSAA) et le post ne la reconnait pas. Lit le
-  // panorama de l'entourage ; Fresnel : peu de reflet de face, presque un miroir au rasant ; le
-  // reflet rend la vitre un peu plus opaque. Plus l'eclat du soleil, hors de l'ombre.
+  // VERRE (vitres, lentilles)
   if (reflet_kind > 1.5 && reflet_fwd.x > 0.001 && gfx_hack_no_tex == 0) {
     float nlv = length(w_nor);
     if (nlv > 0.05) {
@@ -583,20 +519,55 @@ void main() {
       if (dot(Nv, Iv) > 0.0) {
         Nv = -Nv;
       }
+      // EAU (marais)
+      if (reflet_kind > 2.5) {
+        vec2 pw = v_pos_w.xz / 4096.0;
+        float t = wind_time;
+        vec2 g = vec2(0.0);
+        g += vec2(0.8, 0.6) * cos(dot(pw, vec2(0.8, 0.6)) * 1.9 + t * 1.1) * 0.035;
+        g += vec2(-0.5, 0.86) * cos(dot(pw, vec2(-0.5, 0.86)) * 3.1 + t * 1.7) * 0.022;
+        g += vec2(0.95, -0.3) * cos(dot(pw, vec2(0.95, -0.3)) * 5.3 + t * 2.3) * 0.012;
+        if (reflet_fwd.w > 0.5) {
+          // une goutte par case de 0,7 m, a un instant propre
+          vec2 cs = pw / 0.7;
+          vec2 ci = floor(cs);
+          for (int oy = -1; oy <= 1; oy++) {
+            for (int ox = -1; ox <= 1; ox++) {
+              vec2 c = ci + vec2(ox, oy);
+              vec2 hsh = fract(sin(vec2(dot(c, vec2(127.1, 311.7)), dot(c, vec2(269.5, 183.3)))) * 43758.5453);
+              float age = fract(t * 0.9 + hsh.x * 7.0);
+              vec2 cen = (c + 0.2 + 0.6 * hsh) * 0.7;
+              vec2 dv = pw - cen;
+              float r = length(dv);
+              float rr = age * 0.45;
+              float onde = exp(-pow((r - rr) / 0.03, 2.0)) * (1.0 - age) * (1.0 - age);
+              g += (r > 1e-4 ? dv / r : vec2(0.0)) * onde * 0.35;
+            }
+          }
+        }
+        float loin = 1.0 - smoothstep(25.0, 70.0, length(v_vue) / 4096.0);
+        Nv = normalize(Nv + vec3(-g.x, 0.0, -g.y) * loin);
+      }
       float nv = clamp(-dot(Nv, Iv), 0.0, 1.0);
       vec3 Rv = reflect(Iv, Nv);
       vec3 env = mix(vec3(0.20, 0.19, 0.17), vec3(0.80, 0.88, 1.0), smoothstep(-0.04, 0.20, Rv.y));
       if (reflet_fwd.y > 0.5) {
         vec2 euv = vec2(atan(Rv.x, Rv.z) * (0.5 / 3.14159265) + 0.5,
                         asin(clamp(Rv.y, -1.0, 1.0)) / 3.14159265 + 0.5);
-        // (v1 : lod 0.5 sur le panorama deux fois moins fin, sans test de peremption)
-        // (alpha = confiance : une direction perimee y est deja effacee, reflet_env.frag)
+        // alpha = confiance
         vec4 e = textureLod(reflet_env_tex, euv, 1.4);
         if (e.a > 0.02) {
           env = mix(env, e.rgb / e.a, smoothstep(0.05, 0.45, e.a));
         }
       }
       float Fv = clamp((0.14 + 0.86 * pow(1.0 - nv, 5.0)) * reflet_fwd.x, 0.0, 0.85);
+      if (reflet_kind > 2.5) {
+        // eau : Fresnel de l'eau (2 % de face, miroir au rasant)
+        Fv = clamp((0.02 + 0.98 * pow(1.0 - nv, 5.0)) * reflet_fwd.x, 0.0, 0.55);
+        Fv = max(Fv, 0.10 * reflet_fwd.x);
+        env *= 0.85;
+        color.rgb *= mix(0.85, 1.0, Fv);
+      }
       color.rgb = mix(color.rgb, env, Fv);
       color.a = clamp(color.a + Fv * (1.0 - color.a) * 0.6, 0.0, 1.0);
       float rl = max(dot(Rv, -normalize(sun_dir_w)), 0.0);
@@ -605,24 +576,12 @@ void main() {
   }
 
   float fog_amt = clamp(fogginess * fog_color.a, 0, 1);
-  // PC-REMAKE 25/08 (rochers lointains bugges) : au-dela de
-  // 85 % de brouillard, ce qui reste de la texture n'est plus du detail mais du
-  // bruit SOUS-PIXEL (le decor de vista du village fait quelques pixels de haut
-  // a l'ecran) : il se replie en treillis. On laisse le brouillard finir : la
-  // silhouette reste, le tissage disparait. Enquete : ni texture, ni filtrage,
-  // ni couleurs de sommet, ni test d'alpha, ni profondeur, ni post-effets.
+  // (rochers lointains bugges)
   fog_amt = mix(fog_amt, 1.0, smoothstep(0.85, 0.97, fog_amt));
   color.rgb = mix(color.rgb, fog_color.rgb, fog_amt);
   {
     float nl = length(w_nor);
-    // 21/09 : alpha 0.75 = surface EMISSIVE (lave, braises, lueurs) — le post la
-    // traite en SOURCE, pas en receveur (ni soleil, ni lampes, ni occlusion :
-    // le lac de lave du village volcan s'eclairait lui-meme jusqu'au blanc)
-    // 17/10 : alpha 0.95 = feuillage (voir tie_wind.frag)
-    // drapeau des reflets du post (metal, verre) : juste sous 1, au-dessus du feuillage — un
-    // bord MSAA melange avec un solide (1.0) donne un reflet plus faible, jamais une autre famille
-    // (original : float tag = (emissive_boost > 0.001) ? 0.75 : ((v_foliage > 0.5) ? 0.95 : 1.0);)
-    // (le verre se reflete deja ci-dessus : pas de drapeau pour le post)
+    // alpha 0.75 = surface EMISSIVE (lave, braises, lueurs)
     float tag_reflet = reflet_kind > 1.5 ? 1.0 : reflet_kind > 0.75 ? 250.0 / 255.0 :
                        reflet_kind > 0.25 ? 252.0 / 255.0 : 1.0;
     float tag = (emissive_boost > 0.001) ? 0.75 : ((v_foliage > 0.5) ? 0.95 : tag_reflet);
@@ -636,8 +595,7 @@ void main() {
     if (dt_ok) {
       n_g = normalize(n_g + dt_tilt * 0.8);
     }
-    // PC-REMAKE : FEUILLES (palmes fondues dans le terrain) : relief des folioles tire du dessin, comme
-    // tie_wind.frag — chaque foliole accroche la lumiere du post
+    // FEUILLES (palmes fondues dans le terrain)
     if (fronde_pli_f > 0.0 && nl > 0.05 && gfx_hack_no_tex == 0) {
       const vec3 Yf = vec3(0.299, 0.587, 0.114);
       float Hf = 0.012 * 4096.0;

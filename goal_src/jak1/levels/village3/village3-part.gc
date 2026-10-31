@@ -1444,9 +1444,7 @@
    (:scale-x (meters 6) (meters 4))
    (:rot-z (degrees 0) (degrees 360))
    (:scale-y :copy scale-x)
-   ;; PC-REMAKE : vapeur du lac de lave, eclairee par la lave : teinte chaude a pleine intensite
-   ;; (original : r 256 g 192 b 128, deux fois la pleine intensite — des dizaines de bouffees
-   ;; additionnees saturaient en voile blanc) et un peu moins dense (original : fade-a 0.64)
+   ;; vapeur du lac de lave, eclairee par la lave
    (:r 150.0)
    (:g 84.0)
    (:b 44.0)

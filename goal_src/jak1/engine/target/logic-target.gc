@@ -968,9 +968,7 @@
   (none))
 
 (defbehavior target-post target ()
-  ;; PC-REMAKE : sillage de nage — réactive les particules d'eau NATIVES du
-  ;; moteur (vagues en V selon vitesse/angle + anneaux à l'arrêt, water.gc
-  ;; ~618-640) que les données de zone n'activent pas toujours pour Jak.
+  ;; sillage de nage
   (logior! (-> self water flag) (water-flag part-water part-splash part-rings))
   (target-real-post)
   (none))

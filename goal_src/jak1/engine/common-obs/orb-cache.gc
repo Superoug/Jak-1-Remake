@@ -6,7 +6,7 @@
 
 ;; DECOMP BEGINS
 
-;; kernel-defs peut compiler après nous en incrémental : extern local
+;; kernel-defs peut compiler après nous en incrémental
 (define-extern pc-add-lamp! (function float float float float float int none))
 
 (deftype orb-cache-top (baseplat)
@@ -46,8 +46,7 @@
         (else (plat-event proc argc message block))))
   :trans
     (behavior ()
-      ;; PC-REMAKE 26/08 : le socle à orbes attend l'éco BLEU —
-      ;; il brille en bleu, comme les boules qu'il réclame.
+      ;; le socle à orbes attend l'éco BLEU
       (pc-add-lamp! (-> self root trans x)
                     (+ 4096.0 (-> self root trans y))
                     (-> self root trans z)

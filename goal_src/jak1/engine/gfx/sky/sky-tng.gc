@@ -789,6 +789,8 @@
           (let ((s3-3 (the-as object (-> s4-0 base))))
             (&+! (-> s4-0 base) 16)
             (init-sky-regs)
+            ;; avec les nuages en volume (*remake-nuages*)
+            (when (not *remake-nuages*)
             (let ((s2-2 (the-as object (-> sky-cloud-polygons 0))))
               (set-tex-offset (the-as int (-> *sky-tng-data* off-s-0)) (the-as int (-> *sky-tng-data* off-t-0)))
               ;; first cloud layer
@@ -799,7 +801,7 @@
               ;; second cloud layer
               (dotimes (s1-5 9)
                 (render-sky-quad (the-as int s2-2) s4-0)
-                (set! s2-2 (-> (the-as (inline-array sky-vertex) s2-2) 4))))
+                (set! s2-2 (-> (the-as (inline-array sky-vertex) s2-2) 4)))))
             ;;(.lvf vf27 (&-> *sky-tng-data* giftag-base qword))
             ;; these draw stuff below the horizon
             (set-sky-vf27 (&-> *sky-tng-data* giftag-base qword))

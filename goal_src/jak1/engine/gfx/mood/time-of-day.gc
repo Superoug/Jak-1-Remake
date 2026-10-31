@@ -185,63 +185,38 @@
   (set! (-> arg0 title-light-group ambi levels x) 1.0)
   (none))
 
-;; PC-REMAKE : éclairage. Accentue la lumière directionnelle (relief) et creuse
-;; très légèrement l'ambiance sur les acteurs. Les groupes de lumière sont
-;; reconstruits depuis les tables de mood À CHAQUE frame, donc appliquer un
-;; multiplicateur en fin d'update-time-of-day est idempotent par construction.
-;; Réglables en direct au REPL : (set! *remake-sun-boost* 1.4) etc.
-;; Valeurs calibrées au REPL le 2026-08-12 (les premières,
-;; plus fortes, rendaient l'herbe fluo : trop saturé).
+;; éclairage. Accentue la lumière directionnelle (relief) et creuse très légèrement l'ambiance sur les
 (define *remake-sun-boost* 1.12)
-;; 21/09 : #t = la direction du soleil (ombres + relumière + disque du post) suit
-;; le soleil VISIBLE du ciel (orbite du niveau, = tables des artistes) ; #f = angle
-;; synthétique selon l'heure (ancien comportement du remake, gardé en repli).
-;; Activé le 21/09.
+;; #t = la direction du soleil (ombres + relumière + disque du post) suit le soleil VISIBLE du ciel
 (define *remake-sun-from-mood* #t)
 (define *remake-ambi-mult* 0.95)
-;; PC-REMAKE : post-effets écran, direction artistique "Spyro Reignited" —
-;; bloom doré + image plus saturée et chaude. Neutre si tout est à 0.
-;; Réglables au REPL : (set! *remake-bloom* 1.2) etc.
-;; Direction artistique (2026-08-13) : jeu LUMINEUX et COLORÉ, textures
-;; chaleureuses — dorées et vives sans retomber dans le fluo refusé.
+;; post-effets écran, direction artistique "Spyro Reignited"
 (define *remake-bloom* 0.55)
+;; ciel vivant
+(define *remake-nuages* #t)
 (define *remake-bloom-thresh* 0.0)
 (define *remake-saturation* 0.1)
 (define *remake-warmth* 0.2)
-;; PC-REMAKE : ombres du soleil. La direction suit l'heure du jeu (est → ouest,
-;; élévation maximale à midi). Force 0.45 = ombres douces lisibles.
+;; ombres du soleil
 (define *remake-shadow-strength* 0.6)
-;; PC-REMAKE : cel-shading RETIRÉ (2026-08-13) —
-;; le système reste en place à zéro, réactivable au REPL si besoin.
+;; cel-shading RETIRÉ
 (define *remake-toon-poster* 0.0)
 (define *remake-toon-edge* 0.0)
 (define *remake-toon-levels* 6.0)
-;; PC-REMAKE : passe image finale — mesurée, sans excès :
-;; occlusion de contact douce, brume de distance légère, couleur filmique.
+;; passe image finale
 (define *remake-ssao* 0.55)
-;; PC-REMAKE 18/08 : 0.14 → 0.0 — la double-brume délavait l'horizon en gris
-;; par-dessus le fog d'origine (textures grises sans couleur ; perfectible)
+;; 0.14 → 0.0
 (define *remake-depth-fog* 0.0)
 (define *remake-dof* 0.0)
 (define *remake-tonemap* 0.5)
 
-;; PC-REMAKE : SYSTÈME DE LUMIÈRE REFAIT.
-;; rayons de soleil / ré-éclairage directionnel / ambiance hémisphérique / spéculaire
+;; SYSTÈME DE LUMIÈRE REFAIT
 (define *remake-godrays* 0.7)
-;; PC-REMAKE : nuit. *remake-night-max* = à quel point la nuit est sombre
-;; (1.0 = nuit complète), *remake-lamp-reach* multiplie le rayon des lampes,
-;; *remake-lamp-bright* leur intensité. Mettre *remake-night-force* à une valeur
-;; >= 0 fige la nuit pour tester au REPL (0 = plein jour, 1 = nuit noire).
+;; nuit. *remake-night-max* = à quel point la nuit est sombre (1.0 = nuit complète)
 (define *remake-night-max* 0.82) ;; 18/08 : nuit trop noire — éclaircie
-;; 21/09 (tournée de nuit : marais 6/255, jungle 11, misty 13, entraînement 13 de
-;; luminance moyenne à 21 h = injouable) : le plafond du 18/08 avait été perdu dans
-;; la réécriture du 19/08 (nuit 1.0 partout) — il est ré-appliqué, et les niveaux
-;; SANS lampes (rien pour lire la scène) ont un plafond plus bas encore.
 (define *remake-night-max-nolamp* 0.70)
 (define *remake-nolamp-levels* '(jungle misty swamp rolling training snow))
-;; PC-REMAKE : les réglages que le joueur peut bouger depuis le menu du jeu
-;; (Options → Graphismes → Éclairage remake). Stockés en POURCENT parce que
-;; c'est ce qu'un curseur de menu manipule bien ; divisés par 100 à l'usage.
+;; les réglages que le joueur peut bouger depuis le menu du jeu
 (deftype remake-gfx (structure)
   ((night      float)
    (lamp-power float)
@@ -251,11 +226,11 @@
    (shadows    float)
    (godrays    float)
    (bloom      float)
-   ;; 21/09 : #t = direction du soleil visible du ciel (= tables des artistes)
+   ;; #t = direction du soleil visible du ciel (= tables des artistes)
    (sun-visible symbol)
-   ;; 21/09 : détail intrinsèque des sols (grain + accentuation, tfrag3.frag), en %
+   ;; détail intrinsèque des sols (grain + accentuation, tfrag3.frag), en %
    (detail     float)
-   ;; 12/10 : dose de l'étalonnage rendu remake, en %
+   ;; dose de l'étalonnage rendu remake, en %
    (grade      float)))
 
 (define *remake-gfx*
@@ -279,27 +254,19 @@
 (define *remake-lamp-debug-kind* 0)
 ;; valeur courante (0..1), lue par les lampes pour ne s'allumer qu'au crépuscule
 (define *remake-night-now* 0.0)
-;; 20/10 : rayons de soleil volumetriques a travers le feuillage (post_processing.frag) —
-;; dose generale (0 = coupes) ; actifs dans la jungle, de jour.
+;; rayons de soleil volumetriques a travers le feuillage (post_processing.frag)
 (define *remake-shafts* 1.0)
-;; 20/10 : dose (0..1) de l'herbe couchee autour de Jak pendant les cinematiques
+;; dose (0..1) de l'herbe couchee autour de Jak pendant les cinematiques
 (define *remake-grass-clear* 0.0)
-;; 17/10 INTRO NAUGHTY DOG : le logo est un modèle 3D posé au ras de la caméra.
-;; L'occlusion de contact (teintée bleu) y dessinait des ombres bleues et des
-;; lettres fantômes, le bloom un halo blanc. Pendant l'intro (état ndi du logo,
-;; title-obs.gc, qui date ce compteur à chaque image), le post repasse au
-;; neutre : image identique au jeu d'origine.
+;; INTRO NAUGHTY DOG
 (define *remake-intro-frame* (the-as time-frame 0))
 (defun remake-intro-active? ()
   (and (nonzero? *remake-intro-frame*)
        (< (- (-> *display* base-frame-counter) *remake-intro-frame*) (seconds 0.1))))
 (define *remake-sun-relight* 0.75)
-;; 22/09 (lens flares légers) : gain des reflets
-;; d'objectif du soleil (post_processing.frag) — 0 = aucun, 1 = léger
+;; (lens flares légers)
 (define *remake-lens-flare* 1.0)
-;; 12/10 RENDU REMAKE : étalonnage final.
-;; dose (0 = image d'avant), netteté, vignette, teinte ; puis exposition,
-;; contraste, saturation. Réglés par mesure contre les rendus de référence.
+;; RENDU REMAKE
 (define *remake-grade-sharp* 0.35)
 (define *remake-grade-vignette* 0.5)
 (define *remake-grade-tint* 1.0)
@@ -308,17 +275,11 @@
 (define *remake-grade-saturation* 1.0)
 (define *remake-hemi-ambient* 0.4)
 (define *remake-light-spec* 0.35)
-;; (le compteur de résidence de la plage vit dans main.gc — l'ordre de
-;; compilation exige que le hook connaisse le système de niveaux)
+;; le compteur de résidence de la plage vit dans main.gc
 
-;; PC-REMAKE 21/09 : NIVEAUX INTÉRIEURS — pas de soleil ni de nuit là-dedans.
-;; Jusqu'ici l'horloge y jouait quand même : de jour les luminaires du décor
-;; (tubes chauds de la cité engloutie, lueurs précurseur, cristaux) n'éclairaient
-;; qu'à 30 %, et de nuit un clair de lune bleu assombrissait des grottes qui
-;; n'ont pas de ciel. Liste = les niveaux `:sky #f` de level-info.gc + sunkenb
-;; (déclaré avec ciel mais entièrement sous l'eau/sous terre).
+;; NIVEAUX INTÉRIEURS
 (define *remake-interior-levels* '(jungleb sunken sunkenb maincave darkcave robocave lavatube citadel intro demo title))
-;; 1.0 = forcer intérieur, 0.0 = forcer extérieur, <0 = automatique (tests REPL)
+;; 1.0 = forcer intérieur, 0.0 = forcer extérieur, <0 = automatique
 (define *remake-interior-force* -1.0)
 (defun remake-shadow-sun-factor ((elev float))
   "Force des ombres portées selon la hauteur du soleil. 22/09 (captures :
@@ -329,14 +290,7 @@
   (let ((e (fmax 0.0 (fmin 1.0 (* 2.5 elev)))))
     (* e e)))
 
-;; 12/10 RENDU REMAKE (lumière de la cabane de Samos) : les INTÉRIEURS des
-;; huttes d'un niveau extérieur. Cylindres verticaux (x z rayon ymin ymax, en
-;; mètres) — dedans, la caméra passe en éclairage d'intérieur : lampes allumées
-;; à toute heure, plus de ciel bleu sur les murs. Fondu de 2 m au bord.
-;; Hutte de Samos : axe = sphères poi du jeu (-129.2, 208.4) recentré sur les
-;; murs sondés au REPL (collision : rez-de-chaussée à 14.4 m en +x, 14.6 m en -x,
-;; 14.7-15.4 m vers -z ; caméra plaquée au mur à 13.7 m) → plein dedans jusqu'à
-;; 14 m, nul à 16 m. Plancher 33.5 m, toit < 64 m.
+;; RENDU REMAKE (lumière de la cabane de Samos)
 (define *remake-hut-volumes*
   (new 'static 'boxed-array :type float
        -130.5 208.4 16.0 31.5 64.0))
@@ -389,19 +343,38 @@
   "Jak est-il (surtout) dans un niveau intérieur ?"
   (< 0.5 (remake-interior-amount)))
 
-;; 20/10 : dose des rayons de soleil (post_processing.frag / shafts.frag) — la jungle, et
-;; la cabane de Samos (camera dedans) ; de jour seulement.
+;; dose des rayons de soleil (post_processing.frag / shafts.frag)
 (defun remake-shaft-amount ((night float))
   (let ((lev (level-get-target-inside *level*))
         (day (fmax 0.0 (- 1.0 (* 1.5 night)))))
     (cond
       ((and lev (= (-> lev name) 'jungle)) (* *remake-shafts* day))
-      ;; cabane : interieur sombre, peu de soleil entre — dose x2,5 pour que les rayons qui
-      ;; passent la porte et les ouvertures se lisent
-      (else (* 2.5 *remake-shafts* day (remake-hut-amount))))))
+      ;; cabane : interieur sombre, peu de soleil entre
+      (else (* 1.0 *remake-shafts* day (remake-hut-amount))))))
 
-;; PC-REMAKE 25/10 : humidite de Jak (definie dans water.gc, apres le type water-control)
+;; humidite de Jak (definie dans water.gc, apres le type water-control)
 (define-extern remake-update-wet (function int))
+(define-extern remake-update-snow-on-jak (function int))
+
+;; #t si la camera n'est dans les boites que de niveaux sans ciel (:sky #f)
+(defun remake-camera-sans-ciel? ()
+  (let ((sans #f)
+        (avec #f)
+        (actifs 0))
+    (dotimes (i (-> *level* length))
+      (let ((lev (-> *level* level i)))
+        (when (= (-> lev status) 'active)
+          (+! actifs 1)
+          (when (-> lev inside-boxes?)
+            (if (-> lev info sky)
+                (set! avec #t)
+                (set! sans #t))))))
+    (or (and sans (not avec))
+        (and (not sans)
+             (not avec)
+             (= actifs 1)
+             (movie?)
+             (logtest? (-> *game-info* current-continue flags) (continue-flags intro))))))
 
 (defun update-time-of-day ((arg0 time-of-day-context))
   "Update the time of day context"
@@ -653,16 +626,13 @@
             (set! (-> a2-30 z) (* (-> a2-30 z) f0-57))))
         (vector4-lerp! (-> arg0 current-shadow) (-> arg0 current-shadow) a2-30 f30-1))
       (vector-normalize! (-> arg0 current-shadow) 1.0)))
-  ;; PC-REMAKE : post-traitement des groupes de lumière finaux (voir défs plus haut).
+  ;; post-traitement des groupes de lumière finaux (voir défs plus haut)
   (when (!= *remake-sun-boost* 1.0)
     (dotimes (i 9)
       (let ((grp (-> arg0 light-group i)))
         (set! (-> grp dir0 levels x) (* *remake-sun-boost* (-> grp dir0 levels x)))
         (set! (-> grp ambi levels x) (* *remake-ambi-mult* (-> grp ambi levels x))))))
-  ;; PC-REMAKE : herbe réactive — position de Jak + intensité (0.35 immobile,
-  ;; jusqu'à 1.0 en course) transmises chaque frame au renderer shrub.
-  ;; 20/10 : CINEMATIQUES (pile d'energie, scenes jouees par Jak) : l'herbe autour de Jak se
-  ;; couche (shrub.vert) — fondu ~0,2 s a l'entree, ~0,6 s au retour.
+  ;; herbe réactive
   (let ((cine (and *target* (or (= (-> *target* next-state name) 'target-clone-anim) (movie?)))))
     (set! *remake-grass-clear*
           (if cine
@@ -674,10 +644,7 @@
                              (-> *target* control trans z)
                              *remake-grass-clear*)
         (pc-set-grass-clear! 0.0 0.0 0.0 0.0)))
-  ;; 20/10 : TRACES DANS LA NEIGE — Jak au sol sur de la neige (0.5) ou de la neige profonde
-  ;; (1.0) : le rendu creuse un sillon sous ses pieds (background_common.cpp, post)
-  ;; (v1 : position 0 0 0 envoyee en l'air — le rendu croyait Jak a l'origine et la trace
-  ;; disparaissait pendant chaque saut ; la position est desormais toujours transmise)
+  ;; TRACES DANS LA NEIGE
   (if *target*
       (let ((mat (-> *target* control ground-pat material)))
         (pc-set-snow-step! (-> *target* control trans x)
@@ -689,7 +656,7 @@
                               0.0)
                              ((= mat (pat-material deepsnow)) 1.0)
                              ((= mat (pat-material snow)) 0.5)
-                             ;; 25/10 : sable -> empreintes de pied (background_common.cpp)
+                             ;; sable -> empreintes de pied (background_common.cpp)
                              ((= mat (pat-material sand)) 0.25)
                              (else 0.0))))
       (pc-set-snow-step! 0.0 0.0 0.0 0.0))
@@ -699,43 +666,22 @@
                           (-> *target* control trans z)
                           (fmin 1.0 (+ 0.35 (/ (vector-length (-> *target* control transv)) 49152.0))))
       (pc-set-grass-push! 0.0 0.0 0.0 0.0))
-  ;; PC-REMAKE : post-effets écran (bloom / saturation / chaleur).
+  ;; post-effets écran (bloom / saturation / chaleur)
   (pc-set-post-fx! (* 0.01 (-> *remake-gfx* bloom)) *remake-bloom-thresh* *remake-saturation* *remake-warmth*)
-  ;; PC-REMAKE : cel-shading (doux par défaut, réglable au REPL). Le 4e champ
-  ;; (libre) porte cinématique en cours : pendant un film, le shader
-  ;; aplatit TOUT le modelé directionnel reconstruit (normales géométriques =
-  ;; facettes sur les visages en gros plan) — les personnages retrouvent
-  ;; l'éclairage lisse par sommet des artistes, à toute distance (25/08).
+  ;; cel-shading (doux par défaut, réglable au REPL)
   (pc-set-toon-fx! *remake-toon-poster* *remake-toon-edge* *remake-toon-levels* (if (movie?) 1.0 0.0))
-  ;; PC-REMAKE : post par profondeur (SSAO / brume / DOF / tonemap).
-  ;; 12/10 : dans une hutte, occlusion ×1.3 (coins, poutres : la profondeur d'une
-  ;; pièce éclairée aux lampions)
+  ;; post par profondeur (SSAO / brume / DOF / tonemap)
   (pc-set-depth-fx! (* 0.01 (-> *remake-gfx* occlusion) (+ 1.0 (* 0.3 (remake-hut-amount))))
                     *remake-depth-fog* *remake-dof* *remake-tonemap*)
-  ;; PC-REMAKE : lumière refaite. L'ambiance hémisphérique prend sa teinte du
-  ;; CIEL DU NIVEAU À CETTE HEURE (couleur du soleil courant), et le rebond au
-  ;; sol reste chaud — c'est ce qui fait qu'une ombre est bleutée en plein jour
-  ;; et dorée au couchant, au lieu d'être un simple assombrissement.
-  ;; 22/09 : qualité des effets + gain des lens flares (4e paramètre)
+  ;; lumière refaite
   (pc-set-fx-quality! 2 1 1 *remake-lens-flare*)
-  ;; 12/10 : étalonnage rendu remake (dose = curseur du menu Remake)
-  ;; 12/10 : HUTTE (part 0..1) — réglé sur la hutte de Samos contre l'image de
-  ;; référence : exposition 0.95, contraste 1.6, saturation 1.15, vignette 0.8
-  ;; (l'étalonnage extérieur, fait pour un village cramé à 61 %, écrasait ses
-  ;; hautes lumières : p95 0.82 → 0.64)
+  ;; étalonnage rendu remake (dose = curseur du menu Remake) HUTTE (part 0..1)
   (let ((hut (remake-hut-amount)))
     (pc-set-grade! (* 0.01 (-> *remake-gfx* grade))
                    *remake-grade-sharp*
                    (lerp *remake-grade-vignette* 0.8 hut)
                    *remake-grade-tint*)
-    ;; 4e paramètre : part de hutte → rebond chaud, lampions allumés, flaques serrées
-    ;; 26/10 : l'etalonnage de la cabane est fait PAR PIXEL dans le post (post_processing.frag,
-    ;; pc_hut_inside, valeurs 0.95 / 1.6 / 1.15) : le dehors vu par l'ouverture garde celui de
-    ;; l'exterieur. On envoie donc l'exterieur, et la part de cabane en 4e.
-    ;; (original : (pc-set-grade2! (lerp *remake-grade-exposure* 0.95 hut)
-    ;;                             (lerp *remake-grade-contrast* 1.6 hut)
-    ;;                             (lerp *remake-grade-saturation* 1.15 hut)
-    ;;                             hut))
+    ;; 4e paramètre
     (pc-set-grade2! *remake-grade-exposure*
                     *remake-grade-contrast*
                     *remake-grade-saturation*
@@ -750,35 +696,42 @@
                          (fmax 0.40 (fmin 1.3 (+ 0.55 (* 0.55 (-> sun y)))))
                          (fmax 0.55 (fmin 1.4 (+ 0.75 (* 0.50 (-> sun z)))))
                          0.46)
-    ;; 21/09 : 3e paramètre = part d'intérieur 0..1 (ground_color.w dans le post),
-    ;; 4e = gain du détail des sols (tfrag3.frag)
+    ;; couleur du soleil et de l'ambiance de l'heure, pour eclairer les nuages en volume
+    (let ((env (-> arg0 current-sun env-color)))
+      (pc-set-cloud-light! (-> sun x) (-> sun y) (-> sun z) (-> env x) (-> env y) (-> env z))
+      ;; direction de la lune (calculee par le jeu, sky-make-moon-data) et heure, pour le ciel de nuit
+      (let ((mp (-> *sky-parms* upload-data moon pos)))
+        (pc-set-moon! (-> mp x) (-> mp y) (-> mp z) (-> arg0 time)))
+      ;; couverture nuageuse (%) selon la region
+      (let ((lev (level-get-target-inside *level*)))
+        (pc-set-nuages! (cond
+                          ((not *remake-nuages*) 0)
+                          ;; aucun niveau actif n'a de ciel, ou la camera n'est que dans des niveaux sans ciel
+                          ((not (-> arg0 sky)) 0)
+                          ((remake-camera-sans-ciel?) 0)
+                          ((not lev) 42)
+                          ((or (= (-> lev name) 'misty) (= (-> lev name) 'swamp)) 68)
+                          ((= (-> lev name) 'snow) 72)
+                          ((or (= (-> lev name) 'firecanyon) (= (-> lev name) 'village3)
+                               (= (-> lev name) 'lavatube)) 18)
+                          ((= (-> lev name) 'jungle) 50)
+                          (else 42)))))
+    ;; 3e paramètre = part d'intérieur 0..1 (ground_color.w dans le post), 4e = gain du détail des sols
     (pc-set-ground-ambient! 0.39 0.30 interior (* 0.01 (-> *remake-gfx* detail))))
-  ;; PC-REMAKE : direction du soleil selon l'heure (angle est→ouest, nuit = off).
-  ;; sin/cos GOAL travaillent en unités de rotation : 32768 = demi-tour, donc
-  ;; 6 h → 0, 12 h → 16384 (zénith), 18 h → 32768.
+  ;; direction du soleil selon l'heure (angle est→ouest, nuit = off)
   (let* ((hour (-> arg0 time))
          (angle (* 2730.6667 (- hour 6.0)))
          (elev (sin angle))
-         ;; 21/09 : le soleil VISIBLE du ciel (sky-make-sun-data, orbite du niveau :
-         ;; village1 lève en +z, couche en -z — en accord avec les tables mood-lights
-         ;; des artistes). Le soleil synthétique ci-dessous voyageait le long de x :
-         ;; 84° d'écart mesurés à 9 h → ombres et relumière à contre-sens des faces
-         ;; peintes, deux ombres par personnage, deux soleils. |pos| = 0 quand le
-         ;; niveau n'a pas de soleil (grottes) → on garde alors l'ancien chemin.
+         ;; le soleil VISIBLE du ciel
          (sun-pos (-> *sky-parms* upload-data sun 0 pos))
          (sun-len (vector-length sun-pos))
          (sun-vis (and (-> *remake-gfx* sun-visible) *remake-sun-from-mood* (< 4096.0 sun-len)))
          (interior (remake-interior-amount))
          (exterior (- 1.0 interior)))
     (when sun-vis
-      ;; l'élévation suit le vrai soleil : la nuit tombe quand il se couche à l'écran
+      ;; l'élévation suit le vrai soleil
       (set! elev (/ (-> sun-pos y) sun-len)))
-    ;; 21/09 : intérieur = pas d'ombres portées du soleil (la carte d'ombres
-    ;; d'une grotte = tout le niveau à l'ombre de son propre plafond) — fondu
-    ;; continu avec la part d'intérieur
-    ;; 20/10 : dans la cabane (exterieur ~0), le vrai soleil reste transmis, a force 0 — la
-    ;; carte d'ombres ne sert alors qu'aux rayons (pas d'ombres portees a l'interieur)
-    ;; (original : (if (and (< 0.05 elev) (< 0.02 exterior))
+    ;; intérieur = pas d'ombres portées du soleil
     (if (and (< 0.05 elev) (or (< 0.02 exterior) (< 0.001 (remake-shaft-amount 0.0))))
         (cond
           (sun-vis
@@ -787,19 +740,15 @@
                                 (- (/ (-> sun-pos z) sun-len))
                                 (* exterior 0.01 (-> *remake-gfx* shadows) (remake-shadow-sun-factor elev))))
           (else
-            ;; (original) le soleil voyage vers -y ; x = composante est-ouest, léger biais z
             (pc-set-sun-shadow! (cos angle) (- elev) 0.25 (* exterior 0.01
                                                             (-> *remake-gfx* shadows)
                                                             (remake-shadow-sun-factor elev)))))
         (pc-set-sun-shadow! 0.3 0.85 0.25 0.0))
-    ;; PC-REMAKE : la nuit suit la hauteur du soleil, pas un interrupteur —
-    ;; le crépuscule s'installe pendant que le soleil passe sous l'horizon.
+    ;; la nuit suit la hauteur du soleil, pas un interrupteur
     (let ((night (cond
                    ((>= *remake-night-force* 0.0) *remake-night-force*)
                    (else
-                    ;; 21/09 : intérieur = jamais de clair de lune (l'éclairage
-                    ;; des artistes reste tel quel) — fondu continu avec la part
-                    ;; d'intérieur ; niveaux sans lampes : plafond plus bas
+                    ;; intérieur = jamais de clair de lune (l'éclairage des artistes reste tel quel)
                     (let ((lev (level-get-target-inside *level*)))
                       (* exterior
                          (fmin (if (and lev (nmember (-> lev name) *remake-nolamp-levels*))
@@ -810,36 +759,42 @@
                         (* 0.01 (-> *remake-gfx* lamp-range))
                         ;; lampes : pleine puissance en intérieur, sinon avec la nuit
                         (* (fmax night interior) 0.01 (-> *remake-gfx* lamp-power))
-                        ;; 20/10 : 4e parametre = dose des rayons de soleil (jungle)
+                        ;; 4e parametre = dose des rayons de soleil (jungle)
                         (remake-shaft-amount night))
-      ;; 27/10 : lucioles la nuit — dans la jungle (foret) et au village (autour des lampes)
+      ;; lucioles la nuit
       (let ((lev (level-get-target-inside *level*)))
         (pc-set-vie-zone! (cond
                             ((not lev) 0)
                             ((= (-> lev name) 'jungle) 2)
                             ((= (-> lev name) 'village1) 1)
+                            ;; meteo d'origine, enrichie (pluie du marais, neige)
+                            ((= (-> lev name) 'swamp) 3)
+                            ((= (-> lev name) 'snow) 4)
                             (else 0))))
+      ;; METEO ENRICHIE (pluie et neige en volume, meteo.vert)
+      (pc-set-meteo! (cond
+                       ((not *target*) 0)
+                       (*weather-off* 0)
+                       ((= (-> *target* current-level name) 'swamp) 1)
+                       ((= (-> *target* current-level name) 'snow) 2)
+                       (else 0))
+                     (if (paused?) 1 0))
       (set! *remake-night-now* night)))
-  ;; PC-REMAKE 19/08 : l'eco PORTE rayonne — Jak charge d'eco bleu eclaire
-  ;; bleu autour de lui en courant, rouge en rouge, jaune en jaune. L'intensite
-  ;; suit la reserve restante (eco-level) : la lueur s'eteint avec l'eco.
-  ;; PC-REMAKE 25/10 : JAK MOUILLE (merc2.frag) — en nageant, tout le corps ; en pataugeant, les
-  ;; jambes jusqu'a la surface ; hors de l'eau, il seche (le haut en ~15 s, les jambes en ~25 s)
+  ;; l'eco PORTE rayonne
   (remake-update-wet)
+  ;; Jak enneige a la montagne (water.gc)
+  (remake-update-snow-on-jak)
   (when (and *target* (> (-> *target* fact eco-level) 0.0))
     (let ((kind (cond
                   ((= (-> *target* fact eco-type) (pickup-type eco-blue)) 2)
                   ((= (-> *target* fact eco-type) (pickup-type eco-red)) 6)
                   ((= (-> *target* fact eco-type) (pickup-type eco-yellow)) 5)
                   (else 1))))
-      ;; fondu de fin : la lueur s'eteint en douceur sur les ~3 dernieres
-      ;; secondes de l'eco (300 ticks/s), pas d'un coup a l'expiration
+      ;; fondu de fin
       (let* ((ecoule (the float (- (-> *display* game-frame-counter) (-> *target* fact eco-pickup-time))))
              (restant (- (the float (-> *target* fact eco-timeout)) ecoule))
              (fondu (fmax 0.0 (fmin 1.0 (/ restant 900.0)))))
-        ;; 25/10 : l'eco BLEU porte eclaire plus doucement (x0.55) : Jak, au coeur de la source,
-        ;; virait entierement au bleu et la jungle sombre au violet
-        ;; (original : (* fondu (fmin 2.5 (* 2.0 (-> *target* fact eco-level)))))
+        ;; l'eco BLEU porte eclaire plus doucement (x0.55)
         (pc-add-lamp! (-> *target* control trans x)
                       (+ 6144.0 (-> *target* control trans y))
                       (-> *target* control trans z)
@@ -855,7 +810,7 @@
                   (* 49152.0 *remake-lamp-debug*)
                   2.0
                   (the int *remake-lamp-debug-kind*)))
-  ;; 17/10 : intro Naughty Dog → post neutre (voir remake-intro-active?)
+  ;; intro Naughty Dog → post neutre (voir remake-intro-active?)
   (when (remake-intro-active?)
     (pc-set-post-fx! 0.0 0.0 0.0 0.0)
     (pc-set-depth-fx! 0.0 0.0 0.0 0.0)

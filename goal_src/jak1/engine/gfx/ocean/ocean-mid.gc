@@ -759,15 +759,7 @@
                 (else (ocean-mid-add-upload-middle arg0 s5-0 s3-0))))
             (+! s3-0 1)))
         (+! s5-0 1))))
-  ;; PC-REMAKE (18/08) : le trou n'est PLUS creusé. Sur PS2, le large se trouait
-  ;; autour de la caméra (OR des masques caméra ci-dessous) pour laisser la place
-  ;; au rendu proche détaillé — économie de fill-rate GS. Sur PC le rendu proche
-  ;; ne produit aucun pixel visible (test projecteur magenta, 18/08), donc le
-  ;; trou restait béant : c'est LA grille/zone sombre autour du joueur.
-  ;; Le large dessine désormais partout — frontière impossible.
-  ;; (dotimes (v1-26 36)
-  ;;   (if (and (-> *ocean-work* mid-mask-ptrs v1-26) (nonzero? (-> *ocean-work* mid-camera-masks v1-26)))
-  ;;     (logior! (-> *ocean-work* mid-mask-ptrs v1-26 0) (-> *ocean-work* mid-camera-masks v1-26))))
+  ;; : le trou n'est PLUS creusé
   0
   (none))
 
@@ -877,10 +869,7 @@
                  (+! (-> *terrain-stats* ocean-mid dverts) 144))))))))
     ;; for now, skip seams.
     ;; when it's both on and cam is low
-    ;; PC-REMAKE (18/08) : bloc transition DÉSACTIVÉ (le #f ci-dessous). Le trou
-    ;; n'étant plus creusé, le large couvre tout ; les strips repassaient alors
-    ;; par-dessus avec leur échelle de texture à eux (motif grossier qui bouge).
-    ;; Ils ne servaient qu'à coudre le trou.
+    ;; : bloc transition DÉSACTIVÉ (le #f ci-dessous)
     (when (and #f (not (or *ocean-near-off* (< 196608.0 (fabs (-> *math-camera* trans y))))))
       (let ((a1-11 48)
             (a2-2 0)

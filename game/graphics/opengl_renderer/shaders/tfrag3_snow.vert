@@ -1,7 +1,5 @@
 #version 410 core
-// PC-REMAKE 20/10 — SOL DE NEIGE DEFORMABLE (etape 1/3 : sommets). Meme calcul que tfrag3.vert,
-// sans la projection : le decoupage (tfrag3_snow.tesc) et la deformation par la carte des
-// traces (tfrag3_snow.tese) se font en espace monde. Le pixel reste tfrag3.frag.
+// SOL DE NEIGE DEFORMABLE (etape sommets)
 
 layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 tex_coord_in;

@@ -21,15 +21,15 @@ out vec3 vtx_color;
 out vec2 vtx_st;
 
 out float fog;
-// PC-REMAKE: tight sun glint for metal materials
+// tight sun glint for metal materials
 out float vtx_glint;
-// xyz = sun direction in this shader's space, w = enable (0/1)
+// xyz = sun direction in this shader's space, w = enable
 uniform vec4 sun_dir_view;
-// PC-REMAKE 13/10 : reflet et eclat calcules PAR PIXEL (voir emerc.frag)
+// reflet et eclat calcules PAR PIXEL (voir emerc.frag)
 out vec3 v_nrm;
 out vec3 v_pos;
-out vec4 v_unp;    // position deperspectivee (vf09 du microcode)
-out vec4 v_unpk;   // constantes de deperspective (vf23)
+out vec4 v_unp;  // position deperspectivee (vf09 du microcode)
+out vec4 v_unpk;  // constantes de deperspective (vf23)
 
 struct MercMatrixData {
   mat4 X;
@@ -65,13 +65,9 @@ void main() {
   v_nrm = rotated_nrm;
   v_pos = vtx_pos.xyz;
 
-  // PC-REMAKE: sun glint. The view direction in this space is the vertex
-  // direction itself; a Blinn-style half-vector against the game's key light
-  // gives a tight highlight that only reflective (metal) materials receive,
-  // because this shader only ever runs on them.
+  // sun glint. The view direction in this space is the vertex direction itself; a Blinn-style
   {
-    // this shader has no light uniforms, so the glint is built from the sun
-    // direction supplied by the PC renderer, expressed in this space.
+    // this shader has no light uniforms, so the glint is built from the sun direction supplied by the PC
     vec3 V = normalize(-vtx_pos.xyz);
     vec3 L = normalize(sun_dir_view.xyz);
     vec3 H = normalize(L + V);

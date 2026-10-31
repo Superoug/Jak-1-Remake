@@ -1,11 +1,5 @@
 #version 410 core
-// PC-REMAKE 20/10 — SOL DE NEIGE DEFORMABLE (etape 2/3 : decoupage). Le sol de neige a moins de
-// 50 m de Jak est redecoupe la ou une trace recente touche le triangle (grille des cases de
-// 0,8 m que Jak a touchees, testee sur toute l'emprise de l'arete / du triangle), finement pres
-// de la camera (7 cm) et plus grossierement au loin (jusqu'a 64 morceaux par arete).
-// (v1 : finesse selon la distance a JAK — trace sous-echantillonnee loin derriere lui, pointes ;
-// v2 : trace testee en 3 coins / 3 milieux / centre seulement — un grand triangle traverse en son
-// milieu n'etait pas decoupe : pas de creux par endroits ; v3 : tout decoupe — 6 i/s de moins)
+// SOL DE NEIGE DEFORMABLE (etape decoupage)
 layout (vertices = 3) out;
 
 in vec3 vs_pos[];
@@ -43,8 +37,7 @@ bool cells_hit(vec2 lo, vec2 hi) {
   return false;
 }
 
-// niveau de decoupage d'une arete : le meme vu des deux triangles qui la partagent (pas de
-// fissure)
+// niveau de decoupage d'une arete
 float edge_level(vec3 a, vec3 b) {
   if (snow_trail.x < 0.5) {
     return 1.0;

@@ -1,8 +1,5 @@
 #version 410 core
-// PC-REMAKE 21/10 — PERSONNAGES DECOUPES (etape 1/3 : os). Meme calcul que merc2.vert pour la
-// position et la normale (pose animee, espace camera) ; la projection, le brouillard et la lumiere
-// se font apres le decoupage (merc2_tess.tese). La normale soudee (pad0 du sommet, voir
-// Tfrag3Data pc_prepare_characters) suit les memes os.
+// PERSONNAGES DECOUPES (etape os)
 
 layout (location = 0) in vec3 position_in;
 layout (location = 1) in vec3 normal_in;
@@ -50,7 +47,7 @@ void main() {
   vec3 rotated_nrm = bones[mats[0]].R * normal_in * weights_in[0];
   vec3 rotated_weld = bones[mats[0]].R * wn * weights_in[0];
 
-  // game may send garbage bones if the weight is 0, don't let NaNs sneak in.
+  // game may send garbage bones if the weight is 0, don't let NaNs sneak in
   if (weights_in[1] > 0) {
     vtx_pos += -bones[mats[1]].X * p * weights_in[1];
     rotated_nrm += bones[mats[1]].R * normal_in * weights_in[1];

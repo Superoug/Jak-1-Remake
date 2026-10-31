@@ -120,37 +120,29 @@ class Tie3 : public BucketRenderer {
     const tfrag3::BVH* vis = nullptr;
     const u32* index_data = nullptr;
     std::vector<std::array<math::Vector4f, 4>> wind_matrix_cache;
-    // PC-REMAKE: same matrices without the wind bend — the vertex shader blends
-    // wind/static by normalized local height so trunks stay anchored.
+    // same matrices without the wind bend
     std::vector<std::array<math::Vector4f, 4>> wind_matrix_cache_static;
-    // PC-REMAKE: per wind draw, local-space y min/max of its vertices (proto space).
+    // per wind draw, local-space y min/max of its vertices (proto space)
     std::vector<math::Vector2f> wind_draw_yrange;
-    // étendue verticale PROPRE au draw (avant fusion par jeu d'instances) :
-    // les couronnes excentrées des penchés ondulent sur leur propre étendue
+    // étendue verticale PROPRE au draw (avant fusion par jeu d'instances)
     std::vector<math::Vector2f> wind_draw_yrange_local;
-    // PC-REMAKE: per wind draw, xz centre + radius — the shader uses the angle
-    // around the trunk as a per-frond phase (feuilles animées une à une).
+    // per wind draw, xz centre + radius
     std::vector<math::Vector4f> wind_draw_xzc;
-    // PC-REMAKE: draws de TRONC (texture écorce) — épinglés en matrice statique
-    // pure : feuilles détachées du tronc (16/08)
+    // draws de TRONC (texture écorce)
     std::vector<char> wind_draw_is_trunk;
-    // draws issus de la greffe TFRAG→TIE (couronnes de penchés) : géométrie
-    // locale de ~3 m → amplitudes proportionnelles quasi nulles sans boost
+    // draws issus de la greffe TFRAG→TIE (couronnes de penchés)
     std::vector<char> wind_draw_is_graft;
-    // 26/10 : objets SUSPENDUS (poissons du village) : balancement rigide au bout de leur
-    // attache, ni battement de feuille, ni relief de feuille, ni translucidite
+    // objets SUSPENDUS (poissons du village)
     std::vector<char> wind_draw_is_hanging;
-    // projecteur violet (spec /tmp/palm_debug) : draws statiques et vent
-    // correspondant à la spec, reclassés à chaud
+    // projecteur violet (spec /tmp/palm_debug)
     const std::vector<tfrag3::Texture>* tex_names = nullptr;
     u32 palm_debug_seq_built = 0;
     std::vector<char> static_draw_palm_debug;
-    // PC-REMAKE émissives : boost d'auto-illumination par draw statique
-    // (têtes de lampes, lueurs précurseurs, foyers — objets TIE)
+    // émissives : boost d'auto-illumination par draw statique
     std::vector<float> static_draw_emissive;
-    std::vector<float> static_draw_lava;  // 22/10 : lave animee (pc_lava_texture_kind)
+    std::vector<float> static_draw_lava;  // lave animee (pc_lava_texture_kind)
     std::vector<float> static_draw_reflet;  // metal et verre (pc_reflect_texture_kind)
-    std::vector<u8> static_draw_snow;  // 20/10 : monticules de neige deformables
+    std::vector<u8> static_draw_snow;  // monticules de neige deformables
     std::vector<char> wind_draw_palm_debug;
     GLuint wind_vertex_index_buffer;
     std::vector<u32> wind_vertex_index_offsets;
@@ -160,7 +152,7 @@ class Tie3 : public BucketRenderer {
     std::vector<std::pair<int, int>> draw_idx_temp;
     std::vector<u32> index_temp;
     std::vector<u8> vis_temp;
-    std::vector<u8> shadow_vis_temp;  // 14/10 : visibilite pour la carte d'ombres
+    std::vector<u8> shadow_vis_temp;  // visibilite pour la carte d'ombres
     std::vector<std::pair<int, int>> multidraw_offset_per_stripdraw;
     std::vector<GLsizei> multidraw_count_buffer;
     std::vector<void*> multidraw_index_offset_buffer;
@@ -190,7 +182,7 @@ class Tie3 : public BucketRenderer {
   TfragPcPortData m_pc_port_data;
 
   std::vector<float> m_wind_vectors;  // note: I suspect these are shared with shrub.
-  // PC-REMAKE: world-space light matrices for wind instances (palm crown shadows)
+  // world-space light matrices for wind instances (palm crown shadows)
   std::vector<std::array<float, 16>> m_wind_world_matrices;
 
   float m_wind_multiplier = 1.f;

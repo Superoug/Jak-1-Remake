@@ -5,7 +5,7 @@
 
 ;; DECOMP BEGINS
 
-;; PC-REMAKE DEBUG : compteurs des portillons du rendu proche (voir draw-ocean-near)
+;; DEBUG : compteurs des portillons du rendu proche
 (define *pc-neardbg-c0* 0)
 (define *pc-neardbg-c1* 0)
 (define *pc-neardbg-c2* 0)
@@ -578,10 +578,7 @@
                       (ocean-near-add-call arg0 39))))))
             (+! s1-0 1)))
         (+! s3-0 1))))
-  ;; PC-REMAKE DEBUG : le rendu proche émet 0 sommet en jeu — on compte ce que
-  ;; chaque portillon laisse passer (balayées / bit trans / index near / émises)
-  ;; 14/10 : traces coupees, gardees en commentaire
-  ;; (original : les deux format s'affichaient toutes les 256 images)
+  ;; DEBUG : le rendu proche émet 0 sommet en jeu
   (when (zero? (logand (-> *display* base-frame-counter) 255))
     (when #f
       (format 0 "PCDBG near bornes ~d ~d ~d ~d~%"
@@ -594,7 +591,7 @@
               *pc-neardbg-c1*
               *pc-neardbg-c2*
               *pc-neardbg-c3*))
-    ;; les compteurs restent remis a zero (pas de debordement en longue partie)
+    ;; les compteurs restent remis a zero
     (set! *pc-neardbg-c0* 0)
     (set! *pc-neardbg-c1* 0)
     (set! *pc-neardbg-c2* 0)

@@ -128,7 +128,7 @@ class Merc2 {
 
     GLuint fog_color;
     GLuint perspective_matrix;
-    GLuint sun_light_from_cam;  // PC-REMAKE: character sun shadows
+    GLuint sun_light_from_cam;  // character sun shadows
 
     GLuint ignore_alpha;
     GLuint decal;
@@ -137,28 +137,28 @@ class Merc2 {
 
     GLuint fade;
 
-    // 21/10 : personnages remodeles
+    // personnages remodeles
     GLuint remake_perso;
     GLuint remake_famille;
   };
 
   Uniforms m_merc_uniforms, m_emerc_uniforms;
-  // 21/10 : PERSONNAGES REMODELES — programmes decoupes (base, reflets) et fourrure en couches
+  // PERSONNAGES REMODELES
   Uniforms m_merc_tess_uniforms, m_emerc_tess_uniforms, m_merc_fur_uniforms;
   struct RemakeToggles {
-    bool actif = true;      // /tmp/qa_perso_off : tout le remodelage coupe
-    bool objets = true;     // /tmp/qa_obj_off : matieres des objets remodeles coupees
-    bool decoupe = true;    // /tmp/qa_perso_notess : sans decoupage
-    bool fourrure = true;   // /tmp/qa_perso_nofur : sans fourrure
+    bool actif = true;  // /tmp/qa_perso_off : tout le remodelage coupe
+    bool objets = true;  // /tmp/qa_obj_off : matieres des objets remodeles coupees
+    bool decoupe = true;  // /tmp/qa_perso_notess : sans decoupage
+    bool fourrure = true;  // /tmp/qa_perso_nofur : sans fourrure
   } m_remake;
-  // familles de matiere des textures, par niveau charge (cle : load_id)
+  // familles de matiere des textures, par niveau charge
   std::unordered_map<u64, std::vector<u8>> m_tex_famille;
   u8 texture_famille(const LevelData* lev, s32 texture, bool* coquilles);
   // surfaces reflechissantes des textures (pc_reflect_texture_kind), par niveau charge
   std::unordered_map<u64, std::vector<u8>> m_tex_reflet;
   u8 texture_reflet(const LevelData* lev, s32 texture);
   void init_shaders(ShaderLibrary& shaders);
-  GLuint m_detail_tex = 0;  // 21/10 v3 : cartes de detail des matieres (tableau, unite 5)
+  GLuint m_detail_tex = 0;  // cartes de detail des matieres (tableau, unite 5)
   int m_shaders_seq = 0;
 
   void init_shader_common(Shader& shader, Uniforms* uniforms, bool include_lights);
@@ -200,9 +200,9 @@ class Merc2 {
     IGNORE_ALPHA = 1,
     MOD_VTX = 2,
     NO_TEXTURE = 4,
-    CHARACTER = 8,   // 21/10 : personnage remodele
-    FUR_SHELLS = 16, // 21/10 : fourrure en couches au-dessus de ce dessin
-    OBJET = 32,      // PC-REMAKE : objet remodele (rendu des matieres, sans decoupage ni fourrure)
+    CHARACTER = 8,  // personnage remodele
+    FUR_SHELLS = 16,  // fourrure en couches au-dessus de ce dessin
+    OBJET = 32,  // objet remodele (rendu des matieres, sans decoupage ni fourrure)
   };
 
   struct Draw {
@@ -218,17 +218,15 @@ class Merc2 {
     u8 fade[4];
     // no strip hack for custom models
     u8 no_strip;
-    u8 famille;  // 21/10 : matiere (merc2.frag F_*), 0 = neutre
-    u8 reflet;   // 21/10 : 1 = orbe de precurseur (reflet renforce, emerc.frag)
-    u8 lave;     // 26/10 : 1 = nappe de lave (merc2.frag, lave qui ondule)
-    u8 mouille;  // 25/10 : 1 = Jak ou Daxter (merc2.frag, personnage mouille)
-    u8 miroir;   // metal et verre : 0 rien, 1 metal, 2 metal poli, 3 verre (reflets du post)
+    u8 famille;  // matiere (merc2.frag F_*), 0 = neutre
+    u8 reflet;  // 1 = orbe de precurseur (reflet renforce, emerc.frag)
+    u8 lave;  // 1 = nappe de lave (merc2.frag, lave qui ondule)
+    u8 mouille;  // 1 = Jak ou Daxter (merc2.frag, personnage mouille)
+    u8 miroir;  // metal et verre : 0 rien, 1 metal, 2 metal poli, 3 verre
     u64 hash;
   };
 
-  // PC-REMAKE: one entry per merc draw, kept until the NEXT frame's shadow
-  // pass. The bone buffer on the GPU is only rewritten when the draws are
-  // flushed, so at that point it still holds exactly these poses.
+  // one entry per merc draw, kept until the NEXT frame's shadow pass
   struct ShadowCaster {
     unsigned int vertices;
     unsigned int indices;
@@ -240,7 +238,7 @@ class Merc2 {
   std::vector<ShadowCaster> m_shadow_casters;
   float m_shadow_light_from_cam[16] = {};
   bool m_shadow_light_valid = false;
-  // PC-REMAKE 21/09 : la matrice de normales merc->monde est valide ce frame
+  // la matrice de normales merc->monde est valide ce frame
   bool m_world_normal_valid = false;
   static Merc2* s_shadow_instance;
 
@@ -273,12 +271,12 @@ class Merc2 {
     u64 hash;
     u32 lights;
     u32 first_bone;
-    bool character = false;          // 21/10
-    bool objet = false;              // PC-REMAKE : objet remodele
-    bool orbe = false;               // 21/10 : orbe de precurseur (money)
-    bool lave = false;               // 26/10 : nappe de lave animee (water-anim-*-lava)
-    bool mouille = false;            // 25/10 : Jak ou Daxter (peut etre mouille)
-    const LevelData* lev = nullptr;  // 21/10 : familles de matiere des textures
+    bool character = false;
+    bool objet = false;  // objet remodele
+    bool orbe = false;  // orbe de precurseur (money)
+    bool lave = false;  // nappe de lave animee (water-anim-*-lava)
+    bool mouille = false;  // Jak ou Daxter (peut etre mouille)
+    const LevelData* lev = nullptr;  // familles de matiere des textures
   };
 
   Draw* alloc_normal_draw(const tfrag3::MercDraw& mdraw, const DrawArgs& args);

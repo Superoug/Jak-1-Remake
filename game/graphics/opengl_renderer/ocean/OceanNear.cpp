@@ -8,12 +8,9 @@
 #include "third-party/imgui/imgui.h"
 
 OceanNear::OceanNear(const std::string& name, int my_id)
-    // PC-REMAKE : mipmaps aussi pour la texture du proche — depuis que le rayon
-    // couvre ~220 m, le proche est vu de loin comme le large ; sans mipmaps il
-    // s'aplatissait en nappe unie (frontière visible, captures 17/08 soir)
+    // mipmaps aussi pour la texture du proche
     : BucketRenderer(name, my_id), m_texture_renderer(true) {
-  // et parité totale : le proche n'écrase plus la texture du large à 8160 —
-  // les deux zones échantillonnent le même contenu
+  // et parité totale
   m_texture_renderer.set_move_to_vram(false);
   for (auto& a : m_vu_data) {
     a.fill(0);
@@ -34,9 +31,7 @@ static bool is_end_tag(const DmaTag& tag, const VifCode& v0, const VifCode& v1) 
 void OceanNear::render(DmaFollower& dma,
                        SharedRenderState* render_state,
                        ScopedProfilerNode& prof) {
-  // PC-REMAKE EAU TRANSPARENTE (25/08) : le mid différé se dessine ICI, après
-  // tous les buckets merc (Jak) — AVANT tout early-out : il doit sortir même
-  // si le near est vide ou désactivé.
+  // EAU TRANSPARENTE
   if (g_ocean_mid_deferred) {
     g_ocean_mid_deferred->flush_deferred(render_state, prof);
   }
@@ -83,11 +78,7 @@ void OceanNear::render_jak1(DmaFollower& dma,
   {
     auto p = prof.make_scoped_child("texture");
     // TODO: this looks the same as the previous ocean renderer to me... why do it again?
-    // PC-REMAKE 14/10 : c'est bien la meme (le drapeau qui les distinguait est commente
-    // dans draw-ocean-texture) et, depuis le 17/08, cette instance ne publie plus sa
-    // texture (les tuiles proches lisent celle du large) : on lit les paquets sans
-    // dessiner — plus de rendu de texture + mips au milieu de l'image.
-    // `touch /tmp/qa_ocean_near_tex` = ancien chemin (A/B).
+    // c'est bien la meme (le drapeau qui les distinguait est commente dans draw-ocean-texture) et
     static bool old_path = false;
     static int poll = 0;
     if ((poll++ % 64) == 0) {
@@ -129,8 +120,7 @@ void OceanNear::render_jak1(DmaFollower& dma,
     ASSERT(off.immediate == VU1_INPUT_BUFFER_OFFSET);
   }
 
-  // PC-REMAKE QA : le rendu proche émet 33 appels 39/image côté GOAL mais 0
-  // sommet côté flush — on compte chaque étape pour trouver la fuite.
+  // QA : le rendu proche émet 33 appels 39/image côté GOAL mais 0 sommet côté flush
   static int qa_near_frames = 0;
   static int qa_near_uploads = 0, qa_near_c0 = 0, qa_near_c39 = 0, qa_near_inconnus = 0;
 
@@ -161,7 +151,7 @@ void OceanNear::render_jak1(DmaFollower& dma,
           ASSERT_MSG(false, fmt::format("unknown ocean near call: {}", v0.immediate));
       }
     } else {
-      // paquet ni upload ni appel : jusqu'ici il etait JETE EN SILENCE
+      // paquet ni upload ni appel
       qa_near_inconnus++;
       if (qa_near_inconnus <= 8) {
         lg::warn("[QA] ocean near paquet inconnu : {} {}", v0.print(), v1.print());

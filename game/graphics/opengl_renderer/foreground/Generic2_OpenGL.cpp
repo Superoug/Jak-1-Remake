@@ -248,8 +248,7 @@ void Generic2::setup_opengl_tex(u16 unit,
                     true ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR);  // todo
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   } else {
-    // PC-REMAKE : objets generic (props, eau) sans filtrage PS2 : agrandissement lisse, sinon les
-    // textures HD montraient des carres de pres (original : MIN et MAG GL_NEAREST)
+    // objets generic (props, eau) sans filtrage PS2
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   }

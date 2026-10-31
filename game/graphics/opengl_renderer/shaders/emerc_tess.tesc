@@ -1,8 +1,5 @@
 #version 410 core
-// PC-REMAKE 21/10 — PERSONNAGES DECOUPES (etape 2/3 : decoupage). Chaque arete est coupee selon
-// sa taille a l'ecran : un personnage proche de la camera est decoupe finement, un personnage
-// lointain presque pas. Le niveau ne depend que des deux bouts de l'arete : deux triangles
-// voisins la coupent pareil (pas de fissure). (Copie conforme de merc2_tess.tesc.)
+// PERSONNAGES DECOUPES (etape decoupage)
 layout (vertices = 3) out;
 
 in vec4 vs_pos[];
@@ -20,8 +17,7 @@ out vec2 tc_st[];
 out vec4 tc_rgba[];
 out vec3 tc_ref[];
 
-// x = longueur visee d'un morceau, en fraction de la distance a la camera (0 = pas de decoupage)
-// y = niveau maximal par arete
+// x = longueur visee d'un morceau, en fraction de la distance a la camera (0 = pas de decoupage) y =
 uniform vec2 decoupe;
 
 float niveau(vec3 a, vec3 b) {

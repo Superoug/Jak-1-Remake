@@ -592,8 +592,7 @@ void GLDisplay::process_sdl_events() {
  */
 void GLDisplay::render() {
   {
-    // PC-REMAKE 14/10 : sonde [QA-EVPROF] (comparaison dev/mod). `touch /tmp/qa_evprof`
-    // enregistre 180 images du profileur d'evenements puis ecrit profile_data/prof-*.json.
+    // sonde [QA] (comparaison dev/mod)
     static int qa_ev_poll = 0, qa_ev_frames = -1;
     if (qa_ev_frames < 0 && (qa_ev_poll++ % 60) == 0 && std::filesystem::exists("/tmp/qa_evprof")) {
       prof().clear();
@@ -704,8 +703,7 @@ void GLDisplay::render() {
   g_gfx_data->debug_gui.finish_frame();
   if (Gfx::g_global_settings.framelimiter) {
     auto p = scoped_prof("frame-limiter");
-    // [QA] 20/10 : QA_FPS=<n> plafonne CETTE instance a n images/s (simuler une machine plus
-    // lente) sans changer la frequence visee par le jeu. Sans la variable : rien.
+    // [QA] QA_FPS=<n> plafonne CETTE instance a n images/s (simuler une machine plus lente) sans changer
     static const float qa_fps = [] {
       const char* e = getenv("QA_FPS");
       return e ? (float)atof(e) : 0.f;
@@ -721,8 +719,7 @@ void GLDisplay::render() {
     SDL_GL_SwapWindow(m_window);
   }
 
-  // PC-REMAKE QA-PERF : fps réels (moyenne + 1% low) toutes les 300 frames —
-  // la base de mesure de la passe d'optimisation du 25/08. À retirer ensuite.
+  // QA-PERF : fps réels (moyenne + 1% low) toutes les 300 frames
   {
     static auto s_qa_last = std::chrono::steady_clock::now();
     static std::vector<double> s_qa_times;
@@ -751,10 +748,7 @@ void GLDisplay::render() {
     glFinish();
   }
 
-  // [QA] 12/10 : QA_NO_VSYNC=1 coupe la synchro verticale de CETTE instance (tests
-  // ecran en veille : Cocoa_GL_SwapWindow attend un rafraichissement qui ne vient
-  // plus et le jeu tombe a ~1 image/s ; les captures sont rendues hors ecran).
-  // Inerte sans la variable — le jeu normal n'est pas concernee.
+  // [QA] QA_NO_VSYNC=1 coupe la synchro verticale de CETTE instance
   {
     static const bool qa_no_vsync = [] {
       const char* e = getenv("QA_NO_VSYNC");
@@ -830,8 +824,7 @@ u32 gl_sync_path() {
   std::unique_lock<std::mutex> lock(g_gfx_data->sync_mutex);
   g_gfx_data->last_engine_time = g_gfx_data->engine_timer.getSeconds();
   {
-    // PC-REMAKE 14/10 : sonde [QA-GOAL] = temps CPU de la logique du jeu (GOAL sous
-    // Rosetta) par image, hors attente du rendu — moyenne et pire sur 300 images.
+    // sonde [QA] = temps CPU de la logique du jeu (GOAL sous Rosetta) par image, hors attente du rendu
     static double acc = 0, worst = 0;
     static int n = 0;
     const double ms = g_gfx_data->last_engine_time * 1000.0;
@@ -879,7 +872,7 @@ void gl_send_chain(const void* data, u32 offset) {
     // may be easy.
 
     g_gfx_data->dma_copier.set_input_data(data, offset, run_dma_copy);
-    // PC-REMAKE 29/10 : lampes et faisceaux declares pendant cette image, valides en une fois
+    // lampes et faisceaux declares pendant cette image, valides en une fois
     pc_remake_lamps_commit();
 
     g_gfx_data->has_data_to_render = true;

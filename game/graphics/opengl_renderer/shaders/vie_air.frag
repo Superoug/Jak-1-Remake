@@ -1,7 +1,5 @@
 #version 410 core
-// PC-REMAKE — VIE DANS L'AIR (voir vie_air.vert) : disque doux (points lumineux, lucioles avec
-// halo) ou feuille (ellipse qui tourne et s'amincit). Masquee par le decor : comparaison avec la
-// profondeur de la scene.
+// VIE DANS L'AIR (voir vie_air.vert)
 
 in vec4 v_couleur;
 in vec3 v_forme;
@@ -17,9 +15,7 @@ uniform vec2 vie_ecran;  // taille de la cible (px)
 void main() {
   vec2 uv = gl_FragCoord.xy / vie_ecran;
   float dz = texture(depth_tex, uv).r;
-  // 27/10 : fondu sur les 40 cm devant le decor — une luciole qui flottait contre un mur
-  // disparaissait d'un coup en le frolant (clignotement)
-  // (original : discard des que v_dist > scene - 0.03, sans fondu)
+  // fondu sur les 40 cm devant le decor
   float doux = 1.0;
   if (dz > 1e-5) {
     vec4 q = inv_camera * vec4(uv * 2.0 - 1.0, dz * 2.0 - 1.0, 1.0);
@@ -34,8 +30,7 @@ void main() {
     float r = length(pc);
     float coeur = 1.0 - smoothstep(v_forme.z * 0.3, v_forme.z, r);
     float halo = v_forme.z < 0.999 ? pow(1.0 - smoothstep(0.0, 1.0, r), 2.0) * 0.35 : 0.0;
-    // une poussiere ne se voit que sur un fond plus sombre qu'elle (pas d'etoiles dans un ciel de
-    // plein jour) ; les lucioles gardent leur halo
+    // une poussiere ne se voit que sur un fond plus sombre qu'elle
     float fond = dot(texture(scene_tex, uv).rgb, vec3(0.299, 0.587, 0.114));
     float vu = v_forme.z < 0.999 ? 1.0 : 1.0 - 0.85 * smoothstep(0.35, 0.85, fond);
     if (dz <= 1e-5 && v_forme.z > 0.999) {

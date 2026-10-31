@@ -1,10 +1,5 @@
 #version 410 core
-// PC-REMAKE 21/10 — PERSONNAGES DECOUPES (etape 3/3 : surface courbe). Triangles PN (curved
-// point-normal triangles) : les sommets d'origine restent en place et chaque triangle devient
-// une petite surface courbe tiree de la normale SOUDEE (la meme des deux cotes d'une couture,
-// donc sans jour). Une arete dont un bout est vif reste droite. La normale d'eclairage suit la
-// normale propre de chaque sommet (quadratique). Puis le meme calcul que merc2.vert.
-// (Meme surface, au bit pres, que emerc_tess.tese : les reflets se posent dessus.)
+// PERSONNAGES DECOUPES (etape surface courbe)
 layout (triangles, fractional_odd_spacing, ccw) in;
 
 in vec4 tc_pos[];
@@ -15,10 +10,9 @@ in vec2 tc_st[];
 in vec4 tc_rgba[];
 in vec3 tc_ref[];
 in vec3 tc_refn[];
-// 21/10 : matiere du dessin (BOIS = 10 : surface irreguliere, ni lisse ni ronde)
+// matiere du dessin
 uniform int remake_famille;
-// bruit de valeur 3D (cellules de l'espace de reference du modele : le detail suit le
-// personnage quand il bouge)
+// bruit de valeur 3D
 float pc_h3(vec3 p) {
   return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
 }
@@ -30,7 +24,7 @@ float pc_bruit(vec3 p) {
              mix(mix(pc_h3(i + vec3(0, 0, 1)), pc_h3(i + vec3(1, 0, 1)), f.x),
                  mix(pc_h3(i + vec3(0, 1, 1)), pc_h3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
 }
-// BOIS : forme irreguliere d'un rondin, d'un baton (unites du jeu, 4096 = 1 m)
+// BOIS : forme irreguliere d'un rondin, d'un baton
 float pc_bois_relief(vec3 r) {
   return (pc_bruit(r / 820.0) - 0.5) * 70.0 + (pc_bruit(r / 210.0) - 0.5) * 28.0;
 }
@@ -61,7 +55,7 @@ out vec4 v_rgba;
 out vec3 v_pos;
 out vec3 v_ref;
 out vec3 v_refn;
-out vec3 v_lava_w;  // 26/10 : lave (merc2.frag), sans objet ici
+out vec3 v_lava_w;  // lave (merc2.frag), sans objet ici
 out float fog;
 
 // point de controle d'une arete (i -> j), vu depuis i
@@ -100,14 +94,13 @@ void main() {
                    + b111 * (6.0 * u * v * w);
   vec3 ref = u * tc_ref[0] + v * tc_ref[1] + w * tc_ref[2];
   if (remake_famille == 10) {
-    // bois : bosses et creux le long de la normale soudee (meme champ des deux cotes d'une
-    // couture), rugosite d'un rondin ou d'un baton
+    // bois : bosses et creux le long de la normale soudee (meme champ des deux cotes d'une couture)
     vec3 nw = normalize(u * tc_weld[0] + v * tc_weld[1] + w * tc_weld[2]);
     pos += nw * pc_bois_relief(ref);
   }
   precise vec4 vtx_pos = vec4(pos, u * tc_pos[0].w + v * tc_pos[1].w + w * tc_pos[2].w);
 
-  // normale d'eclairage : quadratique sur les normales propres (droite si arete vive)
+  // normale d'eclairage
   vec3 q1 = tc_nrm[0], q2 = tc_nrm[1], q3 = tc_nrm[2];
   vec3 m12 = v12 > 0.5 ? normalize(q1 + q2) : nmilieu(p1, p2, q1, q2);
   vec3 m23 = v23 > 0.5 ? normalize(q2 + q3) : nmilieu(p2, p3, q2, q3);

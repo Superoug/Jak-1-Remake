@@ -27,6 +27,9 @@ uniform vec4 st_array[4];
 flat out vec4 fragment_color;
 out vec3 tex_coord;
 flat out uvec2 tex_info;
+// profondeur sous la mer du sprite
+uniform vec4 pc_mer;
+out float v_sous_mer;
 
 vec4 matrix_transform(mat4 mtx, vec3 pt) {
   return mtx[3]
@@ -93,6 +96,18 @@ void main() {
   scales_vf01.x *= inv_area;  // x = sx * sy * inv_area (area ratio)
   fragment_color.w *= min(scales_vf01.x, 1.0);  // is this right? doesn't this stall??
 
+
+  // altitude du sprite par rapport a la mer
+  v_sous_mer = 0.0;
+  if (pc_mer.y > 0.5 && rendermode != 2) {
+    float y = position.y;
+    if (rendermode == 3) {
+      mat3 r3 = sprite_quat_to_rot(quat);
+      vec4 o = xyz_array[vert_id];
+      y += (r3[0] * o.x * sx + r3[1] * o.y + r3[2] * o.z * sy).y;
+    }
+    v_sous_mer = pc_mer.x - y;
+  }
 
   // STEP 4: actual vertex transformation
   if (rendermode == 3) { // 3D sprites

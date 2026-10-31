@@ -722,14 +722,7 @@ std::string debug_dump_to_ply(const std::vector<MercDraw>& draws,
   return result;
 }
 
-// PC-REMAKE 13/10 : les modeles merc recopient la texture d'ORIGINE brute
-// (rgba_bytes) et ignorent texture_replacements (le test sur debug_name compare
-// au nom du MODELE, jamais a celui de la texture). Tous les personnages et objets
-// gardent donc leurs textures PS2 — c'est le rendu valide, on n'y touche pas.
-// Exception explicite, au cas par cas : les textures listees (page/nom, une par
-// ligne, # = commentaire) dans custom_assets/jak1/merc_texture_replacements.txt
-// prennent leur remplacement. Premier cas : title-vis-pris/trademark (TM du logo,
-// RGB d'origine = rebut violet/noir, seul son alpha a un sens).
+// les modeles merc recopient la texture d'ORIGINE brute (rgba_bytes) et ignorent texture_replacements
 static bool merc_replacement_allowed(const std::string& tpage, const std::string& name) {
   static const std::set<std::string> allowed = [] {
     std::set<std::string> result;
@@ -793,14 +786,10 @@ s32 find_or_add_texture_to_level(tfrag3::Level& out,
       new_tex.debug_name = tex_it->second.name;
       new_tex.debug_tpage_name = tex_db.tpage_names.at(tex_it->second.page);
       new_tex.data = tex_it->second.rgba_bytes;
-      // 21/10 : les PERSONNAGES (tfrag3::pc_is_character_model) prennent leurs textures HD
-      // fideles ; les objets gardent les textures PS2 validees (sauf liste blanche)
-      // (pelage : texture d'origine, plus douce — agrandie, ses traits de poils marbraient le
-      // visage de Daxter ; le detail vient de la fourrure en couches du rendu)
+      // les PERSONNAGES (tfrag3::pc_is_character_model) prennent leurs textures HD fideles
       const bool personnage = tfrag3::pc_is_character_model(debug_name) &&
                               new_tex.debug_name.find("fur") == std::string::npos;
-      // PC-REMAKE : avec la retexture complete, les OBJETS prennent aussi leur texture refaite. Fichier
-      // marqueur custom_assets/jak1/merc_objets_remake (le retirer = textures PS2 du 13/10).
+      // avec la retexture complete, les OBJETS prennent aussi leur texture refaite
       static const bool objets_remake = file_util::file_exists(
           (file_util::get_jak_project_dir() / "custom_assets" / "jak1" / "merc_objets_remake")
               .string());
@@ -1686,10 +1675,7 @@ void replace_model(tfrag3::Level& lvl, tfrag3::MercModel& model, const fs::path&
       }
     }
 
-    // PC-REMAKE : un modele remodele ne change que la GEOMETRIE. Chaque dessin reprend la matiere
-    // d'origine portant le meme nom de texture : texture du jeu, mode de dessin (decalque,
-    // transparence, filtrage) et reflet. Sans ca, le mode par defaut du glTF eclaire une lampe
-    // qui etait dessinee en decalque (pleine luminosite) et elle sort terne.
+    // un modele remodele ne change que la GEOMETRIE
     struct MatiereOrigine {
       s32 tex;
       DrawMode mode;
