@@ -41,11 +41,15 @@ Celles-ci sont prises directement en jeu. Aucune retouche.
 
 <img width="1920" height="1080" alt="01 - Village de Sandover (jour)" src="https://github.com/user-attachments/assets/0515f8f0-9946-44dc-814d-ccf4193a70f0" />
 
+<img width="1604" height="906" alt="download" src="https://github.com/user-attachments/assets/2db9bec2-ad14-4e03-8eee-d7a9201e65ce" />
+
 <img width="1800" height="1169" alt="Capture d’écran 2026-10-27 à 20 37 30" src="https://github.com/user-attachments/assets/c6f56095-4399-49cb-8623-462cbacd32dc" />
 
 <img width="1920" height="1080" alt="09 - Cratere volcanique (jour)" src="https://github.com/user-attachments/assets/ce17ce8b-095c-4115-a3f8-bf737bebccd4" />
 
 <img width="1920" height="1080" alt="13 - Plage au bord de l&#39;eau (jour)" src="https://github.com/user-attachments/assets/d5873977-e818-446c-8d34-b1ab04676493" />
+
+<img width="1800" height="1169" alt="Capture d’écran 2026-10-30 à 10 32 29" src="https://github.com/user-attachments/assets/6edc7e7a-6f3a-4498-afb9-f4e9e199f292" />
 
 <img width="1920" height="1080" alt="14 - Jak devant la cabane de Samos" src="https://github.com/user-attachments/assets/73b4fec6-60f8-4bd9-b910-d21ab0755aea" />
 
