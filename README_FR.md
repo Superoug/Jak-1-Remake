@@ -51,8 +51,6 @@ Celles-ci sont prises directement en jeu. Aucune retouche.
 
 <img width="1800" height="1169" alt="Capture d’écran 2026-10-30 à 10 32 29" src="https://github.com/user-attachments/assets/6edc7e7a-6f3a-4498-afb9-f4e9e199f292" />
 
-<img width="1920" height="1080" alt="14 - Jak devant la cabane de Samos" src="https://github.com/user-attachments/assets/73b4fec6-60f8-4bd9-b910-d21ab0755aea" />
-
 
 ## Ce qui change par rapport au jeu d'origine
 
